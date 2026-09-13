@@ -2222,68 +2222,138 @@ export function buildZ80Cpu(
   // instruction, this project's first actual consumer.
   tieToLabel('IS_ED_ACTIVE', isEdActive, { x: pos.x + 9100, y: pos.y - 6350 }); // anchor — LDI's own decode (far) reads this
 
-  // x=10, y=4, z=0: LDI (real 0xED 0xA0) — real Z80's simplest ED-table
-  // instruction: (DE)<-(HL), then HL++/DE++/BC--, N/H reset, P/V<-(BC-1!=0
-  // after the decrement), S/Z/C untouched (the two undocumented X/Y bits
-  // *do* change on real hardware too, from A plus the transferred byte —
-  // deliberately not modeled here, a documented simplification, not an
-  // oversight, the same category as INC r/DEC r's own unmodeled H before
-  // "Closing the half-carry gap" made that one real). Decoded here, right
-  // next to `isEdActive`'s own anchor above and well before the pair
-  // adders below need it, specifically so `isLdiNow` exists in time to
-  // widen `BC`'s own pair adder's direction line a few lines down — real
-  // Z80's `x=10,y=4,z=0` collides head-on with the plain unprefixed
-  // table's own `AND B` (see "The invasive part" in the prefix mechanism's
-  // own doc comment above), so this reads the *recaptured* `ir`'s `dec.y`/
-  // `dec.z` exactly the way that collision predicts, gated by `isEdActive`
-  // to stay silent for the real `AND B`.
+  // x=10, z=0: LDI/LDD/LDIR/LDDR (real 0xED 0xA0/0xA8/0xB0/0xB8) — real
+  // Z80's own block-move family, `y=4..7` selecting which of the four:
+  // `(DE)<-(HL)`, then `HL`/`DE` both `++` (`LDI`/`LDIR`) or both `--`
+  // (`LDD`/`LDDR`), `BC--` always, `N`/`H` reset, `P/V<-(BC-1!=0)`, `S`/
+  // `Z`/`C` untouched (the two undocumented `X`/`Y` bits *do* change on
+  // real hardware too, from `A` plus the transferred byte — deliberately
+  // not modeled here, a documented simplification, not an oversight, the
+  // same category as `INC r`/`DEC r`'s own unmodeled `H` before "Closing
+  // the half-carry gap" made that one real). `LDIR`/`LDDR` additionally
+  // repeat — real Z80 re-runs the same two-byte instruction, extra machine
+  // cycles and all, until `BC` reaches `0` — modeled here as `PC` landing
+  // back on its own opcode instead of advancing, whenever this pass's own
+  // `P/V` (`BC-1 != 0`) says there's more to copy (see the `pc` mux
+  // chain's own final layer, far below).
+  //
+  // Decoded here, right next to `isEdActive`'s own anchor above and well
+  // before the pair adders below need it, specifically so `isLdBlockNow`
+  // exists in time to widen `BC`'s own pair adder's direction line a few
+  // lines down — real `x=10,y=4..7,z=0` collides head-on with the plain
+  // unprefixed table's own `AND B`/`XOR B`/`OR B`/`CP B` (see "The invasive
+  // part" in the prefix mechanism's own doc comment above), so this reads
+  // the *recaptured* `ir`'s `dec.y`/`dec.z` exactly the way that collision
+  // predicts, gated by `isEdActive` to stay silent for the real
+  // unprefixed four.
   const isLdiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6300 });
   const isLdiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6300 });
   wire(parent, isEdActive, isLdiStage.a);
   wire(parent, dec.y[4]!, isLdiStage.b);
   wire(parent, isLdiStage.out, isLdiNow.a);
   wire(parent, dec.z[0]!, isLdiNow.b);
-  tieToLabel('IS_LDI_NOW', isLdiNow.out, { x: pos.x + 9150, y: pos.y - 6300 }); // anchor — phase decode just below, and RAM's own oe/we/address mux, the F-register layer, and BC's own pair adder (all far) read this
+  tieToLabel('IS_LDI_NOW', isLdiNow.out, { x: pos.x + 9150, y: pos.y - 6300 }); // anchor — isLdBlockNow just below reads this
+  const isLddNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6270 });
+  const isLddStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6270 });
+  wire(parent, isEdActive, isLddStage.a);
+  wire(parent, dec.y[5]!, isLddStage.b);
+  wire(parent, isLddStage.out, isLddNow.a);
+  wire(parent, dec.z[0]!, isLddNow.b);
+  tieToLabel('IS_LDD_NOW', isLddNow.out, { x: pos.x + 9150, y: pos.y - 6270 });
+  const isLdirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6240 });
+  const isLdirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6240 });
+  wire(parent, isEdActive, isLdirStage.a);
+  wire(parent, dec.y[6]!, isLdirStage.b);
+  wire(parent, isLdirStage.out, isLdirNow.a);
+  wire(parent, dec.z[0]!, isLdirNow.b);
+  tieToLabel('IS_LDIR_NOW', isLdirNow.out, { x: pos.x + 9150, y: pos.y - 6240 }); // anchor — isRepeatVariantNow just below reads this
+  const isLddrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6210 });
+  const isLddrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6210 });
+  wire(parent, isEdActive, isLddrStage.a);
+  wire(parent, dec.y[7]!, isLddrStage.b);
+  wire(parent, isLddrStage.out, isLddrNow.a);
+  wire(parent, dec.z[0]!, isLddrNow.b);
+  tieToLabel('IS_LDDR_NOW', isLddrNow.out, { x: pos.x + 9150, y: pos.y - 6210 }); // anchor — directionIsDecNow and isRepeatVariantNow just below both read this
+
+  // `isLdBlockNow`: any of the four — the shared condition every phase
+  // gate, the holding register, the address mux, and the F-register layer
+  // below all actually read (never any one of the four `is*Now` gates
+  // above directly, the same "the four base group gates are what
+  // everything downstream reads, not the raw `dec.x[N]` each is built
+  // from" discipline this file established for `isX0Group`/etc.).
+  const isLdBlockStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6350 });
+  wire(parent, isLdiNow.out, isLdBlockStage.a);
+  wire(parent, isLddNow.out, isLdBlockStage.b);
+  const isLdBlockStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6380 });
+  wire(parent, isLdirNow.out, isLdBlockStage2.a);
+  wire(parent, isLddrNow.out, isLdBlockStage2.b);
+  const isLdBlockNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6365 });
+  wire(parent, isLdBlockStage.out, isLdBlockNow.a);
+  wire(parent, isLdBlockStage2.out, isLdBlockNow.b);
+  tieToLabel('IS_LDBLOCK_NOW', isLdBlockNow.out, { x: pos.x + 9250, y: pos.y - 6365 }); // anchor — phase decode just below, RAM's own oe/we/address mux, the F-register layer, and BC's own pair adder (all far) read this
+
+  // `directionIsDecNow`: `LDD`/`LDDR` want `HL--`/`DE--` instead of the
+  // family's own default `++` — `DE`/`HL`'s own pair adders (see "x=00,
+  // z=3: INC rr/DEC rr" above) already compute `+1` whenever their own
+  // `DEC DE`/`DEC HL` line (`dec.y[3]`/`[5]`) reads `0`, which it always
+  // does while `ir` holds any of this family's own recaptured `y=4..7` —
+  // so only the *decrementing* half needs a widened direction line,
+  // `LDI`/`LDIR` get their `+1` for free exactly the way plain `LDI`
+  // always did.
+  const directionIsDecNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6410 });
+  wire(parent, isLddNow.out, directionIsDecNow.a);
+  wire(parent, isLddrNow.out, directionIsDecNow.b);
+  tieToLabel('LDBLOCK_DEC_DIR_NOW', directionIsDecNow.out, { x: pos.x + 9250, y: pos.y - 6410 }); // anchor — DE's and HL's own pair adder direction lines (far) read this
+
+  // `isRepeatVariantNow`: `LDIR`/`LDDR` only — combined with `P/V`'s own
+  // fresh `BC-1 != 0` value at the `pc` mux chain's own final layer, far
+  // below, to decide whether this instruction lands back on its own
+  // opcode instead of advancing.
+  const isRepeatVariantNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6440 });
+  wire(parent, isLdirNow.out, isRepeatVariantNow.a);
+  wire(parent, isLddrNow.out, isRepeatVariantNow.b);
+  tieToLabel('LDBLOCK_REPEAT_VARIANT_NOW', isRepeatVariantNow.out, { x: pos.x + 9250, y: pos.y - 6440 }); // anchor — the pc mux chain's own final layer (far) reads this
 
   // Phases: `PHASE4` reads `(HL)` into a holding register, `PHASE5` writes
-  // it to `(DE)`, `PHASE6` commits `HL++`/`DE++`/`BC--`/flags — three
-  // phases, not the two a plain byte-move might suggest, specifically so
-  // the register commit lands on a *separate* edge from both RAM phases:
-  // `HL`/`DE` still hold their *old* values through the read and the
-  // write (their own pair adders compute `+1` fresh from those old values
-  // the whole time), so the address mux never needs an `EX (SP),HL`-style
-  // "old value" holding register of its own — the commit simply hasn't
+  // it to `(DE)`, `PHASE6` commits `HL++`/`DE++`/`BC--`/flags (and, for
+  // `LDIR`/`LDDR`, whether `PC` repeats) — three phases, not the two a
+  // plain byte-move might suggest, specifically so the register commit
+  // lands on a *separate* edge from both RAM phases: `HL`/`DE` still hold
+  // their *old* values through the read and the write (their own pair
+  // adders compute the fresh `+1`/`-1` from those old values the whole
+  // time), so the address mux never needs an `EX (SP),HL`-style "old
+  // value" holding register of its own — the commit simply hasn't
   // happened yet when either address is read. `PHASE2`/`PHASE3` are
   // already spent on the prefix byte's own recapture and extra `pc`
   // advance (see the prefix mechanism's own doc comment above) — this
   // opcode's own work starts one phase later than an unprefixed
   // instruction's equivalent would, the same one-phase shift every
   // prefixed instruction pays.
-  const ldiReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6280 });
-  wire(parent, isLdiNow.out, ldiReadNow.a);
-  tieToLabel('PHASE4', ldiReadNow.b, { x: pos.x + 9100, y: pos.y - 6280 });
-  tieToLabel('LDI_READ_NOW', ldiReadNow.out, { x: pos.x + 9300, y: pos.y - 6280 }); // anchor — ramOeFinal, RAM's own address mux, and ldiTemp's own we (all far) read this
+  const ldBlockReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6280 });
+  wire(parent, isLdBlockNow.out, ldBlockReadNow.a);
+  tieToLabel('PHASE4', ldBlockReadNow.b, { x: pos.x + 9100, y: pos.y - 6280 });
+  tieToLabel('LDBLOCK_READ_NOW', ldBlockReadNow.out, { x: pos.x + 9300, y: pos.y - 6280 }); // anchor — ramOeFinal, RAM's own address mux, and ldBlockTemp's own we (all far) read this
   // The identical adjacent-ring-position bus-fight guard `EX (SP),HL`'s
   // own multi-phase sequence above already established, applied here too
   // rather than found live a fourth time.
-  const ldiWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6230 });
-  wire(parent, isLdiNow.out, ldiWriteRaw.a);
-  tieToLabel('PHASE5', ldiWriteRaw.b, { x: pos.x + 9100, y: pos.y - 6230 });
-  const notLdiReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6255 });
-  wire(parent, ldiReadNow.out, notLdiReadNow.in);
-  const ldiWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6230 });
-  wire(parent, ldiWriteRaw.out, ldiWriteNow.a);
-  wire(parent, notLdiReadNow.out, ldiWriteNow.b);
-  tieToLabel('LDI_WRITE_NOW', ldiWriteNow.out, { x: pos.x + 9350, y: pos.y - 6230 }); // anchor — ramWeFinal, RAM's own address mux, and ldiTemp's own bus-driver bank (all far) read this
-  const ldiCommitRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6180 });
-  wire(parent, isLdiNow.out, ldiCommitRaw.a);
-  tieToLabel('PHASE6', ldiCommitRaw.b, { x: pos.x + 9100, y: pos.y - 6180 });
-  const notLdiWriteNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6205 });
-  wire(parent, ldiWriteNow.out, notLdiWriteNow.in);
-  const ldiCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6180 });
-  wire(parent, ldiCommitRaw.out, ldiCommitNow.a);
-  wire(parent, notLdiWriteNow.out, ldiCommitNow.b);
-  tieToLabel('LDI_COMMIT_NOW', ldiCommitNow.out, { x: pos.x + 9350, y: pos.y - 6180 }); // anchor — B/C/D/E/H/L's own write-back layers and F's own we/per-bit layer (all far) read this
+  const ldBlockWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6230 });
+  wire(parent, isLdBlockNow.out, ldBlockWriteRaw.a);
+  tieToLabel('PHASE5', ldBlockWriteRaw.b, { x: pos.x + 9100, y: pos.y - 6230 });
+  const notLdBlockReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6255 });
+  wire(parent, ldBlockReadNow.out, notLdBlockReadNow.in);
+  const ldBlockWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6230 });
+  wire(parent, ldBlockWriteRaw.out, ldBlockWriteNow.a);
+  wire(parent, notLdBlockReadNow.out, ldBlockWriteNow.b);
+  tieToLabel('LDBLOCK_WRITE_NOW', ldBlockWriteNow.out, { x: pos.x + 9350, y: pos.y - 6230 }); // anchor — ramWeFinal, RAM's own address mux, and ldBlockTemp's own bus-driver bank (all far) read this
+  const ldBlockCommitRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6180 });
+  wire(parent, isLdBlockNow.out, ldBlockCommitRaw.a);
+  tieToLabel('PHASE6', ldBlockCommitRaw.b, { x: pos.x + 9100, y: pos.y - 6180 });
+  const notLdBlockWriteNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6205 });
+  wire(parent, ldBlockWriteNow.out, notLdBlockWriteNow.in);
+  const ldBlockCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6180 });
+  wire(parent, ldBlockCommitRaw.out, ldBlockCommitNow.a);
+  wire(parent, notLdBlockWriteNow.out, ldBlockCommitNow.b);
+  tieToLabel('LDBLOCK_COMMIT_NOW', ldBlockCommitNow.out, { x: pos.x + 9350, y: pos.y - 6180 }); // anchor — B/C/D/E/H/L's own write-back layers and F's own we/per-bit layer (all far) read this
 
   // ir.we's own PHASE0 anchor above widens to a second term: PHASE2, but
   // only while `prefixReadNow` is genuinely high — the identical "the
@@ -2462,20 +2532,30 @@ export function buildZ80Cpu(
     }
   };
   // `BC`'s own pair adder needs a second way to reach `-1`: real `DEC BC`
-  // (`dec.y[1]`, unprefixed) is one, `LDI`'s own always-a-decrement `BC--`
-  // is the other — an `OR`, not a replacement, since the two conditions
-  // are mutually exclusive by construction (one reads the plain unprefixed
-  // table, the other only fires with `ED` latched) but never need to be
-  // told apart here, only recognized. `DE`/`HL` need no equivalent
-  // widening: `LDI` wants `+1` for both, exactly what each adder already
+  // (`dec.y[1]`, unprefixed) is one, the whole `LDI`/`LDD`/`LDIR`/`LDDR`
+  // family's own always-a-decrement `BC--` (`isLdBlockNow` — see "x=10,
+  // z=0: LDI/LDD/LDIR/LDDR" above) is the other — an `OR`, not a
+  // replacement, since the two conditions are mutually exclusive by
+  // construction (one reads the plain unprefixed table, the other only
+  // fires with `ED` latched) but never need to be told apart here, only
+  // recognized. `DE`/`HL` want `-1` only for `LDD`/`LDDR` specifically
+  // (`directionIsDecNow`, the same doc comment's own derivation) —
+  // `LDI`/`LDIR` get their `+1` for free, exactly what each adder already
   // computes whenever its own `DEC DE`/`DEC HL` line (`dec.y[3]`/`[5]`) is
-  // 0 — which it always is while `ir` holds `LDI`'s own recaptured `y=4`.
+  // 0, which it always is while `ir` holds any of this family's own
+  // recaptured `y=4..7`.
   const bcDecY = buildOr(parent, vcc3, gnd3, { x: pos.x + 8850, y: pos.y - 1320 });
   wire(parent, dec.y[1]!, bcDecY.a);
-  wire(parent, isLdiNow.out, bcDecY.b);
+  wire(parent, isLdBlockNow.out, bcDecY.b);
+  const deDecY = buildOr(parent, vcc3, gnd3, { x: pos.x + 8850, y: pos.y - 920 });
+  wire(parent, dec.y[3]!, deDecY.a);
+  wire(parent, directionIsDecNow.out, deDecY.b);
+  const hlDecY = buildOr(parent, vcc3, gnd3, { x: pos.x + 8850, y: pos.y - 520 });
+  wire(parent, dec.y[5]!, hlDecY.a);
+  wire(parent, directionIsDecNow.out, hlDecY.b);
   buildPairAdder('REGB', 'REGC', 'BCADD', bcDecY.out, { x: pos.x + 8900, y: pos.y - 1300 });
-  buildPairAdder('REGD', 'REGE', 'DEADD', dec.y[3]!, { x: pos.x + 8900, y: pos.y - 900 });
-  buildPairAdder('REGH', 'REGL', 'HLADD', dec.y[5]!, { x: pos.x + 8900, y: pos.y - 500 });
+  buildPairAdder('REGD', 'REGE', 'DEADD', deDecY.out, { x: pos.x + 8900, y: pos.y - 900 });
+  buildPairAdder('REGH', 'REGL', 'HLADD', hlDecY.out, { x: pos.x + 8900, y: pos.y - 500 });
 
   // x=00, z=4/z=5: INC r/DEC r — see the doc comment above ("x=00, z=4/z=5:
   // INC r/DEC r") for the full derivation. `y` (not `z`, unlike the ALU
@@ -3696,6 +3776,24 @@ export function buildZ80Cpu(
     else wire(parent, jrCcOffset.q[7]!, jrOffsetAdder.b[i]!); // sign-extend
   }
 
+  // `LDIR`/`LDDR`'s own repeat (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above):
+  // a dedicated `pcMinus2Adder`, computing `PC - 2` unconditionally off
+  // `pc.q` the same "always compute, gate only the commit" way every
+  // adder in this file already does. `-2` in two's complement is every
+  // bit `1` except bit 0 (`0b...1110`) — the identical `b`/`cin` shape the
+  // `-1` trick elsewhere in this file uses (`b` = the constant, `cin=0`),
+  // just a different constant, since this needs to land back on the
+  // *opcode byte itself* (`ED` then the real opcode, two bytes both
+  // already advanced past), not one byte short of it.
+  const pcMinus2Adder = buildAlu(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 5100 });
+  wire(parent, gnd, pcMinus2Adder.op0);
+  wire(parent, gnd, pcMinus2Adder.op1);
+  wire(parent, gnd, pcMinus2Adder.cin);
+  for (let i = 0; i < addrBits; i++) {
+    wire(parent, pc.q[i]!, pcMinus2Adder.a[i]!);
+    wire(parent, i === 0 ? gnd : vcc, pcMinus2Adder.b[i]!);
+  }
+
   const stackWriteNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y + 900 }); // pushNow OR rstNow — decrements SP, and is the RAM-write/address-select condition
   wire(parent, pushNow.out, stackWriteNowStage.a);
   wire(parent, rstNow.out, stackWriteNowStage.b);
@@ -3787,7 +3885,7 @@ export function buildZ80Cpu(
   // final term.
   const ramWeFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 800 });
   wire(parent, ramWeStage9.out, ramWeFinal.a);
-  tieToLabel('LDI_WRITE_NOW', ramWeFinal.b, { x: pos.x + 9800, y: pos.y + 800 });
+  tieToLabel('LDBLOCK_WRITE_NOW', ramWeFinal.b, { x: pos.x + 9800, y: pos.y + 800 });
   wire(parent, ramWeFinal.out, ram.pins.we!);
 
   // ramOe's FETCH term is deliberately gated by NOT(groupActive), not bare
@@ -3935,7 +4033,7 @@ export function buildZ80Cpu(
   // twenty-seventh and final term.
   const ramOeFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y + 50 });
   wire(parent, ramOeStage26.out, ramOeFinal.a);
-  tieToLabel('LDI_READ_NOW', ramOeFinal.b, { x: pos.x + 9850, y: pos.y + 50 });
+  tieToLabel('LDBLOCK_READ_NOW', ramOeFinal.b, { x: pos.x + 9850, y: pos.y + 50 });
   wire(parent, ramOeFinal.out, ram.pins.oe!);
 
   // SP's own +-1 adder: a *second* buildAlu instance (width addrBits, not
@@ -4041,6 +4139,23 @@ export function buildZ80Cpu(
   const addrIsHl = buildOr(parent, vcc, gnd, { x: pos.x + 650, y: pos.y - 440 });
   wire(parent, addrIsHlStage3.out, addrIsHl.a);
   tieToLabel('LDHLN_WRITE_NOW', addrIsHl.b, { x: pos.x + 550, y: pos.y - 440 });
+
+  // `LDIR`/`LDDR`'s own repeat (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above):
+  // fires only for the two repeating variants (`LDBLOCK_REPEAT_VARIANT_NOW`),
+  // only while there's still more to copy (`LDBLOCK_PV_NOW`, this pass's
+  // own fresh `BC-1 != 0`), and only on the exact tick the register commit
+  // itself lands (`LDBLOCK_COMMIT_NOW`, already correctly one-shot-per-
+  // instruction — see its own doc comment above) — the identical
+  // "borrow an already-phase-gated signal rather than re-derive the
+  // timing from scratch" reasoning that signal's own construction used.
+  const ldBlockRepeatStage = buildAnd(parent, vcc, gnd, { x: pos.x - 750, y: pos.y - 5150 });
+  tieToLabel('LDBLOCK_REPEAT_VARIANT_NOW', ldBlockRepeatStage.a, { x: pos.x - 850, y: pos.y - 5150 });
+  tieToLabel('LDBLOCK_PV_NOW', ldBlockRepeatStage.b, { x: pos.x - 850, y: pos.y - 5130 });
+  const ldBlockRepeatNow = buildAnd(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5150 });
+  wire(parent, ldBlockRepeatStage.out, ldBlockRepeatNow.a);
+  tieToLabel('LDBLOCK_COMMIT_NOW', ldBlockRepeatNow.b, { x: pos.x - 800, y: pos.y - 5170 });
+  tieToLabel('LDBLOCK_REPEAT_NOW', ldBlockRepeatNow.out, { x: pos.x - 650, y: pos.y - 5150 }); // anchor — pc's own mux chain (far) reads this
+
   ramAddrPins(ram).forEach((p, i) => {
     const mux = makeChipInstance(parent, muxDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
     wire(parent, addrIsHl.out, mux.pins[muxDef.ports[0]!]!);
@@ -4110,17 +4225,17 @@ export function buildZ80Cpu(
     // one directly, so this stays exactly as auditable as `EX (SP),HL`'s
     // own two layers just above), `DE` during its own write phase (`rE.q`,
     // the same convention `deMux` above already established for it).
-    const ldiReadMux = makeChipInstance(parent, muxDef, { x: pos.x + 2500, y: pos.y - 300 - i * 100 });
-    tieToLabel('LDI_READ_NOW', ldiReadMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2400, y: pos.y - 320 - i * 100 });
-    wire(parent, exSpHlHighMux.pins[muxDef.ports[3]!]!, ldiReadMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rL.q[i]!, ldiReadMux.pins[muxDef.ports[2]!]!);
+    const ldBlockReadMux = makeChipInstance(parent, muxDef, { x: pos.x + 2500, y: pos.y - 300 - i * 100 });
+    tieToLabel('LDBLOCK_READ_NOW', ldBlockReadMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2400, y: pos.y - 320 - i * 100 });
+    wire(parent, exSpHlHighMux.pins[muxDef.ports[3]!]!, ldBlockReadMux.pins[muxDef.ports[1]!]!);
+    wire(parent, rL.q[i]!, ldBlockReadMux.pins[muxDef.ports[2]!]!);
 
-    const ldiWriteMux = makeChipInstance(parent, muxDef, { x: pos.x + 2700, y: pos.y - 300 - i * 100 });
-    tieToLabel('LDI_WRITE_NOW', ldiWriteMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2600, y: pos.y - 320 - i * 100 });
-    wire(parent, ldiReadMux.pins[muxDef.ports[3]!]!, ldiWriteMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rE.q[i]!, ldiWriteMux.pins[muxDef.ports[2]!]!);
+    const ldBlockWriteMux = makeChipInstance(parent, muxDef, { x: pos.x + 2700, y: pos.y - 300 - i * 100 });
+    tieToLabel('LDBLOCK_WRITE_NOW', ldBlockWriteMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2600, y: pos.y - 320 - i * 100 });
+    wire(parent, ldBlockReadMux.pins[muxDef.ports[3]!]!, ldBlockWriteMux.pins[muxDef.ports[1]!]!);
+    wire(parent, rE.q[i]!, ldBlockWriteMux.pins[muxDef.ports[2]!]!);
 
-    wire(parent, ldiWriteMux.pins[muxDef.ports[3]!]!, p);
+    wire(parent, ldBlockWriteMux.pins[muxDef.ports[3]!]!, p);
   });
 
   // PC holds during FETCH/EXEC1/EXEC2 by default, advances only during
@@ -4425,7 +4540,19 @@ export function buildZ80Cpu(
     tieToLabel('JPHL_NOW', jpHlMux.pins[muxDef.ports[0]!]!, { x: pos.x + 400, y: pos.y - 300 - i * 100 });
     wire(parent, jrMux.pins[muxDef.ports[3]!]!, jpHlMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
     wire(parent, i < 8 ? rL.q[i]! : (rH.q[i - 8] ?? gnd), jpHlMux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
-    wire(parent, jpHlMux.pins[muxDef.ports[3]!]!, pc.d[i]!);
+
+    // LDIR/LDDR's own repeat (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above): a
+    // tenth and final mux layer, `in1` wired to `pcMinus2Adder`'s own
+    // live output — the same "a live adder output, not a target
+    // register's own q" shape `JR_JUMP_NOW`'s own layer above already
+    // established, since landing back on this instruction's own opcode
+    // byte is exactly a PC-relative computation, just a fixed one.
+    const ldBlockRepeatMux = makeChipInstance(parent, muxDef, { x: pos.x + 500, y: pos.y - 300 - i * 100 });
+    tieToLabel('LDBLOCK_REPEAT_NOW', ldBlockRepeatMux.pins[muxDef.ports[0]!]!, { x: pos.x + 450, y: pos.y - 300 - i * 100 });
+    wire(parent, jpHlMux.pins[muxDef.ports[3]!]!, ldBlockRepeatMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
+    wire(parent, pcMinus2Adder.out[i]!, ldBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
+
+    wire(parent, ldBlockRepeatMux.pins[muxDef.ports[3]!]!, pc.d[i]!);
   });
 
   // Operand bus: shares ir.d/ram.data with FETCH (mutually exclusive by
@@ -5737,7 +5864,8 @@ export function buildZ80Cpu(
     orLevel = next;
     orDepth++;
   }
-  const ldiPvBit = orLevel[0]!;
+  const ldBlockPvBit = orLevel[0]!;
+  tieToLabel('LDBLOCK_PV_NOW', ldBlockPvBit, { x: pos.x + 8100, y: pos.y + 1690 }); // anchor — the pc mux chain's own final layer (far, and built earlier in this file) reads this
   const computedFlagBit: Record<number, Pin> = { 0: cBit.out, 1: nBit, 2: pvBit, 3: xBit, 4: hBit.out, 5: yBit, 6: zBit.out, 7: sBit };
   const r8FlagLabel: Record<number, string> = { 1: 'R8_N', 2: 'R8_P', 3: 'R8_X', 4: 'R8_H', 5: 'R8_Y', 6: 'R8_Z', 7: 'R8_S' };
   for (let i = 0; i < 8; i++) {
@@ -5817,18 +5945,18 @@ export function buildZ80Cpu(
     // LDI (see "x=10, y=4, z=0: LDI" above) is an eighth layer, only three
     // bits: `N`(1)/`H`(4) reset to a fixed `0` (`gnd4` directly, not a
     // label — there's no "fresh value" to publish, just the constant every
-    // rail in this file already is), `P/V`(2) gets `ldiPvBit`'s own fresh
+    // rail in this file already is), `P/V`(2) gets `ldBlockPvBit`'s own fresh
     // `BC-1 != 0` result. Every other bit (`C`/`X`/`Y`/`Z`/`S`) skips this
     // layer entirely, the same "no layer at all for a bit this op doesn't
     // touch" shape DAA's own bit 1 (just above) and the six-op rotate/flag
     // group's own bits 2/6/7 already establish.
     if (i === 1 || i === 2 || i === 4) {
-      const ldiFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8370, y: pos.y + 2215 + i * 100 });
-      tieToLabel('LDI_COMMIT_NOW', ldiFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8270, y: pos.y + 2215 + i * 100 });
-      wire(parent, cLayerIn, ldiFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-      if (i === 2) wire(parent, ldiPvBit, ldiFMux.pins[muxDef.ports[2]!]!); // in1: BC-1 != 0
-      else wire(parent, gnd4, ldiFMux.pins[muxDef.ports[2]!]!); // in1: N/H reset to 0
-      cLayerIn = ldiFMux.pins[muxDef.ports[3]!]!;
+      const ldBlockFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8370, y: pos.y + 2215 + i * 100 });
+      tieToLabel('LDBLOCK_COMMIT_NOW', ldBlockFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8270, y: pos.y + 2215 + i * 100 });
+      wire(parent, cLayerIn, ldBlockFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
+      if (i === 2) wire(parent, ldBlockPvBit, ldBlockFMux.pins[muxDef.ports[2]!]!); // in1: BC-1 != 0
+      else wire(parent, gnd4, ldBlockFMux.pins[muxDef.ports[2]!]!); // in1: N/H reset to 0
+      cLayerIn = ldBlockFMux.pins[muxDef.ports[3]!]!;
     }
     // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) swaps the
     // *whole* byte, not just one or two bits — this layer runs for every
@@ -5878,7 +6006,7 @@ export function buildZ80Cpu(
   // seventh and final OR term.
   const fWeFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 8870, y: pos.y + 2260 });
   wire(parent, fWeStage6.out, fWeFinal.a);
-  tieToLabel('LDI_COMMIT_NOW', fWeFinal.b, { x: pos.x + 8770, y: pos.y + 2260 });
+  tieToLabel('LDBLOCK_COMMIT_NOW', fWeFinal.b, { x: pos.x + 8770, y: pos.y + 2260 });
   wire(parent, fWeFinal.out, f.we);
 
   // SP: same external-seed contract as B..L above — `sp.d`/`sp.we` here
@@ -6007,27 +6135,28 @@ export function buildZ80Cpu(
   // where it's built), `DE`/`HL`'s already compute `+1` (their own
   // direction lines never see `isLdiNow` at all, so they default to `+1`
   // exactly as this instruction wants).
-  const rBExt6 = wrapWithPairCommit(rBExt5, 'LDI_COMMIT_NOW', 'BCADDHI', { x: pos.x + 12600, y: pos.y - 500 });
-  const rCExt5 = wrapWithPairCommit(rCExt4, 'LDI_COMMIT_NOW', 'BCADDLO', { x: pos.x + 12600, y: pos.y - 200 });
-  const rDExt6 = wrapWithPairCommit(rDExt5, 'LDI_COMMIT_NOW', 'DEADDHI', { x: pos.x + 13200, y: pos.y - 200 });
-  const rEExt6 = wrapWithPairCommit(rEExt5, 'LDI_COMMIT_NOW', 'DEADDLO', { x: pos.x + 13200, y: pos.y + 100 });
-  const rHExt9 = wrapWithPairCommit(rHExt8, 'LDI_COMMIT_NOW', 'HLADDHI', { x: pos.x + 13500, y: pos.y + 700 });
-  const rLExt9 = wrapWithPairCommit(rLExt8, 'LDI_COMMIT_NOW', 'HLADDLO', { x: pos.x + 13500, y: pos.y + 1000 });
+  const rBExt6 = wrapWithPairCommit(rBExt5, 'LDBLOCK_COMMIT_NOW', 'BCADDHI', { x: pos.x + 12600, y: pos.y - 500 });
+  const rCExt5 = wrapWithPairCommit(rCExt4, 'LDBLOCK_COMMIT_NOW', 'BCADDLO', { x: pos.x + 12600, y: pos.y - 200 });
+  const rDExt6 = wrapWithPairCommit(rDExt5, 'LDBLOCK_COMMIT_NOW', 'DEADDHI', { x: pos.x + 13200, y: pos.y - 200 });
+  const rEExt6 = wrapWithPairCommit(rEExt5, 'LDBLOCK_COMMIT_NOW', 'DEADDLO', { x: pos.x + 13200, y: pos.y + 100 });
+  const rHExt9 = wrapWithPairCommit(rHExt8, 'LDBLOCK_COMMIT_NOW', 'HLADDHI', { x: pos.x + 13500, y: pos.y + 700 });
+  const rLExt9 = wrapWithPairCommit(rLExt8, 'LDBLOCK_COMMIT_NOW', 'HLADDLO', { x: pos.x + 13500, y: pos.y + 1000 });
 
   // A holding register for the byte in flight — `(HL)`'s own value has to
-  // survive from `LDI_READ_NOW` (this tick's read) to `LDI_WRITE_NOW` (the
-  // *next* tick's write), the identical "a value must outlive its own
-  // bus's next user" reasoning every other holding register in this file
-  // already relies on (`hlMemTemp`, `spLoTemp`/`spHiTemp`, and friends).
-  const ldiTemp = buildRegister(parent, library, 8, { x: pos.x + 9450, y: pos.y - 6300 });
-  tieToLabel('LDI_READ_NOW', ldiTemp.we, { x: pos.x + 9350, y: pos.y - 6300 });
-  ldiTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x + 9400, y: pos.y - 6300 + i * 20 }));
-  ldiTemp.q.forEach((q, i) => tieToLabel(`LDITEMP${i}`, q, { x: pos.x + 9500, y: pos.y - 6280 + i * 20 })); // anchor — this same bus-driver bank, right below
-  tieToLabel('CLK', ldiTemp.clk, { x: pos.x + 9450, y: pos.y - 6320 });
+  // survive from `LDBLOCK_READ_NOW` (this tick's read) to
+  // `LDBLOCK_WRITE_NOW` (the *next* tick's write), the identical "a value
+  // must outlive its own bus's next user" reasoning every other holding
+  // register in this file already relies on (`hlMemTemp`, `spLoTemp`/
+  // `spHiTemp`, and friends).
+  const ldBlockTemp = buildRegister(parent, library, 8, { x: pos.x + 9450, y: pos.y - 6300 });
+  tieToLabel('LDBLOCK_READ_NOW', ldBlockTemp.we, { x: pos.x + 9350, y: pos.y - 6300 });
+  ldBlockTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x + 9400, y: pos.y - 6300 + i * 20 }));
+  ldBlockTemp.q.forEach((q, i) => tieToLabel(`LDITEMP${i}`, q, { x: pos.x + 9500, y: pos.y - 6280 + i * 20 })); // anchor — this same bus-driver bank, right below
+  tieToLabel('CLK', ldBlockTemp.clk, { x: pos.x + 9450, y: pos.y - 6320 });
   for (let i = 0; i < 8; i++) {
     const buf = makeChipInstance(parent, bufDef, { x: pos.x + 9600, y: pos.y - 6300 + i * 20 });
     tieToLabel(`LDITEMP${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 9550, y: pos.y - 6300 + i * 20 });
-    tieToLabel('LDI_WRITE_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 9550, y: pos.y - 6280 + i * 20 });
+    tieToLabel('LDBLOCK_WRITE_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 9550, y: pos.y - 6280 + i * 20 });
     tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 9700, y: pos.y - 6300 + i * 20 });
   }
 

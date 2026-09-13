@@ -2929,7 +2929,7 @@ a dedicated branch — a real rollback point for a change this invasive to
 code that had never needed one before, this project having had no git
 history at all until this pass.
 
-### x=10, y=4, z=0: LDI
+### x=10, z=0: LDI/LDD/LDIR/LDDR
 
 Real Z80's own simplest ED-table instruction, and this project's first —
 the natural first target the prefix mechanism's own doc comment above
@@ -3004,6 +3004,57 @@ back-to-back `LDI`s specifically so `BC` genuinely reaches `0` on the
 second one — `P/V` correctly dropping to `0` exactly then, not just
 staying `1` from the first — before the full suite: `40/40` files,
 `179/179` tests, still green.
+
+**`LDD`, `LDIR`, `LDDR` — the rest of the column, on the same wiring.**
+Real `0xED 0xA8`/`0xB0`/`0xB8` decode to `y=5`/`y=6`/`y=7` at the same
+`x=10,z=0` — `isLddNow`, `isLdirNow`, `isLddrNow` are the obvious
+`AND(isEdActive, dec.y[n], dec.z[0])` siblings of `isLdiNow`, and
+`isLdBlockNow` is their four-way `OR` — the single gate every piece of
+shared wiring below actually reads, so `LDI`'s own decode stays exactly
+`isLdiNow` (it never needed to know its cousins exist) while everything
+generic upgrades to the family gate. Getting there honestly meant
+renaming every `LDI_*`/`ldi*` label and variable that had quietly
+outgrown "means only `LDI`" to `LDBLOCK_*`/`ldBlock*` — this project has
+never kept a label that stopped describing what it actually gates (see
+the `JR`/`DJNZ` doc comment above), and `LDI_COMMIT_NOW` gating an `LDD`'s
+commit would have been exactly that lie.
+
+*Direction.* `LDD`/`LDDR` walk `HL`/`DE` down instead of up — one more
+`OR` line, `directionIsDecNow = OR(isLddNow, isLddrNow)`, feeding
+`DEADD`/`HLADD`'s own direction inputs (`OR(dec.y[3], directionIsDecNow)`,
+`OR(dec.y[5], directionIsDecNow)`) the identical way `isLdBlockNow`
+already widens `BCADD`'s. `BC` never needs a direction line at all —
+every member of this family decrements it, always.
+
+*The repeat.* Real silicon spends `LDIR`/`LDDR` on extra clock cycles,
+looping the same micro-instruction until `BC` hits `0`. This project has
+no micro-cycles to loop, so it fakes the identical *effect* the way
+`DJNZ` already does: land `PC` back on its own opcode instead of letting
+it advance, for as long as there's more to do. `isRepeatVariantNow =
+OR(isLdirNow, isLddrNow)` and `ldBlockPvBit` (already computed for `P/V`
+— "at least one bit of `BC-1` is set", i.e. "not yet zero") gate a new
+`pcMinus2Adder` (a `buildAlu` computing `pc + (-2)` in two's complement,
+sitting right next to `jrOffsetAdder`) through one more mux layer at the
+very end of `pc.d`'s chain, downstream of `jpHlMux`: `LDBLOCK_REPEAT_NOW
+= AND(isRepeatVariantNow, ldBlockPvBit, LDBLOCK_COMMIT_NOW)` selects
+`pc-2` instead of the incremented `pc` the rest of the fetch/increment
+logic already computed. The opcode's own two bytes get re-fetched
+next cycle exactly as if the CPU had simply not moved — `IR` reloads the
+same `0xED`, `BC`/`HL`/`DE` are already past their commit, so the second
+pass transfers the next byte and, once `BC` reaches `0`, the same mux
+selects the ordinary advanced `PC` instead and the loop ends on its own.
+No dedicated "repeat" flip-flop, no extra state at all — the same
+"correct next `PC` value is just one more mux input" trick this file has
+used since its very first conditional jump.
+
+Verified with two more dedicated tests: `z80cpu-ldd.test.ts` (two
+back-to-back `LDD`s, proving the pointers retreat instead of advance —
+everything else already proven identical to `LDI` by shared wiring) and
+`z80cpu-ldir-lddr.test.ts` (`BC` seeded to `2` so each of `LDIR`/`LDDR`
+genuinely repeats once and then falls through — the first
+`runInstruction()` pass must show `PC` landed back on the `ED` opcode's
+own address, the second must show it advanced two bytes past it) —
+before the full suite: `42/42` files, `182/182` tests, still green.
 
 ### A real solver bug this retrofit exposed — and the test that un-broke itself
 
@@ -3083,7 +3134,7 @@ a genuinely unforced group.
 diagnosed above as a genuine, transient forced-driver conflict on the RAM
 address bus, a real circuit-level race no vote-based solver fix alone
 could rescue — was marked `it.fails` on exactly that reasoning. Adding
-`LDI` right after (see "x=10, y=4, z=0: LDI" above) shifted this same
+`LDI` right after (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above) shifted this same
 file's own component/net ordering again, the identical mechanism that
 made this race reproducible in the first place — and it stopped
 reproducing. `it.fails` did its actual job here: the next full-suite run
@@ -3744,13 +3795,15 @@ section's own success story.
   now has its *mechanism* built (detect a prefix byte, recapture `ir`
   with the real opcode that follows, advance `pc` an extra time, and
   correctly exclude the existing unprefixed tables from misreading that
-  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above) and one
-  real instruction on top of it — `LDI` (see "x=10, y=4, z=0: LDI" above),
-  real Z80's own `0xED 0xA0`. The other three prefix bytes (`CB`/`DD`/
-  `FD`) and the rest of `ED`'s own table (block search/compare/IO,
-  `LDD`/`LDIR`/`LDDR` and friends) execute nothing yet — `LDI` proves the
-  mechanism works end to end, it doesn't fill in the other tables it
-  unlocks.
+  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above) and a
+  full column of `ED`'s own table on top of it — `LDI`/`LDD`/`LDIR`/`LDDR`
+  (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above), real Z80's own `0xED 0xA0`/
+  `0xA8`/`0xB0`/`0xB8`, `LDIR`/`LDDR`'s repeat faked by landing `PC` back
+  on its own opcode rather than by any real micro-cycle. The other three
+  prefix bytes (`CB`/`DD`/`FD`) and the rest of `ED`'s own table (block
+  search/compare/IO, and friends) execute nothing yet — this column
+  proves the mechanism works end to end for both a single-shot and a
+  repeating instruction, it doesn't fill in the other tables it unlocks.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
