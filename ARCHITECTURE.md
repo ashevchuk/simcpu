@@ -3056,6 +3056,103 @@ genuinely repeats once and then falls through — the first
 own address, the second must show it advanced two bytes past it) —
 before the full suite: `42/42` files, `182/182` tests, still green.
 
+### x=10, z=1: CPI/CPD/CPIR/CPDR
+
+Real `0xED 0xA1`/`0xA9`/`0xB1`/`0xB9` — `LDI`'s own family's compare-and-
+advance twin, `A - (HL)` computed for flags only (`A` itself is never
+written), then `HL++`/`HL--`/`BC--`, `N` set, `H` a real half-borrow,
+`P/V<-(BC-1 != 0)`, `S`/`Z` off the comparison, `C` left exactly where it
+was — a real, documented Z80 quirk: a plain `CP` updates `C`, this family
+never does. `isCpiNow`/`isCpdNow`/`isCpirNow`/`isCpdrNow`
+(`AND(isEdActive, dec.y[4..7], dec.z[1])`) are the obvious siblings of
+`isLdiNow`'s own shape, colliding this time with real `AND C`/`XOR C`/
+`OR C`/`CP C` (`z=1`'s own register, `C`, instead of `z=0`'s `B`) —
+`isCpBlockNow` their four-way `OR`.
+
+**A dedicated subtractor, deliberately kept off the shared `x=10` ALU.**
+`LDI`'s own family never touched that ALU at all, so its `y=4..7`
+collision was harmless by construction — `groupActive` (hence
+`aluGroupNow`, hence that ALU's own write-enables) already reads `0`
+throughout, gated off by `isEdActive` the same way every prefixed
+opcode already is. This family genuinely needs a subtract, though, and
+each of its four variants collides with a *different* real op (`AND`/
+`XOR`/`OR`/`CP`) — masking four different wrong op-selects, a wrong
+`A`-write-enable, and `AND`'s own real "forces `H=1`" hardware quirk,
+all read straight off the very `y` bits this family recaptures, would
+cost more gates and more risk than the alternative actually taken: a
+permanently-wired subtractor of its own (`op0=op1=0`, `cin=1`, `b`
+inverted per bit — the identical two's-complement recipe the shared
+ALU's own `SUB` path uses), the same "isolated adder, no shared-decode
+collision to fight" shape `pcMinus2Adder` and `daaAdder`/`gt99Cmp`
+elsewhere in this file already use for their own single-purpose
+arithmetic. `A` is never written by this family at all, so the shared
+ALU's own `aWe` never needs touching either — there simply is no
+write-back path for this adder's result, only flags.
+
+**Two phases, not three.** `PHASE4` reads `(HL)` into a holding register
+(`cpBlockTemp`, feeding the dedicated adder directly — no bus-publish
+step, unlike `ldBlockTemp`, since there's no second RAM phase for a
+published value to survive into); `PHASE5` both computes and commits —
+`HL+-1`/`BC--`/flags, all landing on the same edge real Z80's own
+two-machine-cycle timing for this family already matches, one shorter
+than `LDI`'s three. With nothing driving the bus back out from this
+family's own commit phase, the adjacent-phase bus-fight guard
+`LDBLOCK_WRITE_NOW` needs has nothing to guard here.
+
+**Flags, five bits fresh, one held, two skipped.** `S`(`cpBlockAdder.out[7]`),
+`Z` (an OR-tree over the adder's own 8 output bits, `NOT`ed — the
+identical shape the shared ALU's own `zChain`/`zBit` already establish,
+just a private copy off a private adder), and `H` (`NOT` of the adder's
+own `carries[3]`, half-borrow at the nibble boundary, the same idiom the
+shared ALU's `hRaw` uses collapsed to a plain `NOT` since this adder
+never computes anything but a subtract) are all fresh every time; `N` is
+a hardwired `1`; `P/V` reads `blockPvBit` (renamed from `ldBlockPvBit` —
+see below) — the identical `BC-1 != 0` bit the LD-block family already
+publishes, since both families decrement `BC` the same way. `C` gets no
+layer at all — real Z80 leaves it alone for this whole family, so
+whatever the layer below already carries (ultimately `f.q[0]`, a genuine
+hold) falls straight through, unchanged. `X`/`Y` skip it too, the
+identical "not modeled" stance this project already takes for `CP`'s own
+real hardware quirk of sourcing them from the operand rather than the
+discarded result.
+
+**`blockPvBit`, not `ldBlockPvBit`.** The `BC-1 != 0` bit the LD-block
+family already built (a 16-way `OR` tree over `BCADD`'s own published
+bits) turns out to be exactly what this family's own `P/V` needs too —
+both widen `BCADD`'s own direction line to always decrement, so the same
+adder computes the same answer for either family, one-hot by
+construction (`z=0` vs `z=1`, never both at once). Reusing it under its
+old, `LD`-specific name would have been exactly the kind of label that
+quietly stopped describing what it actually gates this project has never
+tolerated (see the `JR`/`DJNZ` doc comment) — renamed to
+`blockPvBit`/`BLOCK_PV_NOW` the moment a second family started reading
+it.
+
+**The repeat condition genuinely differs from `LDIR`/`LDDR`'s own.** Real
+Z80 stops `CPIR`/`CPDR` the moment `BC` reaches `0` *or* a match is
+found — `LDIR`/`LDDR` only ever watches `BC`. `cpZChain` (the same
+OR-tree feeding `Z`, tapped *before* its own final `NOT`) is exactly
+"the result is nonzero," i.e. "not found" — tied to its own anchor label
+(`CPBLOCK_NOT_FOUND_NOW`) so the repeat gate, built earlier in the file
+alongside `LDIR`/`LDDR`'s own, can read it forward the same way it
+already reads `BLOCK_PV_NOW`. `CPBLOCK_REPEAT_NOW =
+AND(cpRepeatVariantNow, BLOCK_PV_NOW, CPBLOCK_NOT_FOUND_NOW,
+CPBLOCK_COMMIT_NOW)` — one more term than `LDBLOCK_REPEAT_NOW`, and a
+second, independent final layer on `pc.d`'s own mux chain, right after
+`LDIR`/`LDDR`'s own, reusing the identical `pcMinus2Adder`.
+
+Verified with three dedicated tests: `z80cpu-cpi.test.ts` and
+`z80cpu-cpd.test.ts` (each two back-to-back comparisons, deliberately
+unlike each other — a genuine nibble-boundary borrow against a *higher*
+byte first, proving `H` isn't just coincidentally `0` on the trivial
+case, then a match against an *equal* byte with `BC` also reaching `0`
+on that exact pass, proving `P/V` still tracks `BC` and not the
+comparison's own overflow) and `z80cpu-cpir-cpdr.test.ts` (three cases:
+`CPIR` finding its match on the second byte after one genuine repeat,
+`CPIR` exhausting `BC` with neither byte ever matching — the *other* way
+to stop — and `CPDR` walking downward to its own match) — before the
+full suite: `45/45` files, `187/187` tests, still green.
+
 ### A real solver bug this retrofit exposed — and the test that un-broke itself
 
 Adding the prefix mechanism above didn't just add inert wiring — it
@@ -3795,15 +3892,19 @@ section's own success story.
   now has its *mechanism* built (detect a prefix byte, recapture `ir`
   with the real opcode that follows, advance `pc` an extra time, and
   correctly exclude the existing unprefixed tables from misreading that
-  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above) and a
-  full column of `ED`'s own table on top of it — `LDI`/`LDD`/`LDIR`/`LDDR`
+  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above) and two
+  full columns of `ED`'s own table on top of it — `LDI`/`LDD`/`LDIR`/`LDDR`
   (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above), real Z80's own `0xED 0xA0`/
-  `0xA8`/`0xB0`/`0xB8`, `LDIR`/`LDDR`'s repeat faked by landing `PC` back
-  on its own opcode rather than by any real micro-cycle. The other three
-  prefix bytes (`CB`/`DD`/`FD`) and the rest of `ED`'s own table (block
-  search/compare/IO, and friends) execute nothing yet — this column
-  proves the mechanism works end to end for both a single-shot and a
-  repeating instruction, it doesn't fill in the other tables it unlocks.
+  `0xA8`/`0xB0`/`0xB8`, and `CPI`/`CPD`/`CPIR`/`CPDR` (see "x=10, z=1:
+  CPI/CPD/CPIR/CPDR" above), real `0xED 0xA1`/`0xA9`/`0xB1`/`0xB9` —
+  `LDIR`/`LDDR`/`CPIR`/`CPDR`'s repeat all faked by landing `PC` back on
+  its own opcode rather than by any real micro-cycle, `CPIR`/`CPDR`'s own
+  repeat condition genuinely different (stops on a match found, not only
+  on `BC` reaching `0`). The other three prefix bytes (`CB`/`DD`/`FD`)
+  and the rest of `ED`'s own table (block IO, and friends) execute
+  nothing yet — these two columns prove the mechanism works end to end
+  for a single-shot instruction, a repeat gated by one condition, and a
+  repeat gated by two, without filling in the other tables they unlock.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
