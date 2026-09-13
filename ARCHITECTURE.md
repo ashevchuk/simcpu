@@ -3226,6 +3226,87 @@ own setup, not the wiring above; every register besides `B`/`C` had
 already been exercised by dozens of earlier tests using the identical
 convention correctly.
 
+### x=10, z=3: OUTI/OUTD/OTIR/OTDR
+
+Real `0xED 0xA3`/`0xAB`/`0xB3`/`0xBB` — the fourth and final `ED`-table
+column this retrofit fills in, the exact mirror image of `INI`'s own
+family: `OUT(C)<-(HL)`, a byte read from `(HL)` this time rather than
+written to it, sent to this project's own invented I/O port addressed
+by `C`, then `HL+-1`, `B--` (never `BC`, the identical reasoning `INI`'s
+own family already established). Collides with real unprefixed `AND E`/
+`XOR E`/`OR E`/`CP E` (`z=3` — `E`, not `D`/`B`/`C` this time). The same
+two documented flag bits (`N` from the transferred byte's own bit 7,
+`Z` from `B` reaching `0`) apply here too — `Z` off the identical shared
+`IOB_NONZERO_NOW`/`IOB_Z_NOW` bits `INI`'s own family already built
+(decrementing `B` is the same operation regardless of transfer
+direction, so nothing new needed there), `N` off `outBlockTemp`'s own
+held byte instead of `ioPortDataIn` (this family never reads that pin
+at all).
+
+**Two shared resources, each widened by exactly one term.** `C`'s own
+bus-driver bank — previously enabled by `INI`'s own `INBLOCK_READ_NOW`
+alone — widens to `OR(INBLOCK_READ_NOW, OUTBLOCK_WRITE_NOW)`: the same
+port-address role, reached one phase later by this family (`PHASE5`
+instead of `PHASE4`, since `PHASE4` here is spent reading `(HL)`
+instead), mutually exclusive by `dec.z` the same way every other shared
+resource in this file already relies on. `ioPortDataOut` — previously a
+bare tap of `AOLD` (`OUT (n),A`'s own source, see "x=11: IN A,(n) / OUT
+(n),A" below) — gets a mux layer ahead of it, picking `outBlockTemp`'s
+own held byte instead whenever `OUTBLOCK_WRITE_NOW` fires: the same
+"mux ahead of the existing source" shape every other competing writer
+in this file already uses, `OUT (n),A` itself never asserting that
+select line so its own behavior is untouched. `ioWrite` widens by the
+identical single OR term `ioRead` already needed for `INI`'s own family.
+
+**The read/write phase order is the true mirror of `INI`'s.** `INI`
+reads its port address (`C`) at `PHASE4` and writes RAM at `PHASE5`;
+`OUTI` reads RAM (`PHASE4`, into `outBlockTemp` — a holding register
+`INI`'s own family never needed, since nothing here has to survive past
+the phase it's read on the way `INI`'s port response does) and writes
+its port address plus the held byte at `PHASE5`. RAM's own `oe` widens
+for `OUTI`'s own `PHASE4` (the mirror image of `INI`'s family never
+needing that widening at all, since `INI` never reads RAM), and RAM's
+own address mux gets one more override layer for that same phase.
+
+**The repeat condition is, once again, shared.** `OTIR`/`OTDR` stop
+purely when `B` reaches `0`, the identical single-condition shape
+`INIR`/`INDR` already establish — a fresh `outRepeatVariantNow`/
+`OUTBLOCK_REPEAT_NOW` pair, gated by this family's own `y`/`z` decode,
+but reading the exact same shared `IOB_NONZERO_NOW` bit, and landing on
+a fourth and final layer of `pc.d`'s own mux chain, reusing
+`pcMinus2Adder` a fourth time.
+
+A small, honest correction made along the way: the two labels this
+family's own repeat gate needed to read (`B`'s own nonzero bit aside)
+had been named `IOBLOCK_REPEAT_VARIANT_NOW`/`IOBLOCK_REPEAT_NOW`/
+`IOBLOCK_DEC_DIR_NOW` — generic-sounding, but actually built
+specifically for `INI`'s own family alone, the identical trap
+`LDBLOCK_PV_NOW` fell into before `CPI`'s own family needed the same
+bit (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above). Renamed to
+`INBLOCK_REPEAT_VARIANT_NOW`/`INBLOCK_REPEAT_NOW`/`INBLOCK_DEC_DIR_NOW`
+— matching the already-correctly-`IN`-prefixed phase labels right next
+to them — before this family's own genuinely distinct
+`OUTBLOCK_REPEAT_VARIANT_NOW`/`OUTBLOCK_REPEAT_NOW`/
+`OUTBLOCK_DEC_DIR_NOW` were added alongside them, rather than let a
+second misnomer accumulate on top of the first.
+
+Verified with three dedicated tests: `z80cpu-outi.test.ts` and
+`z80cpu-outd.test.ts` (each two back-to-back transfers, mirroring
+`z80cpu-in-out.test.ts`'s own mid-instruction-checkpoint technique for
+`ioWrite`/`ioPortAddr`/`ioPortDataOut` — genuinely necessary here too,
+since none of the three persist past the phase they're valid on — with
+two *different* transferred bytes, `0xAB` then `0x11`, so `N` reading
+correctly on both proves it tracks *this* transfer, not a stale leftover
+from the first) and `z80cpu-otir-otdr.test.ts` (`B` seeded to `2`,
+the identical repeat-then-fall-through shape `z80cpu-inir-indr.test.ts`
+already established) — before the full suite: `51/51` files, `195/195`
+tests, still green.
+
+This closes out the block I/O half of `ED`'s own table (`z=0` through
+`z=3`, all four now real) — the same milestone the CB/ED/DD/FD prefix
+mechanism's own doc comment named as the natural stopping point for
+this retrofit's own block-instruction work.
+
 ### A real solver bug this retrofit exposed — and the test that un-broke itself
 
 Adding the prefix mechanism above didn't just add inert wiring — it
@@ -3966,21 +4047,28 @@ section's own success story.
   with the real opcode that follows, advance `pc` an extra time, and
   correctly exclude the existing unprefixed tables from misreading that
   recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above) and
-  three full columns of `ED`'s own table on top of it — `LDI`/`LDD`/
-  `LDIR`/`LDDR` (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above), real Z80's
-  own `0xED 0xA0`/`0xA8`/`0xB0`/`0xB8`; `CPI`/`CPD`/`CPIR`/`CPDR` (see
-  "x=10, z=1: CPI/CPD/CPIR/CPDR" above), real `0xED 0xA1`/`0xA9`/`0xB1`/
-  `0xB9`; and `INI`/`IND`/`INIR`/`INDR` (see "x=10, z=2: INI/IND/INIR/
-  INDR" above), real `0xED 0xA2`/`0xAA`/`0xB2`/`0xBA` — every repeating
+  all four `z=0..3` block-instruction columns of `ED`'s own table on top
+  of it — `LDI`/`LDD`/`LDIR`/`LDDR` (see "x=10, z=0: LDI/LDD/LDIR/LDDR"
+  above), real `0xED 0xA0`/`0xA8`/`0xB0`/`0xB8`; `CPI`/`CPD`/`CPIR`/
+  `CPDR` (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above), real `0xED 0xA1`/
+  `0xA9`/`0xB1`/`0xB9`; `INI`/`IND`/`INIR`/`INDR` (see "x=10, z=2:
+  INI/IND/INIR/INDR" above), real `0xED 0xA2`/`0xAA`/`0xB2`/`0xBA`; and
+  `OUTI`/`OUTD`/`OTIR`/`OTDR` (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR"
+  above), real `0xED 0xA3`/`0xAB`/`0xB3`/`0xBB` — every repeating
   variant's own loop faked by landing `PC` back on its own opcode rather
   than by any real micro-cycle, each with a genuinely different repeat
-  condition (`LDIR`/`LDDR` watch `BC` alone, `CPIR`/`CPDR` also stop on a
-  match found, `INIR`/`INDR` watch `B` alone). The other three prefix
-  bytes (`CB`/`DD`/`FD`) and the rest of `ED`'s own table (the `OUT`-side
-  of block IO, and friends) execute nothing yet — these three columns
-  prove the mechanism works end to end for a single-shot instruction and
-  three differently-gated repeats, without filling in the other tables
-  they unlock.
+  condition except the last pair, which genuinely shares one (`LDIR`/
+  `LDDR` watch `BC` alone, `CPIR`/`CPDR` also stop on a match found,
+  `INIR`/`INDR` and `OTIR`/`OTDR` both watch `B` alone — decrementing `B`
+  is the identical operation regardless of transfer direction, so the
+  underlying adder and its own nonzero bit are genuinely shared code,
+  not just a similar shape). The other three prefix bytes (`CB`/`DD`/
+  `FD`) and the rest of `ED`'s own table (16-bit arithmetic, `NEG`,
+  `RRD`/`RLD`, and friends) execute nothing yet — these four columns
+  close out the block-instruction half of `ED`'s table entirely and
+  prove the prefix mechanism works end to end for a single-shot
+  instruction and three differently-gated repeat conditions, without
+  filling in the other tables they unlock.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this

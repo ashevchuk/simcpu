@@ -2477,14 +2477,14 @@ export function buildZ80Cpu(
   wire(parent, dec.y[6]!, isInirStage.b);
   wire(parent, isInirStage.out, isInirNow.a);
   wire(parent, dec.z[2]!, isInirNow.b);
-  tieToLabel('IS_INIR_NOW', isInirNow.out, { x: pos.x + 9150, y: pos.y - 6770 }); // anchor — ioRepeatVariantNow just below reads this
+  tieToLabel('IS_INIR_NOW', isInirNow.out, { x: pos.x + 9150, y: pos.y - 6770 }); // anchor — inRepeatVariantNow just below reads this
   const isIndrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6800 });
   const isIndrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6800 });
   wire(parent, isEdActive, isIndrStage.a);
   wire(parent, dec.y[7]!, isIndrStage.b);
   wire(parent, isIndrStage.out, isIndrNow.a);
   wire(parent, dec.z[2]!, isIndrNow.b);
-  tieToLabel('IS_INDR_NOW', isIndrNow.out, { x: pos.x + 9150, y: pos.y - 6800 }); // anchor — ioDirectionIsDecNow and ioRepeatVariantNow just below both read this
+  tieToLabel('IS_INDR_NOW', isIndrNow.out, { x: pos.x + 9150, y: pos.y - 6800 }); // anchor — inDirectionIsDecNow and inRepeatVariantNow just below both read this
 
   const isInBlockStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6820 });
   wire(parent, isIniNow.out, isInBlockStage.a);
@@ -2497,25 +2497,25 @@ export function buildZ80Cpu(
   wire(parent, isInBlockStage2.out, isInBlockNow.b);
   tieToLabel('IS_INBLOCK_NOW', isInBlockNow.out, { x: pos.x + 9250, y: pos.y - 6830 }); // anchor — phase decode just below and HL's own pair-adder direction line (far) read this
 
-  // `ioDirectionIsDecNow`: `IND`/`INDR` want `HL--` instead of the
+  // `inDirectionIsDecNow`: `IND`/`INDR` want `HL--` instead of the
   // family's own default `++` — the identical "only the decrementing half
   // needs a widened direction line" shape `LDD`/`LDDR`'s own
   // `directionIsDecNow` already establishes for `HL`'s own pair adder.
-  const ioDirectionIsDecNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6860 });
-  wire(parent, isIndNow.out, ioDirectionIsDecNow.a);
-  wire(parent, isIndrNow.out, ioDirectionIsDecNow.b);
-  tieToLabel('IOBLOCK_DEC_DIR_NOW', ioDirectionIsDecNow.out, { x: pos.x + 9250, y: pos.y - 6860 }); // anchor — HL's own pair adder direction line (far) reads this
+  const inDirectionIsDecNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6860 });
+  wire(parent, isIndNow.out, inDirectionIsDecNow.a);
+  wire(parent, isIndrNow.out, inDirectionIsDecNow.b);
+  tieToLabel('INBLOCK_DEC_DIR_NOW', inDirectionIsDecNow.out, { x: pos.x + 9250, y: pos.y - 6860 }); // anchor — HL's own pair adder direction line (far) reads this
 
-  // `ioRepeatVariantNow`: `INIR`/`INDR` only — combined with `B`'s own
+  // `inRepeatVariantNow`: `INIR`/`INDR` only — combined with `B`'s own
   // dedicated adder reaching nonzero, far below, to decide whether this
   // instruction lands back on its own opcode instead of advancing. Only
   // one condition to watch, unlike `CPIR`/`CPDR`'s own two — real Z80
   // stops this family purely on `B` reaching `0`, there's no "found it"
   // concept here at all.
-  const ioRepeatVariantNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6890 });
-  wire(parent, isInirNow.out, ioRepeatVariantNow.a);
-  wire(parent, isIndrNow.out, ioRepeatVariantNow.b);
-  tieToLabel('IOBLOCK_REPEAT_VARIANT_NOW', ioRepeatVariantNow.out, { x: pos.x + 9250, y: pos.y - 6890 }); // anchor — the pc mux chain's own final layer (far) reads this
+  const inRepeatVariantNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6890 });
+  wire(parent, isInirNow.out, inRepeatVariantNow.a);
+  wire(parent, isIndrNow.out, inRepeatVariantNow.b);
+  tieToLabel('INBLOCK_REPEAT_VARIANT_NOW', inRepeatVariantNow.out, { x: pos.x + 9250, y: pos.y - 6890 }); // anchor — the pc mux chain's own final layer (far) reads this
 
   // Three phases, the identical shape `LDI`'s own family uses: `PHASE4`
   // publishes `C` onto the bus (this instruction's own `ioPortAddr`,
@@ -2548,6 +2548,126 @@ export function buildZ80Cpu(
   wire(parent, inBlockCommitRaw.out, inBlockCommitNow.a);
   wire(parent, notInBlockWriteNow.out, inBlockCommitNow.b);
   tieToLabel('INBLOCK_COMMIT_NOW', inBlockCommitNow.out, { x: pos.x + 9350, y: pos.y - 6640 }); // anchor — B's and HL's own write-back layers, F's own we/per-bit layer (all far) read this
+
+  // x=10, z=3: OUTI/OUTD/OTIR/OTDR — the fourth and final `ED`-table
+  // column this retrofit fills in, real Z80's `OUT(C)<-(HL)`: the exact
+  // mirror image of `INI`'s own family — a byte read from `(HL)` this
+  // time, written to this project's own invented I/O port, addressed by
+  // `C` the identical way. `HL+-1`, `B--` (never `BC`, same reasoning as
+  // `INI`'s own family). Collides with real unprefixed `AND E`/`XOR E`/
+  // `OR E`/`CP E` (`z=3` — `E`, not `D`/`B`/`C` this time). `B`'s own
+  // dedicated `-1` adder (`ioBAdder`, above) and its own nonzero/zero
+  // bits (`IOB_NONZERO_NOW`/`IOB_Z_NOW`) are genuinely shared with `INI`'s
+  // own family here — decrementing `B` is the identical operation
+  // regardless of which direction the port transfer runs, so nothing new
+  // is built for it, only new consumers of what already exists.
+  const isOutiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6920 });
+  const isOutiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6920 });
+  wire(parent, isEdActive, isOutiStage.a);
+  wire(parent, dec.y[4]!, isOutiStage.b);
+  wire(parent, isOutiStage.out, isOutiNow.a);
+  wire(parent, dec.z[3]!, isOutiNow.b);
+  tieToLabel('IS_OUTI_NOW', isOutiNow.out, { x: pos.x + 9150, y: pos.y - 6920 });
+  const isOutdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6950 });
+  const isOutdStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6950 });
+  wire(parent, isEdActive, isOutdStage.a);
+  wire(parent, dec.y[5]!, isOutdStage.b);
+  wire(parent, isOutdStage.out, isOutdNow.a);
+  wire(parent, dec.z[3]!, isOutdNow.b);
+  tieToLabel('IS_OUTD_NOW', isOutdNow.out, { x: pos.x + 9150, y: pos.y - 6950 });
+  const isOtirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6980 });
+  const isOtirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6980 });
+  wire(parent, isEdActive, isOtirStage.a);
+  wire(parent, dec.y[6]!, isOtirStage.b);
+  wire(parent, isOtirStage.out, isOtirNow.a);
+  wire(parent, dec.z[3]!, isOtirNow.b);
+  tieToLabel('IS_OTIR_NOW', isOtirNow.out, { x: pos.x + 9150, y: pos.y - 6980 }); // anchor — outRepeatVariantNow just below reads this
+  const isOtdrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 7010 });
+  const isOtdrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 7010 });
+  wire(parent, isEdActive, isOtdrStage.a);
+  wire(parent, dec.y[7]!, isOtdrStage.b);
+  wire(parent, isOtdrStage.out, isOtdrNow.a);
+  wire(parent, dec.z[3]!, isOtdrNow.b);
+  tieToLabel('IS_OTDR_NOW', isOtdrNow.out, { x: pos.x + 9150, y: pos.y - 7010 }); // anchor — outDirectionIsDecNow and outRepeatVariantNow just below both read this
+
+  const isOutBlockStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7030 });
+  wire(parent, isOutiNow.out, isOutBlockStage.a);
+  wire(parent, isOutdNow.out, isOutBlockStage.b);
+  const isOutBlockStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7050 });
+  wire(parent, isOtirNow.out, isOutBlockStage2.a);
+  wire(parent, isOtdrNow.out, isOutBlockStage2.b);
+  const isOutBlockNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7040 });
+  wire(parent, isOutBlockStage.out, isOutBlockNow.a);
+  wire(parent, isOutBlockStage2.out, isOutBlockNow.b);
+  tieToLabel('IS_OUTBLOCK_NOW', isOutBlockNow.out, { x: pos.x + 9250, y: pos.y - 7040 }); // anchor — phase decode just below and HL's own pair-adder direction line (far) read this
+
+  // `outDirectionIsDecNow`: `OUTD`/`OTDR` want `HL--` instead of the
+  // family's own default `++` — the identical shape `IND`/`INDR`'s own
+  // `inDirectionIsDecNow` already establishes.
+  const outDirectionIsDecNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7070 });
+  wire(parent, isOutdNow.out, outDirectionIsDecNow.a);
+  wire(parent, isOtdrNow.out, outDirectionIsDecNow.b);
+  tieToLabel('OUTBLOCK_DEC_DIR_NOW', outDirectionIsDecNow.out, { x: pos.x + 9250, y: pos.y - 7070 }); // anchor — HL's own pair adder direction line (far) reads this
+
+  // `outRepeatVariantNow`: `OTIR`/`OTDR` only — combined with `B`'s own
+  // shared nonzero bit, far below, the identical shape `INIR`/`INDR`'s
+  // own `inRepeatVariantNow` already establishes, just gated by this
+  // family's own `y`/`z` decode instead.
+  const outRepeatVariantNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7090 });
+  wire(parent, isOtirNow.out, outRepeatVariantNow.a);
+  wire(parent, isOtdrNow.out, outRepeatVariantNow.b);
+  tieToLabel('OUTBLOCK_REPEAT_VARIANT_NOW', outRepeatVariantNow.out, { x: pos.x + 9250, y: pos.y - 7090 }); // anchor — the pc mux chain's own final layer (far) reads this
+
+  // Three phases, mirroring `INI`'s own family exactly but in the
+  // opposite direction: `PHASE4` reads `(HL)` into a holding register
+  // (`outBlockTemp`, below — RAM's own `oe` and address mux both widen
+  // for this phase, the same "RAM drives the bus" shape every earlier
+  // RAM-reading feature in this file already uses), `PHASE5` publishes
+  // `C` onto the bus (widening the *same* tri-state bank `INI`'s own
+  // family already built for exactly this purpose — the two phases can
+  // never collide, `isInBlockNow`/`isOutBlockNow` mutually exclusive by
+  // `dec.z`) and `outBlockTemp`'s own held byte onto `ioPortDataOut`
+  // directly (a mux ahead of `OUT (n),A`'s own `AOLD` source, far below —
+  // not through the CPU's main bus at all, since `ioPortDataOut` was
+  // never a bus tap to begin with), strobing `ioWrite`. `PHASE6` commits
+  // `HL+-1`/`B--`/flags.
+  const outBlockReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6910 });
+  wire(parent, isOutBlockNow.out, outBlockReadNow.a);
+  tieToLabel('PHASE4', outBlockReadNow.b, { x: pos.x + 9100, y: pos.y - 6910 });
+  tieToLabel('OUTBLOCK_READ_NOW', outBlockReadNow.out, { x: pos.x + 9300, y: pos.y - 6910 }); // anchor — ramOeFinal, RAM's own address mux, and outBlockTemp's own we (all far) read this
+  const outBlockWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6880 });
+  wire(parent, isOutBlockNow.out, outBlockWriteRaw.a);
+  tieToLabel('PHASE5', outBlockWriteRaw.b, { x: pos.x + 9100, y: pos.y - 6880 });
+  const notOutBlockReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6895 });
+  wire(parent, outBlockReadNow.out, notOutBlockReadNow.in);
+  const outBlockWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6880 });
+  wire(parent, outBlockWriteRaw.out, outBlockWriteNow.a);
+  wire(parent, notOutBlockReadNow.out, outBlockWriteNow.b);
+  tieToLabel('OUTBLOCK_WRITE_NOW', outBlockWriteNow.out, { x: pos.x + 9350, y: pos.y - 6880 }); // anchor — C's own bus-driver bank, ioPortDataOut's own mux, and ioWrite (all far) read this
+  const outBlockCommitRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6850 });
+  wire(parent, isOutBlockNow.out, outBlockCommitRaw.a);
+  tieToLabel('PHASE6', outBlockCommitRaw.b, { x: pos.x + 9100, y: pos.y - 6850 });
+  const notOutBlockWriteNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6865 });
+  wire(parent, outBlockWriteNow.out, notOutBlockWriteNow.in);
+  const outBlockCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6850 });
+  wire(parent, outBlockCommitRaw.out, outBlockCommitNow.a);
+  wire(parent, notOutBlockWriteNow.out, outBlockCommitNow.b);
+  tieToLabel('OUTBLOCK_COMMIT_NOW', outBlockCommitNow.out, { x: pos.x + 9350, y: pos.y - 6850 }); // anchor — B's and HL's own write-back layers, F's own we/per-bit layer (all far) read this
+
+  // A holding register for the byte in flight — `(HL)`'s own value has
+  // to survive from `OUTBLOCK_READ_NOW` (this tick's read) to
+  // `OUTBLOCK_WRITE_NOW` (the *next* tick's publish to the port), the
+  // identical "a value must outlive its own bus's next user" reasoning
+  // every other holding register in this file already relies on. Built
+  // here rather than alongside `ldBlockTemp`/`cpBlockTemp` (both much
+  // further down) specifically so it exists as a plain JS reference by
+  // the time `ioPortDataOut`'s own mux and `N`'s own flag source (both
+  // also far below) need to read it directly, without a forward
+  // reference through a label.
+  const outBlockTemp = buildRegister(parent, library, 8, { x: pos.x + 9450, y: pos.y - 6900 });
+  tieToLabel('OUTBLOCK_READ_NOW', outBlockTemp.we, { x: pos.x + 9350, y: pos.y - 6900 });
+  outBlockTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x + 9400, y: pos.y - 6900 + i * 20 }));
+  tieToLabel('CLK', outBlockTemp.clk, { x: pos.x + 9450, y: pos.y - 6920 });
 
   // ir.we's own PHASE0 anchor above widens to a second term: PHASE2, but
   // only while `prefixReadNow` is genuinely high — the identical "the
@@ -2763,12 +2883,17 @@ export function buildZ80Cpu(
   wire(parent, hlDecYStage.out, hlDecYStage2.a);
   wire(parent, cpDirectionIsDecNow.out, hlDecYStage2.b);
   // `HL`'s own direction line needs a fourth term: `IND`/`INDR`'s own
-  // `ioDirectionIsDecNow` — `INI`/`INIR` get their `+1` for free, the
+  // `inDirectionIsDecNow` — `INI`/`INIR` get their `+1` for free, the
   // identical "default direction needs no widening" shape every earlier
   // family here already established for this same adder.
+  const hlDecYStage3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 8830, y: pos.y - 520 });
+  wire(parent, hlDecYStage2.out, hlDecYStage3.a);
+  wire(parent, inDirectionIsDecNow.out, hlDecYStage3.b);
+  // A fifth and final term: `OUTD`/`OTDR`'s own `outDirectionIsDecNow` —
+  // `OUTI`/`OTIR` get their `+1` for free, the same reasoning once more.
   const hlDecY = buildOr(parent, vcc3, gnd3, { x: pos.x + 8850, y: pos.y - 520 });
-  wire(parent, hlDecYStage2.out, hlDecY.a);
-  wire(parent, ioDirectionIsDecNow.out, hlDecY.b);
+  wire(parent, hlDecYStage3.out, hlDecY.a);
+  wire(parent, outDirectionIsDecNow.out, hlDecY.b);
   buildPairAdder('REGB', 'REGC', 'BCADD', bcDecY.out, { x: pos.x + 8900, y: pos.y - 1300 });
   buildPairAdder('REGD', 'REGE', 'DEADD', deDecY.out, { x: pos.x + 8900, y: pos.y - 900 });
   buildPairAdder('REGH', 'REGL', 'HLADD', hlDecY.out, { x: pos.x + 8900, y: pos.y - 500 });
@@ -4260,7 +4385,14 @@ export function buildZ80Cpu(
   const ramOeFinal2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y + 75 });
   wire(parent, ramOeFinal.out, ramOeFinal2.a);
   tieToLabel('CPBLOCK_READ_NOW', ramOeFinal2.b, { x: pos.x + 9900, y: pos.y + 75 });
-  wire(parent, ramOeFinal2.out, ram.pins.oe!);
+  // OUTI/OUTD/OTIR/OTDR's own read of (HL) (see "x=10, z=3:
+  // OUTI/OUTD/OTIR/OTDR" above) — a twenty-ninth and final term. `INI`'s
+  // own family needs no equivalent term here — it never reads RAM at
+  // all, only writes it.
+  const ramOeFinal3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y + 100 });
+  wire(parent, ramOeFinal2.out, ramOeFinal3.a);
+  tieToLabel('OUTBLOCK_READ_NOW', ramOeFinal3.b, { x: pos.x + 9950, y: pos.y + 100 });
+  wire(parent, ramOeFinal3.out, ram.pins.oe!);
 
   // SP's own +-1 adder: a *second* buildAlu instance (width addrBits, not
   // 8), permanently in ADD mode, b fanned from spWantDec to every bit —
@@ -4411,13 +4543,26 @@ export function buildZ80Cpu(
   // below) is read forward through its own anchor label, the same
   // "built later in the file, read earlier through a label" shape
   // `BLOCK_PV_NOW` already establishes for the other two repeat gates.
-  const ioBlockRepeatStage = buildAnd(parent, vcc, gnd, { x: pos.x - 750, y: pos.y - 5250 });
-  tieToLabel('IOBLOCK_REPEAT_VARIANT_NOW', ioBlockRepeatStage.a, { x: pos.x - 850, y: pos.y - 5250 });
-  tieToLabel('IOB_NONZERO_NOW', ioBlockRepeatStage.b, { x: pos.x - 850, y: pos.y - 5230 });
-  const ioBlockRepeatNow = buildAnd(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5250 });
-  wire(parent, ioBlockRepeatStage.out, ioBlockRepeatNow.a);
-  tieToLabel('INBLOCK_COMMIT_NOW', ioBlockRepeatNow.b, { x: pos.x - 800, y: pos.y - 5270 });
-  tieToLabel('IOBLOCK_REPEAT_NOW', ioBlockRepeatNow.out, { x: pos.x - 650, y: pos.y - 5250 }); // anchor — pc's own mux chain (far) reads this
+  const inBlockRepeatStage = buildAnd(parent, vcc, gnd, { x: pos.x - 750, y: pos.y - 5250 });
+  tieToLabel('INBLOCK_REPEAT_VARIANT_NOW', inBlockRepeatStage.a, { x: pos.x - 850, y: pos.y - 5250 });
+  tieToLabel('IOB_NONZERO_NOW', inBlockRepeatStage.b, { x: pos.x - 850, y: pos.y - 5230 });
+  const inBlockRepeatNow = buildAnd(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5250 });
+  wire(parent, inBlockRepeatStage.out, inBlockRepeatNow.a);
+  tieToLabel('INBLOCK_COMMIT_NOW', inBlockRepeatNow.b, { x: pos.x - 800, y: pos.y - 5270 });
+  tieToLabel('INBLOCK_REPEAT_NOW', inBlockRepeatNow.out, { x: pos.x - 650, y: pos.y - 5250 }); // anchor — pc's own mux chain (far) reads this
+
+  // `OTIR`/`OTDR`'s own repeat (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR"
+  // above): the identical two-term shape `INIR`/`INDR`'s own gate just
+  // above uses, reading the same shared `IOB_NONZERO_NOW` (decrementing
+  // `B` is the identical operation regardless of transfer direction),
+  // gated by this family's own `OUTBLOCK_COMMIT_NOW` instead.
+  const outBlockRepeatStage = buildAnd(parent, vcc, gnd, { x: pos.x - 750, y: pos.y - 5300 });
+  tieToLabel('OUTBLOCK_REPEAT_VARIANT_NOW', outBlockRepeatStage.a, { x: pos.x - 850, y: pos.y - 5300 });
+  tieToLabel('IOB_NONZERO_NOW', outBlockRepeatStage.b, { x: pos.x - 850, y: pos.y - 5280 });
+  const outBlockRepeatNow = buildAnd(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5300 });
+  wire(parent, outBlockRepeatStage.out, outBlockRepeatNow.a);
+  tieToLabel('OUTBLOCK_COMMIT_NOW', outBlockRepeatNow.b, { x: pos.x - 800, y: pos.y - 5320 });
+  tieToLabel('OUTBLOCK_REPEAT_NOW', outBlockRepeatNow.out, { x: pos.x - 650, y: pos.y - 5300 }); // anchor — pc's own mux chain (far) reads this
 
   ramAddrPins(ram).forEach((p, i) => {
     const mux = makeChipInstance(parent, muxDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
@@ -4521,7 +4666,15 @@ export function buildZ80Cpu(
     wire(parent, cpBlockReadMux.pins[muxDef.ports[3]!]!, inBlockWriteMux.pins[muxDef.ports[1]!]!);
     wire(parent, rL.q[i]!, inBlockWriteMux.pins[muxDef.ports[2]!]!);
 
-    wire(parent, inBlockWriteMux.pins[muxDef.ports[3]!]!, p);
+    // OUTI/OUTD/OTIR/OTDR (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above) —
+    // one more override layer: `HL` during its own read-from-RAM phase,
+    // the mirror image of `INI`'s own write-phase layer just above.
+    const outBlockReadMux = makeChipInstance(parent, muxDef, { x: pos.x + 3300, y: pos.y - 300 - i * 100 });
+    tieToLabel('OUTBLOCK_READ_NOW', outBlockReadMux.pins[muxDef.ports[0]!]!, { x: pos.x + 3200, y: pos.y - 320 - i * 100 });
+    wire(parent, inBlockWriteMux.pins[muxDef.ports[3]!]!, outBlockReadMux.pins[muxDef.ports[1]!]!);
+    wire(parent, rL.q[i]!, outBlockReadMux.pins[muxDef.ports[2]!]!);
+
+    wire(parent, outBlockReadMux.pins[muxDef.ports[3]!]!, p);
   });
 
   // PC holds during FETCH/EXEC1/EXEC2 by default, advances only during
@@ -4849,16 +5002,26 @@ export function buildZ80Cpu(
     wire(parent, pcMinus2Adder.out[i]!, cpBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
 
     // INIR/INDR's own repeat (see "x=10, z=2: INI/IND/INIR/INDR" above):
-    // a twelfth and final layer, the identical shape LDIR/LDDR's and
-    // CPIR/CPDR's own layers just above establish — the same live
-    // `pcMinus2Adder` output, this family's own repeat condition
-    // (`IOBLOCK_REPEAT_NOW`) gating it instead.
-    const ioBlockRepeatMux = makeChipInstance(parent, muxDef, { x: pos.x + 600, y: pos.y - 300 - i * 100 });
-    tieToLabel('IOBLOCK_REPEAT_NOW', ioBlockRepeatMux.pins[muxDef.ports[0]!]!, { x: pos.x + 550, y: pos.y - 320 - i * 100 });
-    wire(parent, cpBlockRepeatMux.pins[muxDef.ports[3]!]!, ioBlockRepeatMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
-    wire(parent, pcMinus2Adder.out[i]!, ioBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
+    // a twelfth layer, the identical shape LDIR/LDDR's and CPIR/CPDR's
+    // own layers just above establish — the same live `pcMinus2Adder`
+    // output, this family's own repeat condition (`INBLOCK_REPEAT_NOW`)
+    // gating it instead.
+    const inBlockRepeatMux = makeChipInstance(parent, muxDef, { x: pos.x + 600, y: pos.y - 300 - i * 100 });
+    tieToLabel('INBLOCK_REPEAT_NOW', inBlockRepeatMux.pins[muxDef.ports[0]!]!, { x: pos.x + 550, y: pos.y - 320 - i * 100 });
+    wire(parent, cpBlockRepeatMux.pins[muxDef.ports[3]!]!, inBlockRepeatMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
+    wire(parent, pcMinus2Adder.out[i]!, inBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
 
-    wire(parent, ioBlockRepeatMux.pins[muxDef.ports[3]!]!, pc.d[i]!);
+    // OTIR/OTDR's own repeat (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR"
+    // above): a thirteenth and final layer, the identical shape every
+    // earlier repeat gate in this chain establishes — the same live
+    // `pcMinus2Adder` output, this family's own repeat condition
+    // (`OUTBLOCK_REPEAT_NOW`) gating it instead.
+    const outBlockRepeatMux = makeChipInstance(parent, muxDef, { x: pos.x + 650, y: pos.y - 300 - i * 100 });
+    tieToLabel('OUTBLOCK_REPEAT_NOW', outBlockRepeatMux.pins[muxDef.ports[0]!]!, { x: pos.x + 600, y: pos.y - 320 - i * 100 });
+    wire(parent, inBlockRepeatMux.pins[muxDef.ports[3]!]!, outBlockRepeatMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
+    wire(parent, pcMinus2Adder.out[i]!, outBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
+
+    wire(parent, outBlockRepeatMux.pins[muxDef.ports[3]!]!, pc.d[i]!);
   });
 
   // Operand bus: shares ir.d/ram.data with FETCH (mutually exclusive by
@@ -5674,10 +5837,22 @@ export function buildZ80Cpu(
     const label = makeLabel(parent, `BUS${i}`, { x: pos.x + 11850, y: pos.y - 2200 + i * 20 });
     ioPortAddr.push(label.pins.net);
   }
+  // `ioPortDataOut` was `AOLD{i}` alone before OUTI/OUTD/OTIR/OTDR
+  // existed (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above) — a mux layer
+  // ahead of that source now picks `outBlockTemp`'s own held byte
+  // instead whenever `OUTBLOCK_WRITE_NOW` fires, the same "mux ahead of
+  // the existing source, don't touch it otherwise" shape every other
+  // competing writer in this file already uses. `OUT (n),A` itself never
+  // asserts `OUTBLOCK_WRITE_NOW` (mutually exclusive by `dec.x`), so its
+  // own `AOLD{i}` behavior is untouched.
   const ioPortDataOut: Pin[] = [];
   for (let i = 0; i < 8; i++) {
     const label = makeLabel(parent, `AOLD${i}`, { x: pos.x + 11850, y: pos.y - 2000 + i * 20 });
-    ioPortDataOut.push(label.pins.net);
+    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 11900, y: pos.y - 2000 + i * 20 });
+    tieToLabel('OUTBLOCK_WRITE_NOW', mux.pins[muxDef.ports[0]!]!, { x: pos.x + 11800, y: pos.y - 2020 + i * 20 });
+    wire(parent, label.pins.net, mux.pins[muxDef.ports[1]!]!); // in0: OUT (n),A's own A
+    wire(parent, outBlockTemp.q[i]!, mux.pins[muxDef.ports[2]!]!); // in1: OUTI's own held byte from (HL)
+    ioPortDataOut.push(mux.pins[muxDef.ports[3]!]!);
   }
   // `ioPortDataIn` itself is declared much earlier (right before `A`'s own
   // per-bit write loop, far above) since that loop pushes this opcode's
@@ -6360,6 +6535,21 @@ export function buildZ80Cpu(
       else tieToLabel('IOB_Z_NOW', inBlockFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8280, y: pos.y + 2245 + i * 100 }); // in1: Z — B reached 0
       cLayerIn = inBlockFMux.pins[muxDef.ports[3]!]!;
     }
+    // OUTI/OUTD/OTIR/OTDR (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above) is
+    // an eleventh layer, the mirror image of `INI`'s own just above: `Z`
+    // is the identical shared `IOB_Z_NOW` (decrementing `B` is one
+    // operation regardless of transfer direction); `N` differs — the
+    // transferred byte here is `outBlockTemp`'s own held value (read
+    // from `(HL)`, about to go *out*), not `ioPortDataIn` (which this
+    // family never even reads).
+    if (i === 1 || i === 6) {
+      const outBlockFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8385, y: pos.y + 2230 + i * 100 });
+      tieToLabel('OUTBLOCK_COMMIT_NOW', outBlockFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8285, y: pos.y + 2230 + i * 100 });
+      wire(parent, cLayerIn, outBlockFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
+      if (i === 1) wire(parent, outBlockTemp.q[7]!, outBlockFMux.pins[muxDef.ports[2]!]!); // in1: N — the transferred byte's own bit 7
+      else tieToLabel('IOB_Z_NOW', outBlockFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8285, y: pos.y + 2250 + i * 100 }); // in1: Z — B reached 0
+      cLayerIn = outBlockFMux.pins[muxDef.ports[3]!]!;
+    }
     // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) swaps the
     // *whole* byte, not just one or two bits — this layer runs for every
     // `i` that reaches this point (all eight, now that H and the two
@@ -6419,7 +6609,12 @@ export function buildZ80Cpu(
   const fWeFinal3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9070, y: pos.y + 2280 });
   wire(parent, fWeFinal2.out, fWeFinal3.a);
   tieToLabel('INBLOCK_COMMIT_NOW', fWeFinal3.b, { x: pos.x + 8970, y: pos.y + 2280 });
-  wire(parent, fWeFinal3.out, f.we);
+  // OUTI/OUTD/OTIR/OTDR (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above)
+  // needs `F`'s own `we` too — a tenth and final OR term.
+  const fWeFinal4 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9170, y: pos.y + 2290 });
+  wire(parent, fWeFinal3.out, fWeFinal4.a);
+  tieToLabel('OUTBLOCK_COMMIT_NOW', fWeFinal4.b, { x: pos.x + 9070, y: pos.y + 2290 });
+  wire(parent, fWeFinal4.out, f.we);
 
   // SP: same external-seed contract as B..L above — `sp.d`/`sp.we` here
   // are the caller's own sink pins, muxed ahead of the raw register the
@@ -6610,16 +6805,32 @@ export function buildZ80Cpu(
   const rHExt11 = wrapWithPairCommit(rHExt10, 'INBLOCK_COMMIT_NOW', 'HLADDHI', { x: pos.x + 13700, y: pos.y + 700 });
   const rLExt11 = wrapWithPairCommit(rLExt10, 'INBLOCK_COMMIT_NOW', 'HLADDLO', { x: pos.x + 13700, y: pos.y + 1000 });
 
+  // OUTI/OUTD/OTIR/OTDR's own register commits (see "x=10, z=3:
+  // OUTI/OUTD/OTIR/OTDR" above) — one more `wrapWithPairCommit` layer for
+  // `B` (the same shared `IOBRESULT` labels `INI`'s own family already
+  // publishes — decrementing `B` is identical either direction) and for
+  // `HL` (its own pair adder already widened for this family's own
+  // direction, above).
+  const rBExt9 = wrapWithPairCommit(rBExt8, 'OUTBLOCK_COMMIT_NOW', 'IOBRESULT', { x: pos.x + 13100, y: pos.y - 800 });
+  const rHExt12 = wrapWithPairCommit(rHExt11, 'OUTBLOCK_COMMIT_NOW', 'HLADDHI', { x: pos.x + 13800, y: pos.y + 700 });
+  const rLExt12 = wrapWithPairCommit(rLExt11, 'OUTBLOCK_COMMIT_NOW', 'HLADDLO', { x: pos.x + 13800, y: pos.y + 1000 });
+
   // `C`'s own bus-driver bank: real `INI`'s own port address, published
   // onto the bus (this composite's own `ioPortAddr` is a live tap of it,
-  // see the I/O port's own doc comment below) only while
-  // `INBLOCK_READ_NOW` fires — the identical tri-state-buffer-bank shape
-  // every other bus source in this file already uses, reading `REGC{i}`'s
-  // own already-anchored labels.
+  // see the I/O port's own doc comment below). Two enable terms, not
+  // one: `INBLOCK_READ_NOW` (`INI`'s own family, publishing the address
+  // for its own read) and `OUTBLOCK_WRITE_NOW` (`OUTI`'s own family,
+  // publishing the address one phase later, for its own write) — the
+  // identical port-address role, just reached on a different phase by
+  // each family, and mutually exclusive by `dec.z` the same way every
+  // other shared resource in this file already relies on.
+  const blockCToBusNow = buildOr(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y - 850 });
+  tieToLabel('INBLOCK_READ_NOW', blockCToBusNow.a, { x: pos.x + 12950, y: pos.y - 850 });
+  tieToLabel('OUTBLOCK_WRITE_NOW', blockCToBusNow.b, { x: pos.x + 12950, y: pos.y - 830 });
   for (let i = 0; i < 8; i++) {
     const buf = makeChipInstance(parent, bufDef, { x: pos.x + 13100, y: pos.y - 800 + i * 20 });
     tieToLabel(`REGC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 13000, y: pos.y - 800 + i * 20 });
-    tieToLabel('INBLOCK_READ_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 13000, y: pos.y - 780 + i * 20 });
+    wire(parent, blockCToBusNow.out, buf.pins[bufDef.ports[1]!]!);
     tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 13200, y: pos.y - 800 + i * 20 });
   }
   // `ioPortDataIn`'s own bus-driver bank: the external device's own raw
@@ -6664,6 +6875,13 @@ export function buildZ80Cpu(
   const ioReadFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y - 2200 });
   wire(parent, inNow.out, ioReadFinal.a);
   tieToLabel('INBLOCK_READ_NOW', ioReadFinal.b, { x: pos.x + 13400, y: pos.y - 2200 });
+  // `OUT (n),A`'s own `ioWrite` widens to cover `OUTI`'s own family's
+  // write strobe too (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above) — the
+  // identical reasoning `ioRead`'s own widening just above already
+  // establishes.
+  const ioWriteFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y - 2100 });
+  wire(parent, outNow.out, ioWriteFinal.a);
+  tieToLabel('OUTBLOCK_WRITE_NOW', ioWriteFinal.b, { x: pos.x + 13400, y: pos.y - 2100 });
 
   return {
     clk: pc.clk,
@@ -6675,12 +6893,12 @@ export function buildZ80Cpu(
     pc: pc.q,
     ir: ir.q,
     a: a.q,
-    rB: rBExt8,
+    rB: rBExt9,
     rC: rCExt6,
     rD: rDExt6,
     rE: rEExt6,
-    rH: rHExt11,
-    rL: rLExt11,
+    rH: rHExt12,
+    rL: rLExt12,
     f: f.q,
     aP: aPExt,
     fP: fPExt,
@@ -6697,6 +6915,6 @@ export function buildZ80Cpu(
     ioPortDataOut,
     ioPortDataIn,
     ioRead: ioReadFinal.out,
-    ioWrite: outNow.out,
+    ioWrite: ioWriteFinal.out,
   };
 }
