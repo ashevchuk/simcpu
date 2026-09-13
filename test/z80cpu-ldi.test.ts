@@ -8,63 +8,74 @@ import { initialState, step } from '../src/sim/solver.js';
 import type { Level, NetMap, Pin, SimState } from '../src/sim/types.js';
 import { levelAt } from './levelAt.js';
 
-describe('buildZ80Cpu — x=11, z=3, y=4: EX (SP),HL', () => {
+describe('buildZ80Cpu — x=10, y=4, z=0: LDI (real 0xED 0xA0)', () => {
   /**
-   * The one member of this file's "swap on one edge" family that swaps a
-   * register pair with *RAM* instead of another register — a real 4-phase
-   * read-modify-write, not a register-to-register mux. `RAM[0x60]`/
-   * `RAM[0x61]` (well clear of the program bytes themselves) are seeded to
-   * `0x11`/`0x22`, `HL` to `0xBBAA` — four genuinely distinct bytes, so a
-   * mixed-up byte order (low/high swapped) or a half-finished swap (only
-   * `HL` updates, or only RAM does) shows up as a wrong value in a specific
-   * place, not a coincidental match. `RAM`'s own bytes are read directly
-   * (`cpu.ram.bytes`), the same technique the `INC (HL)`/`DEC (HL)` test
-   * uses, to prove the write itself landed independently of whether the
-   * CPU's own read-back is also correct. A second `EX (SP),HL` right after
-   * is the real proof, same as every other swap in this file: it must land
-   * every one of `H`/`L`/`RAM[0x60]`/`RAM[0x61]` back on its starting
-   * value, not leave the second swap a no-op.
+   * Real Z80's simplest ED-table instruction, and this project's first —
+   * see "x=10, y=4, z=0: LDI" and "The CB/ED/DD/FD prefix mechanism" in
+   * ARCHITECTURE.md for the full derivation. `(DE)<-(HL)`, then
+   * `HL++`/`DE++`/`BC--`, `N`/`H` reset, `P/V<-(BC-1 != 0)`, `S`/`Z`/`C`
+   * left alone. Two back-to-back `LDI`s, not one — the second is the only
+   * way to exercise `BC` actually reaching zero (`P/V` correctly dropping
+   * to 0), and proves the holding register genuinely lets go of the first
+   * transferred byte rather than smearing it into the second.
    *
-   * 0: 0x21,0xAA,0xBB   LD HL,0xBBAA   HL<-0xBBAA (H=0xBB, L=0xAA)
-   * 3: 0x31,0x60,0x00   LD SP,0x0060   SP<-0x60
-   * 6: 0xE3             EX (SP),HL     L<-old RAM[0x60] (0x11), H<-old RAM[0x61] (0x22); RAM[0x60]<-old L (0xAA), RAM[0x61]<-old H (0xBB)
-   * 7: 0xE3             EX (SP),HL     back to the start
+   * `RAM[0x50]`/`RAM[0x51]` (well clear of the program bytes themselves,
+   * the same "far enough away" convention `z80cpu-ex-sphl.test.ts` already
+   * establishes) are seeded to two distinct bytes so a mixed-up source or
+   * a stale holding-register value shows up as a wrong byte in a specific
+   * place, not a coincidental match.
+   *
+   * 0: 0x01,0x02,0x00  LD BC,0x0002   BC<-2
+   * 3: 0x11,0x60,0x00  LD DE,0x0060   DE<-0x60
+   * 6: 0x21,0x50,0x00  LD HL,0x0050   HL<-0x50
+   * 9: 0xED,0xA0       LDI            RAM[0x60]<-RAM[0x50] (0x77); HL<-0x51, DE<-0x61, BC<-1, P/V<-1 (BC-1=1!=0)
+   * 11: 0xED,0xA0      LDI            RAM[0x61]<-RAM[0x51] (0x99); HL<-0x52, DE<-0x62, BC<-0, P/V<-0 (BC-1=0)
    */
   const ADDR_BITS = 7;
   const PROGRAM = (() => {
     const bytes = new Uint8Array(128);
-    bytes.set([0x21, 0xaa, 0xbb], 0);
-    bytes.set([0x31, 0x60, 0x00], 3);
-    bytes.set([0xe3], 6);
-    bytes.set([0xe3], 7);
-    bytes.set([0x11], 0x60);
-    bytes.set([0x22], 0x61);
+    bytes.set([0x01, 0x02, 0x00], 0);
+    bytes.set([0x11, 0x60, 0x00], 3);
+    bytes.set([0x21, 0x50, 0x00], 6);
+    bytes.set([0xed, 0xa0], 9);
+    bytes.set([0xed, 0xa0], 11);
+    bytes.set([0x77], 0x50);
+    bytes.set([0x99], 0x51);
     return bytes;
   })();
 
   interface Snapshot {
+    b: number;
+    c: number;
+    d: number;
+    e: number;
     h: number;
     l: number;
-    sp: number;
+    f: number;
     pc: number;
     ram60: number;
     ram61: number;
   }
+  // F bits, LSB first: C,N,P/V,X,H,Y,Z,S — every seed register is 0, so C
+  // stays 0 the whole way through (LDI never touches it), N/H are always
+  // 0 (LDI resets both every time, and nothing before this ever sets
+  // them), and P/V is the one bit that actually changes between the two
+  // instructions.
+  const F_PV_SET = 0b00000100;
+  const F_PV_CLEAR = 0b00000000;
   const EXPECTED: Snapshot[] = [
-    { h: 0xbb, l: 0xaa, sp: 0, pc: 3, ram60: 0x11, ram61: 0x22 }, // LD HL,0xBBAA
-    { h: 0xbb, l: 0xaa, sp: 0x60, pc: 6, ram60: 0x11, ram61: 0x22 }, // LD SP,0x0060
-    { h: 0x22, l: 0x11, sp: 0x60, pc: 7, ram60: 0xaa, ram61: 0xbb }, // EX (SP),HL
-    { h: 0xbb, l: 0xaa, sp: 0x60, pc: 8, ram60: 0x11, ram61: 0x22 }, // EX (SP),HL again — back to the start
+    { b: 0, c: 2, d: 0, e: 0, h: 0, l: 0, f: 0, pc: 3, ram60: 0x00, ram61: 0x00 }, // LD BC,0x0002
+    { b: 0, c: 2, d: 0, e: 0x60, h: 0, l: 0, f: 0, pc: 6, ram60: 0x00, ram61: 0x00 }, // LD DE,0x0060
+    { b: 0, c: 2, d: 0, e: 0x60, h: 0, l: 0x50, f: 0, pc: 9, ram60: 0x00, ram61: 0x00 }, // LD HL,0x0050
+    { b: 0, c: 1, d: 0, e: 0x61, h: 0, l: 0x51, f: F_PV_SET, pc: 11, ram60: 0x77, ram61: 0x00 }, // LDI #1
+    { b: 0, c: 0, d: 0, e: 0x62, h: 0, l: 0x52, f: F_PV_CLEAR, pc: 13, ram60: 0x77, ram61: 0x99 }, // LDI #2
   ];
 
   function fromBits(bits: Level[]): number {
     return bits.reduce<number>((acc, b, i) => acc + (b === 1 ? 1 << i : 0), 0);
   }
-  function toBits(n: number, width: number): (0 | 1)[] {
-    return Array.from({ length: width }, (_, i) => ((n >> i) & 1) as 0 | 1);
-  }
 
-  it('swaps HL with the word at [SP] through real RAM, and reverses cleanly on a second EX (SP),HL', () => {
+  it('copies (HL) to (DE), advances both pointers, decrements BC, and drops P/V to 0 exactly when BC reaches 0', () => {
     const library = new ChipLibrary();
     const parent = new Circuit();
     const cpu = buildZ80Cpu(parent, library, ADDR_BITS, PROGRAM);
@@ -100,7 +111,7 @@ describe('buildZ80Cpu — x=11, z=3, y=4: EX (SP),HL', () => {
     const seedReg = (reg: (typeof cpu)['rB'], value: number, width = 8) => {
       const we = makeInput(parent, 1);
       wire(parent, we.pins.out, reg.we);
-      const d = toBits(value, width).map((bit) => makeInput(parent, bit));
+      const d = Array.from({ length: width }, (_, i) => ((value >> i) & 1) as 0 | 1).map((bit) => makeInput(parent, bit));
       d.forEach((input, i) => wire(parent, input.pins.out, reg.d[i]!));
       seedIns.push({ we, d });
     };
@@ -135,9 +146,13 @@ describe('buildZ80Cpu — x=11, z=3, y=4: EX (SP),HL', () => {
     };
     const readReg = (pins: Pin[]) => fromBits(pins.map((p) => levelAt(state, netMap, p.id)));
     const snapshot = (): Snapshot => ({
+      b: readReg(cpu.rB.q),
+      c: readReg(cpu.rC.q),
+      d: readReg(cpu.rD.q),
+      e: readReg(cpu.rE.q),
       h: readReg(cpu.rH.q),
       l: readReg(cpu.rL.q),
-      sp: readReg(cpu.sp.q),
+      f: readReg(cpu.f),
       pc: readReg(cpu.pc),
       ram60: cpu.ram.bytes[0x60]!,
       ram61: cpu.ram.bytes[0x61]!,
@@ -155,22 +170,10 @@ describe('buildZ80Cpu — x=11, z=3, y=4: EX (SP),HL', () => {
     pulse(dataClk); // real first fetch: IR <- PROGRAM[0]
 
     const runInstruction = () => {
-      pulse(phaseClk); // -> INCREMENT
-      pulse(dataClk);
-      pulse(phaseClk); // -> EXEC1 (LD HL,nn/LD SP,nn read their own low byte here; EX (SP),HL reads [SP] here)
-      pulse(dataClk);
-      pulse(phaseClk); // -> EXEC2 (EX (SP),HL reads [SP+1] here)
-      pulse(dataClk);
-      pulse(phaseClk); // -> EXEC3 (EX (SP),HL writes [SP] here)
-      pulse(dataClk);
-      pulse(phaseClk); // -> EXEC4 (EX (SP),HL writes [SP+1] here)
-      pulse(dataClk);
-      pulse(phaseClk); // -> EXEC5
-      pulse(dataClk);
-      pulse(phaseClk); // -> EXEC6
-      pulse(dataClk);
-      pulse(phaseClk); // -> FETCH (next opcode)
-      pulse(dataClk);
+      for (let i = 0; i < 8; i++) {
+        pulse(phaseClk);
+        pulse(dataClk);
+      }
     };
 
     for (const expected of EXPECTED) {

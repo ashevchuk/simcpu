@@ -2805,7 +2805,7 @@ UI-only change, confirmed by every pre-existing `buildZ80Cpu` test still
 passing unchanged, plus the new `Renderer.test.ts` (13 tests, `17ms`)
 covering the culling geometry itself.
 
-### The CB/ED/DD/FD prefix mechanism: detect, recapture, exclude — no instructions yet
+### The CB/ED/DD/FD prefix mechanism: detect, recapture, exclude
 
 Every opcode this project decodes and executes, `x=00` through `x=11`,
 has been a single, unprefixed byte. Real Z80 has four more opcode tables
@@ -2903,16 +2903,13 @@ op` four-byte sequences, and a prefix immediately following another,
 which real hardware treats as a restart) — this project's one-shot
 "prefix, then real opcode" shape doesn't extend to a *second* prefix byte
 appearing where the real opcode was expected. `isCbActive`/`isDdActive`/
-`isEdActive`/`isFdActive` (`activePrefix.q`'s own four bits) are real and
-correctly latched but deliberately not `tieToLabel`ed to anything — no
-CB/ED/DD/FD instruction reads them yet in this pass, and publishing a
-label with no real consumer would be exactly the "anchor without a
-consumer" island this file's own labeling discipline exists to avoid.
-The next pass that wires up a real instruction (`LDI` — real Z80's
-simplest, most self-contained ED-table instruction, a genuine two-phase
-RAM-to-RAM transfer needing its own holding register, much like
-`EX (SP),HL`'s own two-phase dance — is the natural first target) adds
-its own `tieToLabel` at the point it actually needs one.
+`isFdActive` (three of `activePrefix.q`'s own four bits) are real and
+correctly latched but still deliberately not `tieToLabel`ed to anything —
+no CB/DD/FD instruction reads them yet, and publishing a label with no
+real consumer would be exactly the "anchor without a consumer" island
+this file's own labeling discipline exists to avoid. `isEdActive` is the
+fourth — the first of the four to get a real consumer, `LDI`, immediately
+below.
 
 Verified against the two existing test files most likely to catch a
 retrofit mistake in the four base group gates (`blocks.test.ts`,
@@ -2932,7 +2929,83 @@ a dedicated branch — a real rollback point for a change this invasive to
 code that had never needed one before, this project having had no git
 history at all until this pass.
 
-### A real solver bug this retrofit exposed — and the one test it couldn't fix
+### x=10, y=4, z=0: LDI
+
+Real Z80's own simplest ED-table instruction, and this project's first —
+the natural first target the prefix mechanism's own doc comment above
+already named. `(DE)<-(HL)`, then `HL++`/`DE++`/`BC--`, `N`/`H` reset,
+`P/V<-(BC-1 != 0)`, `S`/`Z`/`C` left alone (the two undocumented `X`/`Y`
+bits *do* change on real hardware too, from `A` plus the transferred
+byte — deliberately not modeled here, the same category of documented
+simplification `INC r`/`DEC r`'s own unmodeled `H` used to be, before
+"Closing the half-carry gap" made that one real).
+
+**The collision the prefix mechanism's own doc comment predicted, now
+actually hit.** Real `0xED 0xA0` decomposes to `x=10,y=4,z=0` — bit for
+bit the same fields as the plain unprefixed table's own `AND B`. `isLdiNow`
+(`AND(isEdActive, dec.y[4], dec.z[0])`) is gated on `isEdActive` for
+exactly this reason — `AND B` itself already reads `notPrefixActive`
+through `isAluGroup` (see the prefix mechanism's own doc comment above),
+so the two conditions can never both be `1` at once, the identical
+one-hot-`x`-decode guarantee this file has relied on since `INC rr`/`DEC
+rr`'s own three-source write-back.
+
+**Three phases, not two.** `PHASE2`/`PHASE3` are already spent recapturing
+`ir` and giving `pc` its own extra advance (see the prefix mechanism's own
+doc comment above) — every prefixed instruction's real work starts one
+phase later than an unprefixed instruction's equivalent would. `LDI`'s own
+work: `PHASE4` reads `(HL)` into `ldiTemp` (an 8-bit holding register, the
+identical "a value must outlive its own bus's next user" reasoning
+`spLoTemp`/`spHiTemp` and `hlMemTemp` above already establish), `PHASE5`
+writes it to `(DE)`, `PHASE6` commits `HL++`/`DE++`/`BC--` and the three F
+bits. The register commit deliberately lands on its *own*, third phase
+rather than sharing `PHASE5` with the write: `HL`/`DE` still hold their
+*old* values through both RAM phases this way (their own pair adders
+compute `+1` fresh from those old values the whole time, simply because
+nothing has told them to commit yet), so the address mux never needs an
+`EX (SP),HL`-style "old value" holding register of its own for either
+one — the commit genuinely hasn't happened yet when either address is
+read, not a value frozen on purpose to look that way.
+
+**`BC`'s pair adder gets a second way to reach `-1`.** `DE`/`HL` need no
+change at all: each pair adder (see "x=00, z=3: INC rr/DEC rr" above)
+already computes `+1` whenever its own `DEC`-line (`dec.y[3]`/`dec.y[5]`)
+reads `0` — which it always does while `ir` holds `LDI`'s own recaptured
+`y=4` — so `DEADD`/`HLADD` are already computing the exact values this
+instruction wants, for free, before it does anything at all. `BC` is the
+one exception: `LDI` always wants `-1`, but `BCADD`'s own direction line
+was `dec.y[1]` alone (real `DEC BC`'s own `y`-value, which `LDI`'s `y=4`
+never matches) — widened to `OR(dec.y[1], isLdiNow)`, an addition, not a
+replacement, since the two conditions are mutually exclusive by
+construction and never need to be told apart, only recognized together.
+
+**`P/V` is a 16-way `OR` tree over `BCADD`'s own bits.** `BC-1 != 0`
+means "at least one of its 16 bits is 1", read directly off the same
+`BCADDLO`/`BCADDHI` labels `BC`'s own write-back layer reads — 4 levels
+of 2-input `OR` (this library has no wide-fan-in primitive), not a
+dedicated zero-detector built from scratch.
+
+**The write-back and F layers are one more of each, appended to the
+longest existing chain.** `wrapWithPairCommit(rBExt5, 'LDI_COMMIT_NOW',
+'BCADDHI', ...)` and its five siblings (`C`/`D`/`E`/`H`/`L`) sit on top of
+`EXX`/`EX DE,HL`/`EX (SP),HL`'s own final layers — the identical "layer
+another mux-ahead-of-`d` stage, don't touch the ones below" shape every
+earlier feature in this file already established, safe here for the same
+reason it always is: `dec.x` one-hot guarantees `LDI` and any of those
+three swap instructions never fire in the same cycle. `F`'s own per-bit
+chain gets an eighth layer, three bits only (`N`=1, `P/V`=2, `H`=4 — `gnd4`
+directly for `N`/`H`, since there's no "fresh value" to publish for a
+constant `0`, just `ldiPvBit` for `P/V`), the same "skip the bits this op
+doesn't touch" shape DAA's own bit 1 and the six-op rotate/flag group's
+own bits 2/6/7 already use.
+
+Verified with a dedicated test (`z80cpu-ldi.test.ts`) exercising two
+back-to-back `LDI`s specifically so `BC` genuinely reaches `0` on the
+second one — `P/V` correctly dropping to `0` exactly then, not just
+staying `1` from the first — before the full suite: `40/40` files,
+`179/179` tests, still green.
+
+### A real solver bug this retrofit exposed — and the test that un-broke itself
 
 Adding the prefix mechanism above didn't just add inert wiring — it
 resized every other component's set of net IDs and pins ever so slightly
@@ -3004,17 +3077,28 @@ else relying on that exact idiom) depend on it staying that way.
 `forced.size === 0` (nothing forces this group — true capacitive hold,
 no electrical conflict exists at all) keeps the majority vote and the
 oscillation guard, since neither of the regressions above ever involved
-a genuinely unforced group. `EX (SP),HL`'s second execution is still
-broken by this: its real root cause is a genuine, if transient, forced-
-driver conflict on the RAM address bus while it's still settling (not a
-floating-group ambiguity), and no vote-based fix to the *unforced* branch
-alone was ever enough to rescue it (confirmed by testing that exact
-combination in isolation before deciding to leave it be). Its test is
-marked `it.fails` with a comment pointing back here — a real, open,
-circuit-level bug (almost certainly in how the address computation or
-`ram.oe`'s own timing settles for a repeated `x=11,z=3` opcode with
-different register contents), not a solver defect, and not one this pass
-chases further.
+a genuinely unforced group.
+
+**A postscript, found the same day**: `EX (SP),HL`'s second execution —
+diagnosed above as a genuine, transient forced-driver conflict on the RAM
+address bus, a real circuit-level race no vote-based solver fix alone
+could rescue — was marked `it.fails` on exactly that reasoning. Adding
+`LDI` right after (see "x=10, y=4, z=0: LDI" above) shifted this same
+file's own component/net ordering again, the identical mechanism that
+made this race reproducible in the first place — and it stopped
+reproducing. `it.fails` did its actual job here: the next full-suite run
+failed *it*, with `Error: Expect test to fail`, exactly the signal
+built in for "the underlying bug is gone, flip this back." Confirmed
+stable across two independent isolated re-runs (not a one-off settle),
+so the test is a plain `it` again. This isn't a fix in any real sense —
+nothing about the actual race was diagnosed further or addressed on
+purpose, the same ordering-sensitivity that broke it unpredictably
+happened to un-break it just as unpredictably — which is exactly why the
+diagnosis above (a genuine, timing-sensitive circuit race, not a
+solver defect) is left in place rather than declared solved: the same
+race is presumably still there, just not currently landing on a net this
+test happens to read, and another unrelated future change could just as
+easily flip it back.
 
 ### Net labels, not wire spaghetti
 
@@ -3660,18 +3744,23 @@ section's own success story.
   now has its *mechanism* built (detect a prefix byte, recapture `ir`
   with the real opcode that follows, advance `pc` an extra time, and
   correctly exclude the existing unprefixed tables from misreading that
-  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above), but
-  zero actual CB/ED/DD/FD instructions execute anything on top of it yet.
-  Every opcode this slice actually *runs* is still a single, unprefixed
-  byte; the mechanism exists, the four new opcode tables it unlocks don't
-  yet.
-- `EX (SP),HL`'s *second* execution (same opcode, different register/RAM
-  contents than the first) is a known, open bug — see "A real solver bug
-  this retrofit exposed — and the one test it couldn't fix" above for the
-  full writeup. Its own test (`z80cpu-ex-sphl.test.ts`) is marked
-  `it.fails` rather than skipped, specifically so it keeps failing loudly
-  (and would fail the *other* way, flagging itself for a fix, the moment
-  the real circuit bug is found) instead of going silent.
+  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above) and one
+  real instruction on top of it — `LDI` (see "x=10, y=4, z=0: LDI" above),
+  real Z80's own `0xED 0xA0`. The other three prefix bytes (`CB`/`DD`/
+  `FD`) and the rest of `ED`'s own table (block search/compare/IO,
+  `LDD`/`LDIR`/`LDDR` and friends) execute nothing yet — `LDI` proves the
+  mechanism works end to end, it doesn't fill in the other tables it
+  unlocks.
+- `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
+  (a transient forced-driver conflict on the RAM address bus, corrupting
+  `ir`/the phase ring counter) that turned out to be sensitive to this
+  file's own component/net ordering — and un-broke itself, without being
+  directly addressed, the moment `LDI`'s own wiring shifted that ordering
+  again. See "A real solver bug this retrofit exposed — and the test that
+  un-broke itself" above for the full story, including why this is
+  recorded here rather than treated as solved: the same ordering-
+  sensitive race is presumably still latent somewhere in this file, it
+  just isn't currently landing on a net any existing test reads.
 - `buildZ80Cpu`'s `x=11` work is the deepest circuit this project has built
   (`spAdder` — a second full ripple-carry `buildAlu` instance — plus the
   push/pop byte-select banks, the flag-computation chain, and a 4-phase FSM
