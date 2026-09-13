@@ -3402,15 +3402,101 @@ export function buildZ80Cpu(
   // anywhere in this project's own F register) — `cout` feeds F's own
   // C-bit mux (gated by `ADDHL_NOW`) exactly the way every other
   // C-affecting operation already does, and nothing here touches S/Z/P.
+  // x=01, z=2: ADC HL,rr/SBC HL,rr (real 0xED 0x4A/0x5A/0x6A/0x7A —
+  // ADC — and 0xED 0x42/0x52/0x62/0x72 — SBC — BC/DE/HL/SP) — see "x=01,
+  // z=2: ADC HL,rr/SBC HL,rr" above for the full derivation. Reuses this
+  // same `addHlAdder` rather than building a second 16-bit adder: `y`'s
+  // own parity picks `ADC` (odd) vs `SBC` (even) — `isAddHlYValid` (built
+  // just above for plain `ADD HL,rr`) is exactly "y is odd", so `SBC` is
+  // simply its complement, no new parity check needed. Collides with
+  // real unprefixed `LD y,D` (`x=01` is the entire `LD r,r'` table,
+  // `z=2` picks `D` as the source) for every destination `y` picks.
+  const isAdcSbcHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5400 });
+  wire(parent, isEdX1Active.out, isAdcSbcHlNow.a);
+  wire(parent, dec.z[2]!, isAdcSbcHlNow.b);
+  tieToLabel('IS_ADCSBCHL_NOW', isAdcSbcHlNow.out, { x: pos.x - 850, y: pos.y - 5400 });
+  const isAdcHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5420 });
+  wire(parent, isAdcSbcHlNow.out, isAdcHlNow.a);
+  wire(parent, isAddHlYValid.out, isAdcHlNow.b);
+  tieToLabel('IS_ADCHL_NOW', isAdcHlNow.out, { x: pos.x - 800, y: pos.y - 5420 });
+  const notAddHlYValid = buildNot(parent, vcc3, gnd3, { x: pos.x - 870, y: pos.y - 5440 });
+  wire(parent, isAddHlYValid.out, notAddHlYValid.in);
+  const isSbcHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5440 });
+  wire(parent, isAdcSbcHlNow.out, isSbcHlNow.a);
+  wire(parent, notAddHlYValid.out, isSbcHlNow.b);
+  tieToLabel('IS_SBCHL_NOW', isSbcHlNow.out, { x: pos.x - 800, y: pos.y - 5440 }); // anchor — the shared adder's own cin/b-invert and F's own N-bit (all near) read this
+  // `y>>1` picks the pair (`BC`/`DE`/`HL`/`SP`) — a different selection
+  // rule than plain `ADD HL,rr`'s own exact-`y`-match (that opcode's `y`
+  // is always odd, one-hot per pair already), so each pair gets its own
+  // fresh 2-way `y`-fold here rather than reusing `addHlPairs`'s own
+  // per-pair `y` line directly.
+  const isAdcSbcHlBcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5460 });
+  const bcYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5460 });
+  wire(parent, dec.y[0]!, bcYFold.a);
+  wire(parent, dec.y[1]!, bcYFold.b);
+  wire(parent, isAdcSbcHlNow.out, isAdcSbcHlBcNow.a);
+  wire(parent, bcYFold.out, isAdcSbcHlBcNow.b);
+  const isAdcSbcHlDeNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5480 });
+  const deYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5480 });
+  wire(parent, dec.y[2]!, deYFold.a);
+  wire(parent, dec.y[3]!, deYFold.b);
+  wire(parent, isAdcSbcHlNow.out, isAdcSbcHlDeNow.a);
+  wire(parent, deYFold.out, isAdcSbcHlDeNow.b);
+  const isAdcSbcHlHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5500 });
+  const hlYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5500 });
+  wire(parent, dec.y[4]!, hlYFold.a);
+  wire(parent, dec.y[5]!, hlYFold.b);
+  wire(parent, isAdcSbcHlNow.out, isAdcSbcHlHlNow.a);
+  wire(parent, hlYFold.out, isAdcSbcHlHlNow.b);
+  const isAdcSbcHlSpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5520 });
+  const spYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5520 });
+  wire(parent, dec.y[6]!, spYFold.a);
+  wire(parent, dec.y[7]!, spYFold.b);
+  wire(parent, isAdcSbcHlNow.out, isAdcSbcHlSpNow.a);
+  wire(parent, spYFold.out, isAdcSbcHlSpNow.b);
+  // One phase, the first available one for any `ED`-prefixed opcode —
+  // the identical timing `NEG` above already establishes.
+  const adcSbcHlCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5540 });
+  wire(parent, isAdcSbcHlNow.out, adcSbcHlCommitNow.a);
+  tieToLabel('PHASE4', adcSbcHlCommitNow.b, { x: pos.x - 950, y: pos.y - 5540 });
+  tieToLabel('ADCSBCHL_COMMIT_NOW', adcSbcHlCommitNow.out, { x: pos.x - 800, y: pos.y - 5540 }); // anchor — H's/L's own sixth write-back layer and F's own we/per-bit layer (all far) read this
+
   const addHlAdder = buildAlu(parent, library, 16, { x: pos.x - 700, y: pos.y - 5300 });
   wire(parent, gnd, addHlAdder.op0);
   wire(parent, gnd, addHlAdder.op1);
-  wire(parent, gnd, addHlAdder.cin);
+  // `cin`: `0` for plain `ADD HL,rr`, the old `C` for `ADC HL,rr`, the
+  // old `C` inverted for `SBC HL,rr` — the identical `ADC`/`SBC` recipe
+  // "x=10: ADC/SBC" above already establishes for the 8-bit ALU group,
+  // just reused here for the 16-bit case.
+  const adcHlCin = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5320 });
+  wire(parent, isAdcHlNow.out, adcHlCin.a);
+  wire(parent, f.q[0]!, adcHlCin.b);
+  const notOldCForSbcHl = buildNot(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5340 });
+  wire(parent, f.q[0]!, notOldCForSbcHl.in);
+  const sbcHlCin = buildAnd(parent, vcc3, gnd3, { x: pos.x - 700, y: pos.y - 5340 });
+  wire(parent, isSbcHlNow.out, sbcHlCin.a);
+  wire(parent, notOldCForSbcHl.out, sbcHlCin.b);
+  const addHlCinFinal = buildOr(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 5330 });
+  wire(parent, adcHlCin.out, addHlCinFinal.a);
+  wire(parent, sbcHlCin.out, addHlCinFinal.b);
+  wire(parent, addHlCinFinal.out, addHlAdder.cin);
+  const addHlBcY = buildOr(parent, vcc3, gnd3, { x: pos.x - 620, y: pos.y - 5360 });
+  wire(parent, dec.y[1]!, addHlBcY.a);
+  wire(parent, isAdcSbcHlBcNow.out, addHlBcY.b);
+  const addHlDeY = buildOr(parent, vcc3, gnd3, { x: pos.x - 620, y: pos.y - 5370 });
+  wire(parent, dec.y[3]!, addHlDeY.a);
+  wire(parent, isAdcSbcHlDeNow.out, addHlDeY.b);
+  const addHlHlY = buildOr(parent, vcc3, gnd3, { x: pos.x - 620, y: pos.y - 5380 });
+  wire(parent, dec.y[5]!, addHlHlY.a);
+  wire(parent, isAdcSbcHlHlNow.out, addHlHlY.b);
+  const addHlSpY = buildOr(parent, vcc3, gnd3, { x: pos.x - 620, y: pos.y - 5390 });
+  wire(parent, dec.y[7]!, addHlSpY.a);
+  wire(parent, isAdcSbcHlSpNow.out, addHlSpY.b);
   const addHlPairs: { y: Pin; lowQ: Pin[]; highQ: Pin[] | null }[] = [
-    { y: dec.y[1]!, lowQ: rC.q, highQ: rB.q },
-    { y: dec.y[3]!, lowQ: rE.q, highQ: rD.q },
-    { y: dec.y[5]!, lowQ: rL.q, highQ: rH.q },
-    { y: dec.y[7]!, lowQ: sp.q, highQ: null }, // SP: zero-extended past addrBits, no real high byte in this simulator
+    { y: addHlBcY.out, lowQ: rC.q, highQ: rB.q },
+    { y: addHlDeY.out, lowQ: rE.q, highQ: rD.q },
+    { y: addHlHlY.out, lowQ: rL.q, highQ: rH.q },
+    { y: addHlSpY.out, lowQ: sp.q, highQ: null }, // SP: zero-extended past addrBits, no real high byte in this simulator
   ];
   for (let i = 0; i < 16; i++) {
     if (i < 8) wire(parent, rL.q[i]!, addHlAdder.a[i]!);
@@ -3429,10 +3515,52 @@ export function buildZ80Cpu(
         term = or.out;
       }
     });
-    wire(parent, term!, addHlAdder.b[i]!);
+    // `SBC HL,rr` needs its own operand inverted too — the identical
+    // "invert `b` for a real subtract" shape `bInv` already establishes
+    // for the 8-bit ALU group's own `SUB`/`SBC`.
+    const addHlBInv = buildXor(parent, vcc3, gnd3, { x: pos.x - 570, y: pos.y - 5300 + i * 60 });
+    wire(parent, term!, addHlBInv.a);
+    wire(parent, isSbcHlNow.out, addHlBInv.b);
+    wire(parent, addHlBInv.out, addHlAdder.b[i]!);
     tieToLabel(i < 8 ? `ADDHLLO${i}` : `ADDHLHI${i - 8}`, addHlAdder.out[i]!, { x: pos.x - 500, y: pos.y - 5300 + i * 60 }); // anchor — H's/L's own fifth write-back layer (far) reads this
   }
   tieToLabel('ADDHL_C', addHlAdder.cout, { x: pos.x - 400, y: pos.y - 5300 }); // anchor — F's own C-bit mux (far) reads this
+
+  // `ADC HL,rr`/`SBC HL,rr`'s own flags — real Z80 documents every bit,
+  // unlike plain `ADD HL,rr`'s own C-only treatment above. `S`/`Z` read
+  // straight off this same adder's own 16-bit result; `H` is the
+  // identical half-borrow/half-carry idiom this file's own 8-bit groups
+  // already use, just at the 16-bit nibble boundary (`carries[11]`,
+  // carry into bit 12, not `carries[3]`); `P/V` is the identical
+  // `XOR(carries[14], carries[15])` overflow idiom, just at the 16-bit
+  // sign bit; `N` is `isSbcHlNow` directly (0 for `ADC`, 1 for `SBC`);
+  // `C` is `XOR(cout, isSbcHlNow)` — a fresh carry for `ADC`, a
+  // borrow-inverted one for `SBC`, the same convention `cBit` already
+  // establishes for the 8-bit group.
+  const addHlSBit = addHlAdder.out[15]!;
+  let addHlZChain: Pin = addHlAdder.out[0]!;
+  for (let i = 1; i < 16; i++) {
+    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x - 450, y: pos.y - 5200 + i * 30 });
+    wire(parent, addHlZChain, orGate.a);
+    wire(parent, addHlAdder.out[i]!, orGate.b);
+    addHlZChain = orGate.out;
+  }
+  const addHlZBit = buildNot(parent, vcc3, gnd3, { x: pos.x - 400, y: pos.y - 4700 });
+  wire(parent, addHlZChain, addHlZBit.in);
+  const addHlHBitRaw = buildXor(parent, vcc3, gnd3, { x: pos.x - 400, y: pos.y - 4680 });
+  wire(parent, addHlAdder.carries[11]!, addHlHBitRaw.a);
+  wire(parent, isSbcHlNow.out, addHlHBitRaw.b);
+  const addHlPvBit = buildXor(parent, vcc3, gnd3, { x: pos.x - 400, y: pos.y - 4660 });
+  wire(parent, addHlAdder.carries[14]!, addHlPvBit.a);
+  wire(parent, addHlAdder.carries[15]!, addHlPvBit.b);
+  const addHlCBitFresh = buildXor(parent, vcc3, gnd3, { x: pos.x - 400, y: pos.y - 4640 });
+  wire(parent, addHlAdder.cout, addHlCBitFresh.a);
+  wire(parent, isSbcHlNow.out, addHlCBitFresh.b);
+  tieToLabel('ADCSBCHL_S', addHlSBit, { x: pos.x - 350, y: pos.y - 4700 });
+  tieToLabel('ADCSBCHL_Z', addHlZBit.out, { x: pos.x - 350, y: pos.y - 4680 });
+  tieToLabel('ADCSBCHL_H', addHlHBitRaw.out, { x: pos.x - 350, y: pos.y - 4660 });
+  tieToLabel('ADCSBCHL_PV', addHlPvBit.out, { x: pos.x - 350, y: pos.y - 4640 });
+  tieToLabel('ADCSBCHL_C', addHlCBitFresh.out, { x: pos.x - 350, y: pos.y - 4620 }); // anchor — F's own per-bit layer (far) reads this, along with the four labels just above
 
   // x=00, z=2: indirect loads through (BC)/(DE)/(nn) — see the doc comment
   // above ("x=00: indirect loads through (BC)/(DE)/(nn)") for the full
@@ -6672,7 +6800,7 @@ export function buildZ80Cpu(
       else tieToLabel('IOB_Z_NOW', outBlockFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8285, y: pos.y + 2250 + i * 100 }); // in1: Z — B reached 0
       cLayerIn = outBlockFMux.pins[muxDef.ports[3]!]!;
     }
-    // NEG (see "x=00, z=4: NEG" above) swaps the *whole* byte too — every
+    // NEG (see "x=01, z=4: NEG" above) swaps the *whole* byte too — every
     // flag bit is fresh for this instruction, real Z80 leaves nothing
     // stale or unmodeled here — the identical "this layer runs for every
     // `i`" shape `EX AF,AF'`'s own layer just below already establishes.
@@ -6683,6 +6811,21 @@ export function buildZ80Cpu(
       const negFreshBit: Record<number, Pin> = { 0: negCBit, 1: vcc4, 2: negPvBit.out, 3: negXBit, 4: negHBit.out, 5: negYBit, 6: negZBit.out, 7: negSBit };
       wire(parent, negFreshBit[i]!, negFMux.pins[muxDef.ports[2]!]!);
       cLayerIn = negFMux.pins[muxDef.ports[3]!]!;
+    }
+    // ADC HL,rr/SBC HL,rr (see "x=01, z=2: ADC HL,rr/SBC HL,rr" above)
+    // swaps the whole byte too, unlike plain `ADD HL,rr`'s own C-only
+    // treatment — real Z80 documents every flag bit for this pair. `X`/
+    // `Y` mirror the high byte's own bits 3/5 (bits 11/13 of the full
+    // 16-bit result) — real, documented behavior, not unmodeled, the
+    // same stance `NEG`'s own `X`/`Y` just above already take.
+    {
+      const adcSbcHlFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8379, y: pos.y + 2223 + i * 100 });
+      tieToLabel('ADCSBCHL_COMMIT_NOW', adcSbcHlFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8279, y: pos.y + 2223 + i * 100 });
+      wire(parent, cLayerIn, adcSbcHlFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
+      const adcSbcHlFreshLabel: Record<number, string> = { 0: 'ADCSBCHL_C', 2: 'ADCSBCHL_PV', 3: 'ADDHLHI3', 4: 'ADCSBCHL_H', 5: 'ADDHLHI5', 6: 'ADCSBCHL_Z', 7: 'ADCSBCHL_S' };
+      if (i === 1) wire(parent, isSbcHlNow.out, adcSbcHlFMux.pins[muxDef.ports[2]!]!); // in1: N — 0 for ADC, 1 for SBC
+      else tieToLabel(adcSbcHlFreshLabel[i]!, adcSbcHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8279, y: pos.y + 2243 + i * 100 });
+      cLayerIn = adcSbcHlFMux.pins[muxDef.ports[3]!]!;
     }
     // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) swaps the
     // *whole* byte, not just one or two bits — this layer runs for every
@@ -6753,7 +6896,12 @@ export function buildZ80Cpu(
   const fWeFinal5 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9270, y: pos.y + 2300 });
   wire(parent, fWeFinal4.out, fWeFinal5.a);
   tieToLabel('NEG_NOW', fWeFinal5.b, { x: pos.x + 9170, y: pos.y + 2300 });
-  wire(parent, fWeFinal5.out, f.we);
+  // ADC HL,rr/SBC HL,rr (see "x=01, z=2: ADC HL,rr/SBC HL,rr" above)
+  // needs `F`'s own `we` too — a twelfth and final OR term.
+  const fWeFinal6 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9370, y: pos.y + 2310 });
+  wire(parent, fWeFinal5.out, fWeFinal6.a);
+  tieToLabel('ADCSBCHL_COMMIT_NOW', fWeFinal6.b, { x: pos.x + 9270, y: pos.y + 2310 });
+  wire(parent, fWeFinal6.out, f.we);
 
   // SP: same external-seed contract as B..L above — `sp.d`/`sp.we` here
   // are the caller's own sink pins, muxed ahead of the raw register the
@@ -6954,6 +7102,14 @@ export function buildZ80Cpu(
   const rHExt12 = wrapWithPairCommit(rHExt11, 'OUTBLOCK_COMMIT_NOW', 'HLADDHI', { x: pos.x + 13800, y: pos.y + 700 });
   const rLExt12 = wrapWithPairCommit(rLExt11, 'OUTBLOCK_COMMIT_NOW', 'HLADDLO', { x: pos.x + 13800, y: pos.y + 1000 });
 
+  // ADC HL,rr/SBC HL,rr's own register commit (see "x=01, z=2: ADC
+  // HL,rr/SBC HL,rr" above) — one more `wrapWithPairCommit` layer,
+  // reading the same `ADDHLHI`/`ADDHLLO` labels plain `ADD HL,rr`'s own
+  // fourth layer (`rHExt4`/`rLExt4`, far above) already publishes,
+  // committed on this instruction's own `ADCSBCHL_COMMIT_NOW` instead.
+  const rHExt13 = wrapWithPairCommit(rHExt12, 'ADCSBCHL_COMMIT_NOW', 'ADDHLHI', { x: pos.x + 13900, y: pos.y + 700 });
+  const rLExt13 = wrapWithPairCommit(rLExt12, 'ADCSBCHL_COMMIT_NOW', 'ADDHLLO', { x: pos.x + 13900, y: pos.y + 1000 });
+
   // `C`'s own bus-driver bank: real `INI`'s own port address, published
   // onto the bus (this composite's own `ioPortAddr` is a live tap of it,
   // see the I/O port's own doc comment below). Two enable terms, not
@@ -7036,8 +7192,8 @@ export function buildZ80Cpu(
     rC: rCExt6,
     rD: rDExt6,
     rE: rEExt6,
-    rH: rHExt12,
-    rL: rLExt12,
+    rH: rHExt13,
+    rL: rLExt13,
     f: f.q,
     aP: aPExt,
     fP: fPExt,

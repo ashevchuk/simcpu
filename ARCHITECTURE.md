@@ -3395,6 +3395,56 @@ arithmetic group's own formula), and `0x00` (no borrow at all — `Z`
 set, `C` clear) — before the full suite: `52/52` files, `196/196`
 tests, still green.
 
+### x=01, z=2: ADC HL,rr/SBC HL,rr
+
+Real `0xED 0x4A`/`0x5A`/`0x6A`/`0x7A` (`ADC HL,BC`/`DE`/`HL`/`SP`) and
+`0xED 0x42`/`0x52`/`0x62`/`0x72` (the same four pairs, `SBC`) — `y`'s
+own parity picks the op (odd `ADC`, even `SBC`), `y>>1` picks the pair.
+Collides with real unprefixed `LD y,D` for every destination `y` picks
+(`x=01` is the entire `LD r,r'` table, `z=2` picks `D` as the source).
+
+**Reuses `ADD HL,rr`'s own shared 16-bit adder rather than building a
+second one.** `isAddHlYValid` (built for plain `ADD HL,rr`, "is `y`
+odd") turns out to be exactly `SBC`'s own complement, so `isAdcHlNow`/
+`isSbcHlNow` are built from it directly, no fresh parity check needed.
+The pair-select is genuinely different, though: `ADD HL,rr`'s own `y`
+is always odd, one exact value per pair; `ADC`/`SBC HL,rr`'s own pair
+comes from `y>>1`, two `y` values per pair — so each of the four gets
+its own fresh 2-way `y`-fold (`isAdcSbcHlBcNow`, etc.), OR'd into
+`addHlPairs`'s own per-pair `y` line rather than replacing it, the
+identical "widen, don't replace" shape every earlier register-select
+widening in this file already uses.
+
+**`cin` and the operand invert are the identical `ADC`/`SBC` recipe
+"x=10: ADC/SBC" above already establishes**, just applied to this
+16-bit adder instead of the 8-bit one: `0` for plain `ADD HL,rr`, the
+old `C` for `ADC HL,rr`, the old `C` inverted for `SBC HL,rr`; `b`
+inverted per bit only for `SBC`. Real `ADD HL,rr` itself is untouched —
+its own `cin`/`b` paths simply see both `isAdcHlNow` and `isSbcHlNow`
+read `0` and behave exactly as before.
+
+**Every flag bit is real here, unlike plain `ADD HL,rr`'s own C-only
+treatment.** `S`/`Z` read straight off the same 16-bit result; `H` is
+the identical half-carry/half-borrow idiom this file's 8-bit groups
+already use, just at the 16-bit nibble boundary (`carries[11]`, not
+`carries[3]`); `P/V` is the identical `XOR(carries[14], carries[15])`
+overflow idiom, at the 16-bit sign bit instead of the 8-bit one; `N` is
+`isSbcHlNow` directly; `C` is `XOR(cout, isSbcHlNow)`, the same
+borrow-inverted convention `cBit` already establishes. `X`/`Y` mirror
+the high byte's own bits 3/5 (bits 11/13 of the full 16-bit result) —
+real, documented behavior for this instruction, not unmodeled, the same
+stance `NEG`'s own `X`/`Y` just above already take.
+
+Verified with five dedicated tests: an ordinary `ADC HL,BC` with no
+flags set at all, a real signed overflow on `ADC` (`0x7FFF+1`), the
+identical overflow the other way on `SBC` (`0x8000-1`), a real borrow
+with a real starting carry (`0-0-1`, via a genuine `SCF` first — `F` has
+no external seed hook), and `ADC HL,HL` with a starting carry — the one
+pair whose own low/high halves are the identical registers being read
+twice at once, genuinely wrapping past `0xFFFF` back to `1` with a real
+carry out — before the full suite: `53/53` files, `201/201` tests,
+still green.
+
 ### A real solver bug this retrofit exposed — and the test that un-broke itself
 
 Adding the prefix mechanism above didn't just add inert wiring — it
@@ -4150,19 +4200,25 @@ section's own success story.
   `INIR`/`INDR` and `OTIR`/`OTDR` both watch `B` alone — decrementing `B`
   is the identical operation regardless of transfer direction, so the
   underlying adder and its own nonzero bit are genuinely shared code,
-  not just a similar shape); and `NEG` (see "x=01, z=4: NEG" above),
-  real `0xED 0x44` — `A<-0-A`, this retrofit's first non-block `ED`-table
-  opcode, every flag bit real and fresh, none left stale. The block
-  instructions' own decode gates were found live, while designing
-  `NEG`'s, to have never checked `dec.x` at all (see "A decode gap found
-  across all sixteen block-instruction gates" above) — fixed before
-  `NEG` landed, rather than propagating the same gap into a seventeenth
-  gate. The other three prefix bytes (`CB`/`DD`/`FD`) and the rest of
-  `ED`'s own table (16-bit `ADC`/`SBC HL,rr`, `RRD`/`RLD`, and friends)
-  execute nothing yet — these five instructions close out the
-  block-instruction half of `ED`'s table entirely and prove the prefix
+  not just a similar shape); `NEG` (see "x=01, z=4: NEG" above), real
+  `0xED 0x44` — `A<-0-A`, this retrofit's first non-block `ED`-table
+  opcode, every flag bit real and fresh, none left stale; and `ADC
+  HL,rr`/`SBC HL,rr` (see "x=01, z=2: ADC HL,rr/SBC HL,rr" above), real
+  `0xED 0x4A`/`0x5A`/`0x6A`/`0x7A` and `0x42`/`0x52`/`0x62`/`0x72` — the
+  identical shared 16-bit adder plain `ADD HL,rr` already built, widened
+  for a real carry-in and operand invert (the same `x=10: ADC/SBC`
+  recipe, just 16 bits wide), every flag bit real here too, unlike
+  `ADD HL,rr`'s own C-only treatment. The block instructions' own decode
+  gates were found live, while designing `NEG`'s, to have never checked
+  `dec.x` at all (see "A decode gap found across all sixteen
+  block-instruction gates" above) — fixed before `NEG` landed, rather
+  than propagating the same gap into a seventeenth gate. The other three
+  prefix bytes (`CB`/`DD`/`FD`) and the rest of `ED`'s own table (`RRD`/
+  `RLD`, `RETN`/`RETI`, `IM`, and friends) execute nothing yet — these
+  six instructions close out the block-instruction half of `ED`'s table
+  entirely, add its first two non-block ones, and prove the prefix
   mechanism works end to end for a single-shot instruction, three
-  differently-gated repeat conditions, and a real decode collision
+  differently-gated repeat conditions, and two real decode collisions
   outside the block-instruction shape, without filling in the other
   tables they unlock.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
