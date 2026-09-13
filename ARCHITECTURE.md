@@ -3307,6 +3307,94 @@ This closes out the block I/O half of `ED`'s own table (`z=0` through
 mechanism's own doc comment named as the natural stopping point for
 this retrofit's own block-instruction work.
 
+### A decode gap found across all sixteen block-instruction gates — and fixed
+
+Found live while designing `NEG`'s own decode (see "x=01, z=4: NEG"
+below): every one of the sixteen block-instruction gates above
+(`LDI`/`LDD`/`LDIR`/`LDDR`/`CPI`/`CPD`/`CPIR`/`CPDR`/`INI`/`IND`/
+`INIR`/`INDR`/`OUTI`/`OUTD`/`OTIR`/`OTDR`) read only `isEdActive` plus
+their own `y`/`z` bits — never `dec.x`. `isEdActive` alone says just
+"the recaptured byte follows a real `0xED`"; it says nothing about that
+byte's own `x` field, and `y`/`z` are independent of `x` by
+construction (three separate bit groups of the same byte). Real `LDI`
+is `x=10,y=4,z=0` — but `isLdiNow`'s own gate, reading only `y=4`/`z=0`,
+would have *also* fired for a genuinely invalid `ED`-prefixed byte like
+`0xED 0x20` (`x=00,y=4,z=0` — the unprefixed `JR NZ,e` encoding,
+reinterpreted), executing `LDI` instead of correctly staying inert.
+Real Z80 hardware documents this precisely: any `ED`-prefixed byte
+outside the real, documented rows acts as two `NOP`s — this simulator
+was silently violating that contract for the entire `0x00`-`0x3F` and
+`0xC0`-`0xFF` ranges of the recaptured byte, undetected because no
+existing test ever fed an invalid byte after `0xED`.
+
+Fixed by building two shared qualifier gates right where `isEdActive`
+itself is defined — `isEdX2Active = AND(isEdActive, dec.x[2])` (`x=10`,
+what the sixteen block gates actually needed all along) and
+`isEdX1Active = AND(isEdActive, dec.x[1])` (`x=01`, `NEG`'s own
+family's requirement, designed correctly from the start this time) —
+and repointing all sixteen gates from bare `isEdActive` to
+`isEdX2Active`. `dec.x[2]` reads `1` for every real block-instruction
+byte (`0xA0`-`0xBB`), so this changes nothing observable for any opcode
+this project actually implements — confirmed by re-running all twelve
+block-family test files (all sixteen instructions) plus `NEG`'s own
+test together right after the fix, all still green, before the next
+full-suite run below. This corrects behavior only for bytes no test
+exercises, by definition — invalid opcodes this project never claimed
+to execute correctly, now genuinely inert instead of accidentally
+decoding as a real one.
+
+### x=01, z=4: NEG
+
+Real `0xED 0x44` — this retrofit's first non-block `ED`-table opcode:
+`A<-0-A`, real two's-complement negation. Unlike every block family
+above, nothing here is left stale or unmodeled — real Z80 documents
+every flag bit for this instruction completely, so all eight get a
+fresh value. Collides with real unprefixed `LD B,H` (`x=01` is the
+entire `LD r,r'` table; `y=0` picks `B` as the destination, `z=4` picks
+`H` as the source) — but unlike every earlier collision in this file,
+`y` is deliberately *not* read at all: real hardware executes `NEG` for
+*every* value of `y` in this column (`0xED 0x44`, `0x4C`, `0x54`, ...
+all the way to `0x7C`), a real, well-documented "undocumented
+duplicate" quirk, not a gap. `isNegNow` reads `isEdX1Active`/`dec.z[4]`
+only, deliberately widening past `dec.y[0]` alone.
+
+**A dedicated `0-A` adder**, the identical "isolated adder, no
+shared-decode collision to fight" shape `cpBlockAdder`/`ioBAdder` above
+already use — needed here because the shared `x=10` ALU's own `a` input
+is hardwired to `A` itself (see "x=10: ADC/SBC" above) and can never be
+forced to a constant `0`. `0-A` in two's complement is `~A+1`: `a`
+fanned to `gnd`, `b` inverted per bit, `cin` forced to `1`, the
+identical recipe the shared ALU's own `SUB` path already uses, just
+with a genuine `0` for the left operand instead of a register. `S`/`Z`
+read straight off this adder's own output the usual way; `H` is the
+identical `NOT(carries[3])` half-borrow idiom `cpBlockAdder`'s own
+`cpHBit` already establishes; `P/V` is the identical `XOR(carries[6],
+carries[7])` overflow idiom the shared ALU's own `pvOverflow` already
+establishes — real Z80 sets it for `NEG` on exactly one input, `0x80`,
+the one byte whose negation doesn't fit back into a signed byte; `N` is
+a hardwired `1`; `C` is a fresh 8-way OR-tree over `A`'s own *current*
+bits (nonzero `A` always borrows on negation, `A=0` never does) — the
+same "any bit set" idiom this file's own nonzero checks already use
+elsewhere, just over `A` instead of `BC` or `B`. `X`/`Y` mirror the
+result's own bits 3/5, the same documented, not-unmodeled treatment the
+`x=10` ALU group's own `X`/`Y` already get.
+
+`A`'s own write mux and `F`'s own per-bit chain each get one more
+layer, gated by `NEG_NOW` — a single `PHASE4` commit (the first
+available phase for any `ED`-prefixed opcode, `PHASE2`/`PHASE3` already
+spent recapturing `ir` and advancing `pc`), no holding register or
+multi-phase sequencing needed at all, since every part of this
+instruction is combinational off `A`'s own already-stable value.
+
+Verified with a dedicated test (`z80cpu-neg.test.ts`) exercising three
+deliberately different cases in sequence: `0x01` (the ordinary path — a
+real half-borrow, `S`/`C` set, `P/V` clear), `0x80` (the one value
+whose negation doesn't fit back into a signed byte — `A` unchanged,
+`P/V` set, proving overflow isn't just copied blindly from the
+arithmetic group's own formula), and `0x00` (no borrow at all — `Z`
+set, `C` clear) — before the full suite: `52/52` files, `196/196`
+tests, still green.
+
 ### A real solver bug this retrofit exposed — and the test that un-broke itself
 
 Adding the prefix mechanism above didn't just add inert wiring — it
@@ -4062,13 +4150,21 @@ section's own success story.
   `INIR`/`INDR` and `OTIR`/`OTDR` both watch `B` alone — decrementing `B`
   is the identical operation regardless of transfer direction, so the
   underlying adder and its own nonzero bit are genuinely shared code,
-  not just a similar shape). The other three prefix bytes (`CB`/`DD`/
-  `FD`) and the rest of `ED`'s own table (16-bit arithmetic, `NEG`,
-  `RRD`/`RLD`, and friends) execute nothing yet — these four columns
-  close out the block-instruction half of `ED`'s table entirely and
-  prove the prefix mechanism works end to end for a single-shot
-  instruction and three differently-gated repeat conditions, without
-  filling in the other tables they unlock.
+  not just a similar shape); and `NEG` (see "x=01, z=4: NEG" above),
+  real `0xED 0x44` — `A<-0-A`, this retrofit's first non-block `ED`-table
+  opcode, every flag bit real and fresh, none left stale. The block
+  instructions' own decode gates were found live, while designing
+  `NEG`'s, to have never checked `dec.x` at all (see "A decode gap found
+  across all sixteen block-instruction gates" above) — fixed before
+  `NEG` landed, rather than propagating the same gap into a seventeenth
+  gate. The other three prefix bytes (`CB`/`DD`/`FD`) and the rest of
+  `ED`'s own table (16-bit `ADC`/`SBC HL,rr`, `RRD`/`RLD`, and friends)
+  execute nothing yet — these five instructions close out the
+  block-instruction half of `ED`'s table entirely and prove the prefix
+  mechanism works end to end for a single-shot instruction, three
+  differently-gated repeat conditions, and a real decode collision
+  outside the block-instruction shape, without filling in the other
+  tables they unlock.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this

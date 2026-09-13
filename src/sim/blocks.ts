@@ -2222,6 +2222,31 @@ export function buildZ80Cpu(
   // instruction, this project's first actual consumer.
   tieToLabel('IS_ED_ACTIVE', isEdActive, { x: pos.x + 9100, y: pos.y - 6350 }); // anchor — LDI's own decode (far) reads this
 
+  // `isEdX2Active`/`isEdX1Active`: `isEdActive` alone says only "the
+  // recaptured byte follows a real `0xED`" — it says nothing about that
+  // byte's own `x` field, and `y`/`z` are independent of `x` by
+  // construction (three separate bit groups of the same byte). Found
+  // live while designing `NEG`'s own decode: every block-family gate
+  // above (`LDI`/`LDD`/`LDIR`/`LDDR`/`CPI`/`CPD`/`CPIR`/`CPDR`/`INI`/
+  // `IND`/`INIR`/`INDR`/`OUTI`/`OUTD`/`OTIR`/`OTDR`) reads only
+  // `isEdActive` plus its own `y`/`z` bits, never `dec.x` — meaning a
+  // genuinely invalid `ED`-prefixed byte outside real Z80's own
+  // documented rows (`0xED 0x20`, say — `x=00,y=4,z=0`, the same `y`/`z`
+  // `LDI` reads) would incorrectly execute as `LDI` instead of staying
+  // inert the way real hardware's own documented behavior requires
+  // (undocumented `ED`-prefixed bytes act as two `NOP`s). Every one of
+  // those sixteen gates is retrofitted below to read `isEdX2Active`
+  // (`x=10`) instead of bare `isEdActive` — the identical value real
+  // Z80 hardware actually requires, just not previously checked.
+  // `isEdX1Active` (`x=01`) is `NEG`'s own family's requirement,
+  // designed correctly from the start.
+  const isEdX2Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6360 });
+  wire(parent, isEdActive, isEdX2Active.a);
+  wire(parent, dec.x[2]!, isEdX2Active.b);
+  const isEdX1Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6370 });
+  wire(parent, isEdActive, isEdX1Active.a);
+  wire(parent, dec.x[1]!, isEdX1Active.b);
+
   // x=10, z=0: LDI/LDD/LDIR/LDDR (real 0xED 0xA0/0xA8/0xB0/0xB8) — real
   // Z80's own block-move family, `y=4..7` selecting which of the four:
   // `(DE)<-(HL)`, then `HL`/`DE` both `++` (`LDI`/`LDIR`) or both `--`
@@ -2248,28 +2273,28 @@ export function buildZ80Cpu(
   // unprefixed four.
   const isLdiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6300 });
   const isLdiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6300 });
-  wire(parent, isEdActive, isLdiStage.a);
+  wire(parent, isEdX2Active.out, isLdiStage.a);
   wire(parent, dec.y[4]!, isLdiStage.b);
   wire(parent, isLdiStage.out, isLdiNow.a);
   wire(parent, dec.z[0]!, isLdiNow.b);
   tieToLabel('IS_LDI_NOW', isLdiNow.out, { x: pos.x + 9150, y: pos.y - 6300 }); // anchor — isLdBlockNow just below reads this
   const isLddNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6270 });
   const isLddStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6270 });
-  wire(parent, isEdActive, isLddStage.a);
+  wire(parent, isEdX2Active.out, isLddStage.a);
   wire(parent, dec.y[5]!, isLddStage.b);
   wire(parent, isLddStage.out, isLddNow.a);
   wire(parent, dec.z[0]!, isLddNow.b);
   tieToLabel('IS_LDD_NOW', isLddNow.out, { x: pos.x + 9150, y: pos.y - 6270 });
   const isLdirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6240 });
   const isLdirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6240 });
-  wire(parent, isEdActive, isLdirStage.a);
+  wire(parent, isEdX2Active.out, isLdirStage.a);
   wire(parent, dec.y[6]!, isLdirStage.b);
   wire(parent, isLdirStage.out, isLdirNow.a);
   wire(parent, dec.z[0]!, isLdirNow.b);
   tieToLabel('IS_LDIR_NOW', isLdirNow.out, { x: pos.x + 9150, y: pos.y - 6240 }); // anchor — isRepeatVariantNow just below reads this
   const isLddrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6210 });
   const isLddrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6210 });
-  wire(parent, isEdActive, isLddrStage.a);
+  wire(parent, isEdX2Active.out, isLddrStage.a);
   wire(parent, dec.y[7]!, isLddrStage.b);
   wire(parent, isLddrStage.out, isLddrNow.a);
   wire(parent, dec.z[0]!, isLddrNow.b);
@@ -2368,28 +2393,28 @@ export function buildZ80Cpu(
   // below for why that's the cheaper, safer choice.
   const isCpiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6480 });
   const isCpiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6480 });
-  wire(parent, isEdActive, isCpiStage.a);
+  wire(parent, isEdX2Active.out, isCpiStage.a);
   wire(parent, dec.y[4]!, isCpiStage.b);
   wire(parent, isCpiStage.out, isCpiNow.a);
   wire(parent, dec.z[1]!, isCpiNow.b);
   tieToLabel('IS_CPI_NOW', isCpiNow.out, { x: pos.x + 9150, y: pos.y - 6480 }); // anchor — isCpBlockNow just below reads this
   const isCpdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6510 });
   const isCpdStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6510 });
-  wire(parent, isEdActive, isCpdStage.a);
+  wire(parent, isEdX2Active.out, isCpdStage.a);
   wire(parent, dec.y[5]!, isCpdStage.b);
   wire(parent, isCpdStage.out, isCpdNow.a);
   wire(parent, dec.z[1]!, isCpdNow.b);
   tieToLabel('IS_CPD_NOW', isCpdNow.out, { x: pos.x + 9150, y: pos.y - 6510 });
   const isCpirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6540 });
   const isCpirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6540 });
-  wire(parent, isEdActive, isCpirStage.a);
+  wire(parent, isEdX2Active.out, isCpirStage.a);
   wire(parent, dec.y[6]!, isCpirStage.b);
   wire(parent, isCpirStage.out, isCpirNow.a);
   wire(parent, dec.z[1]!, isCpirNow.b);
   tieToLabel('IS_CPIR_NOW', isCpirNow.out, { x: pos.x + 9150, y: pos.y - 6540 }); // anchor — cpRepeatVariantNow just below reads this
   const isCpdrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6570 });
   const isCpdrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6570 });
-  wire(parent, isEdActive, isCpdrStage.a);
+  wire(parent, isEdX2Active.out, isCpdrStage.a);
   wire(parent, dec.y[7]!, isCpdrStage.b);
   wire(parent, isCpdrStage.out, isCpdrNow.a);
   wire(parent, dec.z[1]!, isCpdrNow.b);
@@ -2459,28 +2484,28 @@ export function buildZ80Cpu(
   // layer, far below.
   const isIniNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6710 });
   const isIniStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6710 });
-  wire(parent, isEdActive, isIniStage.a);
+  wire(parent, isEdX2Active.out, isIniStage.a);
   wire(parent, dec.y[4]!, isIniStage.b);
   wire(parent, isIniStage.out, isIniNow.a);
   wire(parent, dec.z[2]!, isIniNow.b);
   tieToLabel('IS_INI_NOW', isIniNow.out, { x: pos.x + 9150, y: pos.y - 6710 });
   const isIndNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6740 });
   const isIndStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6740 });
-  wire(parent, isEdActive, isIndStage.a);
+  wire(parent, isEdX2Active.out, isIndStage.a);
   wire(parent, dec.y[5]!, isIndStage.b);
   wire(parent, isIndStage.out, isIndNow.a);
   wire(parent, dec.z[2]!, isIndNow.b);
   tieToLabel('IS_IND_NOW', isIndNow.out, { x: pos.x + 9150, y: pos.y - 6740 });
   const isInirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6770 });
   const isInirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6770 });
-  wire(parent, isEdActive, isInirStage.a);
+  wire(parent, isEdX2Active.out, isInirStage.a);
   wire(parent, dec.y[6]!, isInirStage.b);
   wire(parent, isInirStage.out, isInirNow.a);
   wire(parent, dec.z[2]!, isInirNow.b);
   tieToLabel('IS_INIR_NOW', isInirNow.out, { x: pos.x + 9150, y: pos.y - 6770 }); // anchor — inRepeatVariantNow just below reads this
   const isIndrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6800 });
   const isIndrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6800 });
-  wire(parent, isEdActive, isIndrStage.a);
+  wire(parent, isEdX2Active.out, isIndrStage.a);
   wire(parent, dec.y[7]!, isIndrStage.b);
   wire(parent, isIndrStage.out, isIndrNow.a);
   wire(parent, dec.z[2]!, isIndrNow.b);
@@ -2563,28 +2588,28 @@ export function buildZ80Cpu(
   // is built for it, only new consumers of what already exists.
   const isOutiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6920 });
   const isOutiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6920 });
-  wire(parent, isEdActive, isOutiStage.a);
+  wire(parent, isEdX2Active.out, isOutiStage.a);
   wire(parent, dec.y[4]!, isOutiStage.b);
   wire(parent, isOutiStage.out, isOutiNow.a);
   wire(parent, dec.z[3]!, isOutiNow.b);
   tieToLabel('IS_OUTI_NOW', isOutiNow.out, { x: pos.x + 9150, y: pos.y - 6920 });
   const isOutdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6950 });
   const isOutdStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6950 });
-  wire(parent, isEdActive, isOutdStage.a);
+  wire(parent, isEdX2Active.out, isOutdStage.a);
   wire(parent, dec.y[5]!, isOutdStage.b);
   wire(parent, isOutdStage.out, isOutdNow.a);
   wire(parent, dec.z[3]!, isOutdNow.b);
   tieToLabel('IS_OUTD_NOW', isOutdNow.out, { x: pos.x + 9150, y: pos.y - 6950 });
   const isOtirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6980 });
   const isOtirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6980 });
-  wire(parent, isEdActive, isOtirStage.a);
+  wire(parent, isEdX2Active.out, isOtirStage.a);
   wire(parent, dec.y[6]!, isOtirStage.b);
   wire(parent, isOtirStage.out, isOtirNow.a);
   wire(parent, dec.z[3]!, isOtirNow.b);
   tieToLabel('IS_OTIR_NOW', isOtirNow.out, { x: pos.x + 9150, y: pos.y - 6980 }); // anchor — outRepeatVariantNow just below reads this
   const isOtdrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 7010 });
   const isOtdrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 7010 });
-  wire(parent, isEdActive, isOtdrStage.a);
+  wire(parent, isEdX2Active.out, isOtdrStage.a);
   wire(parent, dec.y[7]!, isOtdrStage.b);
   wire(parent, isOtdrStage.out, isOtdrNow.a);
   wire(parent, dec.z[3]!, isOtdrNow.b);
@@ -2668,6 +2693,90 @@ export function buildZ80Cpu(
   tieToLabel('OUTBLOCK_READ_NOW', outBlockTemp.we, { x: pos.x + 9350, y: pos.y - 6900 });
   outBlockTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x + 9400, y: pos.y - 6900 + i * 20 }));
   tieToLabel('CLK', outBlockTemp.clk, { x: pos.x + 9450, y: pos.y - 6920 });
+
+  // x=01, z=4: NEG (real 0xED 0x44) — the first non-block `ED`-table
+  // opcode this retrofit adds: `A<-0-A`, real two's-complement negation,
+  // every flag bit fresh (unlike the block families above, nothing here
+  // is left stale or unmodeled — real Z80 documents this instruction's
+  // flags completely). Collides with real unprefixed `LD B,H` (`x=01`
+  // is the entire `LD r,r'` table, `y=0` picking `B` as the destination,
+  // `z=4` picking `H` as the source) — but unlike every earlier
+  // collision in this file, `y` is deliberately *not* read at all: real
+  // hardware executes `NEG` for *every* value of `y` in this column
+  // (`0xED 0x44`, `0x4C`, `0x54`, ... all the way to `0x7C`), a real,
+  // well-documented "undocumented duplicate" quirk, not a gap — so
+  // `isNegNow` reads `isEdX1Active`/`dec.z[4]` only, deliberately
+  // widening past `dec.y[0]` alone.
+  const isNegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 7130 });
+  wire(parent, isEdX1Active.out, isNegNow.a);
+  wire(parent, dec.z[4]!, isNegNow.b);
+  tieToLabel('IS_NEG_NOW', isNegNow.out, { x: pos.x + 9150, y: pos.y - 7130 });
+  // One phase, the first available one for any `ED`-prefixed opcode
+  // (`PHASE2`/`PHASE3` already spent recapturing `ir` and advancing `pc`
+  // — see the prefix mechanism's own doc comment above) — real `NEG`
+  // commits everything (`A`, every flag bit) on this single edge, no
+  // holding register or multi-phase sequencing needed at all.
+  const negNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7150 });
+  wire(parent, isNegNow.out, negNow.a);
+  tieToLabel('PHASE4', negNow.b, { x: pos.x + 9050, y: pos.y - 7150 });
+  tieToLabel('NEG_NOW', negNow.out, { x: pos.x + 9250, y: pos.y - 7150 }); // anchor — A's own write mux and F's own we/per-bit layer (all far) read this
+
+  // A dedicated `0-A` adder — the identical "isolated adder, no
+  // shared-decode collision to fight" shape `cpBlockAdder`/`ioBAdder`
+  // above already use, here because `alu`'s own `a` input is hardwired
+  // to `A` itself (see "x=10: ADC/SBC" above) and can never be forced to
+  // a constant `0` the way this instruction needs. `0-A` in two's
+  // complement is `~A+1` — `a` fanned to `gnd`, `b` inverted per bit,
+  // `cin` forced to `1`, the identical recipe the shared ALU's own `SUB`
+  // path uses, just with a genuine `0` for the left operand instead of a
+  // register.
+  const negAdder = buildAlu(parent, library, 8, { x: pos.x + 9300, y: pos.y - 7300 });
+  wire(parent, gnd, negAdder.op0);
+  wire(parent, gnd, negAdder.op1);
+  wire(parent, vcc, negAdder.cin);
+  for (let i = 0; i < 8; i++) {
+    wire(parent, gnd, negAdder.a[i]!);
+    const negBInv = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7300 + i * 20 });
+    wire(parent, a.q[i]!, negBInv.in);
+    wire(parent, negBInv.out, negAdder.b[i]!);
+  }
+  const negSBit = negAdder.out[7]!;
+  const negXBit = negAdder.out[3]!;
+  const negYBit = negAdder.out[5]!;
+  let negZChain: Pin = negAdder.out[0]!;
+  for (let i = 1; i < 8; i++) {
+    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7150 + i * 20 });
+    wire(parent, negZChain, orGate.a);
+    wire(parent, negAdder.out[i]!, orGate.b);
+    negZChain = orGate.out;
+  }
+  const negZBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 7130 });
+  wire(parent, negZChain, negZBit.in);
+  // H: the identical `NOT(carries[3])` half-borrow idiom `cpBlockAdder`'s
+  // own `cpHBit` already establishes — this adder never computes
+  // anything but a subtract either.
+  const negHBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 7110 });
+  wire(parent, negAdder.carries[3]!, negHBit.in);
+  // P/V: real Z80 sets this for `NEG` on overflow alone (`A` was `0x80`,
+  // the one value whose negation doesn't fit back into a signed byte) —
+  // the identical `XOR(carries[6], carries[7])` overflow idiom the
+  // shared ALU's own `pvOverflow` already establishes.
+  const negPvBit = buildXor(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 7090 });
+  wire(parent, negAdder.carries[6]!, negPvBit.a);
+  wire(parent, negAdder.carries[7]!, negPvBit.b);
+  // C: real Z80 sets this whenever `A` was nonzero before the operation
+  // (negating `0` borrows nothing) — a fresh 8-way OR-tree over `A`'s
+  // own current bits, the identical "any bit set" idiom this file's own
+  // nonzero checks already use elsewhere, just over `A` instead of `BC`
+  // or `B`.
+  let negCChain: Pin = a.q[0]!;
+  for (let i = 1; i < 8; i++) {
+    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 7150 + i * 20 });
+    wire(parent, negCChain, orGate.a);
+    wire(parent, a.q[i]!, orGate.b);
+    negCChain = orGate.out;
+  }
+  const negCBit = negCChain;
 
   // ir.we's own PHASE0 anchor above widens to a second term: PHASE2, but
   // only while `prefixReadNow` is genuinely high — the identical "the
@@ -5500,9 +5609,17 @@ export function buildZ80Cpu(
     wire(parent, exAfAfAMux.pins[muxDef.ports[3]!]!, inMux.pins[muxDef.ports[1]!]!); // in0: the layer above
     ioPortDataIn.push(inMux.pins[muxDef.ports[2]!]!); // in1: the caller's own I/O device drives this
 
+    // NEG (see "x=00, z=4: NEG" above) is a fifth layer ahead of
+    // srcMux's own in0: `negAdder`'s own fresh `0-A` result wins only
+    // when `NEG_NOW` fires.
+    const negAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4496, y: pos.y + 1795 + i * 100 });
+    tieToLabel('NEG_NOW', negAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4396, y: pos.y + 1795 + i * 100 });
+    wire(parent, inMux.pins[muxDef.ports[3]!]!, negAMux.pins[muxDef.ports[1]!]!); // in0: the layer above
+    wire(parent, negAdder.out[i]!, negAMux.pins[muxDef.ports[2]!]!); // in1: 0-A
+
     const srcMux = makeChipInstance(parent, muxDef, { x: pos.x + 4500, y: pos.y + 1800 + i * 100 });
     wire(parent, isBusToA.out, srcMux.pins[muxDef.ports[0]!]!); // sel: LD A,z or POP AF's high byte, now?
-    wire(parent, inMux.pins[muxDef.ports[3]!]!, srcMux.pins[muxDef.ports[1]!]!); // in0: the layer above (ALU group, INC/DEC A, DAA, RLCA/RRCA/RLA/RRA/CPL, EX AF,AF', or IN A,(n))
+    wire(parent, negAMux.pins[muxDef.ports[3]!]!, srcMux.pins[muxDef.ports[1]!]!); // in0: the layer above (ALU group, INC/DEC A, DAA, RLCA/RRCA/RLA/RRA/CPL, EX AF,AF', IN A,(n), or NEG)
     tieToLabel(`BUS${i}`, srcMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4400, y: pos.y + 1800 + i * 100 }); // in1: the bus (LD's source, or POP's)
 
     const resetMux = makeChipInstance(parent, muxDef, { x: pos.x + 4600, y: pos.y + 1800 + i * 100 });
@@ -5544,8 +5661,13 @@ export function buildZ80Cpu(
   const aWeStage5 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4395, y: pos.y + 1950 });
   wire(parent, aWeStage4.out, aWeStage5.a);
   tieToLabel('IN_NOW', aWeStage5.b, { x: pos.x + 4295, y: pos.y + 1950 });
+  // NEG (see "x=00, z=4: NEG" above) needs `A`'s own `we` too — a
+  // seventh OR term.
+  const aWeStage6 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4398, y: pos.y + 1950 });
+  wire(parent, aWeStage5.out, aWeStage6.a);
+  tieToLabel('NEG_NOW', aWeStage6.b, { x: pos.x + 4298, y: pos.y + 1950 });
   const aWeFinal = buildOr(parent, vcc2, gnd2, { x: pos.x + 4400, y: pos.y + 1950 });
-  wire(parent, aWeStage5.out, aWeFinal.a);
+  wire(parent, aWeStage6.out, aWeFinal.a);
   wire(parent, aReset, aWeFinal.b);
   wire(parent, aWeFinal.out, a.we);
 
@@ -6550,6 +6672,18 @@ export function buildZ80Cpu(
       else tieToLabel('IOB_Z_NOW', outBlockFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8285, y: pos.y + 2250 + i * 100 }); // in1: Z — B reached 0
       cLayerIn = outBlockFMux.pins[muxDef.ports[3]!]!;
     }
+    // NEG (see "x=00, z=4: NEG" above) swaps the *whole* byte too — every
+    // flag bit is fresh for this instruction, real Z80 leaves nothing
+    // stale or unmodeled here — the identical "this layer runs for every
+    // `i`" shape `EX AF,AF'`'s own layer just below already establishes.
+    {
+      const negFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8378, y: pos.y + 2222 + i * 100 });
+      tieToLabel('NEG_NOW', negFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8278, y: pos.y + 2222 + i * 100 });
+      wire(parent, cLayerIn, negFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
+      const negFreshBit: Record<number, Pin> = { 0: negCBit, 1: vcc4, 2: negPvBit.out, 3: negXBit, 4: negHBit.out, 5: negYBit, 6: negZBit.out, 7: negSBit };
+      wire(parent, negFreshBit[i]!, negFMux.pins[muxDef.ports[2]!]!);
+      cLayerIn = negFMux.pins[muxDef.ports[3]!]!;
+    }
     // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) swaps the
     // *whole* byte, not just one or two bits — this layer runs for every
     // `i` that reaches this point (all eight, now that H and the two
@@ -6614,7 +6748,12 @@ export function buildZ80Cpu(
   const fWeFinal4 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9170, y: pos.y + 2290 });
   wire(parent, fWeFinal3.out, fWeFinal4.a);
   tieToLabel('OUTBLOCK_COMMIT_NOW', fWeFinal4.b, { x: pos.x + 9070, y: pos.y + 2290 });
-  wire(parent, fWeFinal4.out, f.we);
+  // NEG (see "x=00, z=4: NEG" above) needs `F`'s own `we` too — an
+  // eleventh and final OR term.
+  const fWeFinal5 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9270, y: pos.y + 2300 });
+  wire(parent, fWeFinal4.out, fWeFinal5.a);
+  tieToLabel('NEG_NOW', fWeFinal5.b, { x: pos.x + 9170, y: pos.y + 2300 });
+  wire(parent, fWeFinal5.out, f.we);
 
   // SP: same external-seed contract as B..L above — `sp.d`/`sp.we` here
   // are the caller's own sink pins, muxed ahead of the raw register the
