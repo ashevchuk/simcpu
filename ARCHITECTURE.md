@@ -3153,6 +3153,79 @@ comparison's own overflow) and `z80cpu-cpir-cpdr.test.ts` (three cases:
 to stop — and `CPDR` walking downward to its own match) — before the
 full suite: `45/45` files, `187/187` tests, still green.
 
+### x=10, z=2: INI/IND/INIR/INDR
+
+Real `0xED 0xA2`/`0xAA`/`0xB2`/`0xBA` — a third `ED`-table column, real
+Z80's `(HL)<-IN(C)`: a byte read from this project's own invented I/O
+port (see "x=11: IN A,(n) / OUT (n),A" below), addressed by `C` this
+time (not the immediate byte `n` that opcode reads), written into
+`(HL)`, then `HL+-1`, `B--` — never the `BC` pair, `C` keeps addressing
+the same port every time `INIR`/`INDR` repeats. Collides with real
+unprefixed `AND D`/`XOR D`/`OR D`/`CP D` (`z=2` — `D`, not `B`/`C` this
+time), the identical "recaptured byte reads as a real opcode" shape the
+other two `ED`-table families already establish. Real Z80 documents
+exactly two flag bits for this whole family — `Z` (`B` reaching `0`) and
+`N` (the transferred byte's own bit 7) — everything else (`S`/`H`/`P/V`/
+`C`) is famously undocumented territory, only reverse-engineered decades
+after the official manual shipped; left unmodeled here, the same
+documented-simplification stance `LDI`'s own `X`/`Y` and `CPI`'s own
+`X`/`Y` already establish, not a fresh one.
+
+**A dedicated `B-1` adder, not the shared `BCADD` pair adder.** Real
+`INI` only ever decrements `B` itself — `C` never changes, so the
+16-bit `BCADD` pair adder this file already built for `DEC BC` (and
+widened for the LD-block and CP-block families) is the wrong tool: it
+computes a *pair's* `-1`, and `C`'s own half of that would need masking
+right back out again. A standalone, permanently-wired `-1` (`op0=op1=0`,
+`cin=0`, `b` fanned to all-`1`s — the identical "add `0xFF`, no carry-in"
+convention `INC r`/`DEC r`'s own shared adder already uses for `DEC`)
+sidesteps that entirely, the same "isolated adder, no shared-decode
+collision to fight" shape `cpBlockAdder` above and `pcMinus2Adder`
+elsewhere in this file already use.
+
+**Two phases plumb the port through the same bus RAM's write already
+needs, one phase apart.** `PHASE4` publishes `C` onto the bus — this
+composite's own `ioPortAddr` is a live tap of exactly that bus, so this
+*is* the port address becoming visible, the same moment `ioRead` widens
+to strobe (a second OR term on `IN A,(n)`'s own `ioRead`, not a
+replacement — a real device wired to that pin needs to know the CPU is
+reading its port regardless of which opcode triggered it). RAM's own
+`oe` is deliberately never widened for this phase — nothing needs RAM to
+drive the bus here, and letting it try would fight `C`'s own tri-buf
+bank for the same wire. `PHASE5` publishes `ioPortDataIn` (the external
+device's own raw response — already stable the instant `ioRead` strobed,
+no holding register needed at all, unlike `ldBlockTemp`'s own value:
+this one never has to survive a phase it isn't itself driven on) back
+onto the bus for RAM's own write, address forced to `HL` by one more
+address-mux layer, the identical shape every earlier family's own write
+address override already uses. `PHASE6` commits `HL+-1`/`B--`/flags.
+
+**The repeat condition is the simplest of this file's three.** Real Z80
+stops `INIR`/`INDR` purely when `B` reaches `0` — no "found it" concept
+`CPIR`/`CPDR` also has to watch for — so `IOBLOCK_REPEAT_NOW =
+AND(ioRepeatVariantNow, IOB_NONZERO_NOW, INBLOCK_COMMIT_NOW)`, two terms
+instead of `CPBLOCK_REPEAT_NOW`'s three, gating a third and final layer
+on `pc.d`'s own mux chain, right after `LDIR`/`LDDR`'s and `CPIR`/
+`CPDR`'s own, reusing the identical `pcMinus2Adder` a third time.
+
+Verified with three dedicated tests: `z80cpu-ini.test.ts` and
+`z80cpu-ind.test.ts` (each two back-to-back transfers against a fixed
+external device — `0xAB`, bit 7 deliberately set so `N` reading `1` is a
+genuine assertion, not a coincidental default — so `B` genuinely reaches
+`0` on the second, `Z` correctly rising to `1` exactly then) and
+`z80cpu-inir-indr.test.ts` (`B` seeded to `2` so each
+of `INIR`/`INDR` genuinely repeats once and then falls through) — before
+the full suite: `48/48` files, `191/191` tests, still green.
+
+Found live writing that last test: a byte-order mixup in the test itself
+(`LD BC,0x0002` written as `[0x01, 0x02, 0x00]`, which is actually
+`LD BC,0x0200` — Z80's own `nn` operands are low byte first, so the
+*first* immediate byte becomes `C`, not `B`) produced `B` reading `0xFF`
+after a single decrement instead of `1` — a real bug, but in the test's
+own setup, not the wiring above; every register besides `B`/`C` had
+already been exercised by dozens of earlier tests using the identical
+convention correctly.
+
 ### A real solver bug this retrofit exposed — and the test that un-broke itself
 
 Adding the prefix mechanism above didn't just add inert wiring — it
@@ -3892,19 +3965,22 @@ section's own success story.
   now has its *mechanism* built (detect a prefix byte, recapture `ir`
   with the real opcode that follows, advance `pc` an extra time, and
   correctly exclude the existing unprefixed tables from misreading that
-  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above) and two
-  full columns of `ED`'s own table on top of it — `LDI`/`LDD`/`LDIR`/`LDDR`
-  (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above), real Z80's own `0xED 0xA0`/
-  `0xA8`/`0xB0`/`0xB8`, and `CPI`/`CPD`/`CPIR`/`CPDR` (see "x=10, z=1:
-  CPI/CPD/CPIR/CPDR" above), real `0xED 0xA1`/`0xA9`/`0xB1`/`0xB9` —
-  `LDIR`/`LDDR`/`CPIR`/`CPDR`'s repeat all faked by landing `PC` back on
-  its own opcode rather than by any real micro-cycle, `CPIR`/`CPDR`'s own
-  repeat condition genuinely different (stops on a match found, not only
-  on `BC` reaching `0`). The other three prefix bytes (`CB`/`DD`/`FD`)
-  and the rest of `ED`'s own table (block IO, and friends) execute
-  nothing yet — these two columns prove the mechanism works end to end
-  for a single-shot instruction, a repeat gated by one condition, and a
-  repeat gated by two, without filling in the other tables they unlock.
+  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above) and
+  three full columns of `ED`'s own table on top of it — `LDI`/`LDD`/
+  `LDIR`/`LDDR` (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above), real Z80's
+  own `0xED 0xA0`/`0xA8`/`0xB0`/`0xB8`; `CPI`/`CPD`/`CPIR`/`CPDR` (see
+  "x=10, z=1: CPI/CPD/CPIR/CPDR" above), real `0xED 0xA1`/`0xA9`/`0xB1`/
+  `0xB9`; and `INI`/`IND`/`INIR`/`INDR` (see "x=10, z=2: INI/IND/INIR/
+  INDR" above), real `0xED 0xA2`/`0xAA`/`0xB2`/`0xBA` — every repeating
+  variant's own loop faked by landing `PC` back on its own opcode rather
+  than by any real micro-cycle, each with a genuinely different repeat
+  condition (`LDIR`/`LDDR` watch `BC` alone, `CPIR`/`CPDR` also stop on a
+  match found, `INIR`/`INDR` watch `B` alone). The other three prefix
+  bytes (`CB`/`DD`/`FD`) and the rest of `ED`'s own table (the `OUT`-side
+  of block IO, and friends) execute nothing yet — these three columns
+  prove the mechanism works end to end for a single-shot instruction and
+  three differently-gated repeats, without filling in the other tables
+  they unlock.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
