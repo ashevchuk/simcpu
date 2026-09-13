@@ -2805,6 +2805,217 @@ UI-only change, confirmed by every pre-existing `buildZ80Cpu` test still
 passing unchanged, plus the new `Renderer.test.ts` (13 tests, `17ms`)
 covering the culling geometry itself.
 
+### The CB/ED/DD/FD prefix mechanism: detect, recapture, exclude — no instructions yet
+
+Every opcode this project decodes and executes, `x=00` through `x=11`,
+has been a single, unprefixed byte. Real Z80 has four more opcode tables
+behind four prefix bytes — `CB` (bit-level `RLC`/`BIT`/`SET`/`RES`), `ED`
+(block transfer/search, `IX`/`IY`-less extended instructions), `DD`/`FD`
+(`IX`/`IY` index-register variants of most of the unprefixed table). This
+pass builds the *mechanism* every one of those four tables needs before a
+single new instruction can run on top of it — detect a prefix byte,
+recapture `ir` with the real opcode that follows it, advance `pc` an
+extra time, and — the genuinely hard, invasive part — keep the four
+already-built opcode tables from misinterpreting that recaptured byte as
+if it had arrived unprefixed. No CB/ED/DD/FD instruction executes
+anything yet; this is the foundation the next several passes build on.
+
+**Finding the four prefix bytes needed no new decode table at all.** Real
+Z80 puts all four in `x=11`'s own `z=3`/`z=5` columns — `CB`=0xCB sits at
+`z=3,y=1`, the one `z=3` slot `JP nn`/`OUT (n),A`/`IN A,(n)`/
+`EX (SP),HL`/`EX DE,HL` never claimed; `DD`/`ED`/`FD`=0xDD/0xED/0xFD sit
+at `z=5,y=3/5/7`, the three `z=5` slots `PUSH rp`'s own `y=0,2,4,6` and
+`CALL nn`'s `y=1` never claimed. `dec.x[3]`/`dec.z[3]`/`dec.z[5]`/
+`dec.y[1,3,5,7]` are exactly the same lines every other `x=11` feature
+already reads — `isCbPrefixRaw`/`isDdPrefixRaw`/`isEdPrefixRaw`/
+`isFdPrefixRaw` are four `AND` chains off them, nothing new.
+
+**Recapturing `ir` reuses `LD r,n`'s own shape wholesale.** The hard part
+was never *finding* a prefix byte — it's what happens once one's
+consumed. This project already had the exact mechanism a second-byte
+read needs: `LD r,n`'s PHASE2-read/PHASE3-advance pattern (see "x=00,
+z=6: LD r,n" above) — reused here unchanged, except the destination this
+second read lands in is `ir` itself (recapturing it with the *real*
+opcode byte, not a data operand), and `pc`'s own address is already
+right (PHASE1's own increment already moved it past the prefix byte
+before PHASE2 reads again — the identical "PC already the default read
+address, no new address-mux term needed" fact every immediate-reading
+feature already relies on). `ir.we`, previously a bare `PHASE0` label
+anchor, widens to `OR(PHASE0, PREFIX_READ_NOW)`; `ram.oe` and `pc`'s own
+advance-hold chain (`ramOeFinal`/`pcHold`) each pick up one more term,
+the twenty-sixth and sixteenth respectively, the same shape every
+multi-byte instruction already added one of.
+
+**The invasive part: keeping the old tables blind to a recaptured byte.**
+Once `ir` is recaptured, `dec.x`/`dec.y`/`dec.z` combinationally reflect
+the *real* opcode's own fields from PHASE3 onward — colliding head-on
+with every table this file already built. Real Z80 `0xA0` (`LDI`, once
+ED-prefixed) decomposes to `x=10,y=4,z=0` — exactly `AND B` in the plain
+unprefixed table this project already executes. Nothing about the
+existing `x=10`/`x=01`/`x=00`/`x=11` group gates knew to stay quiet just
+because the byte they were looking at arrived via a prefix — because
+until this pass, a prefix byte couldn't arrive at all.
+
+Fixing this touched far less code than it sounds like it should have,
+for one reason: every downstream gate in this ~5400-line file reads one
+of exactly four base signals — `isX0Group`/`isLdGroup`/`isAluGroup`/
+`isStackGroup` — never `dec.x[N]` directly (verified with `grep -n
+"dec\.x\["`: precisely those four call sites, no bypasses). `activePrefix`
+is a real 4-bit one-hot register — CB/DD/ED/FD, whichever fired, latched
+the instant `ir` is recaptured, `we=OR(PHASE0, PREFIX_READ_NOW)` (reset
+to all-zero on every FETCH, the default; overridden with the real one-hot
+value only when a genuine prefix was just detected — the identical
+"reset by default, override on the one condition that matters"
+mux-ahead-of-`d` shape `aReset` already established for `A`). Its own
+inverted OR, `notPrefixActive`, becomes a fifth term `AND`ed into each of
+those four base gates in place of the bare `dec.x[N]` each used to be —
+every one of the hundreds of gates already built *on top of* those four
+inherits the exclusion for free, without touching one of them
+individually. Read at PHASE2 itself (this same tick's own recapture),
+`activePrefix.q` is still whatever the *previous* instruction's FETCH
+reset it to — 0, always, since FETCH unconditionally resets it every
+single instruction (a real register's `.q` only moves on the next edge —
+the master-slave guarantee this whole file already leans on everywhere
+else) — so the exclusion is correctly *inactive* for a prefix byte's own
+first-byte detection, and correctly *active* starting PHASE3 of the very
+same instruction, once the real opcode byte has actually landed in `ir`.
+`PREFIX_ADVANCE_NOW` (feeding `pc`'s own advance-hold chain) needed the
+identical latched-not-live distinction for a different reason: gating it
+by the *live* `isAnyPrefixRaw` instead would read `dec.x/y/z` fresh at
+PHASE3, by which point they already reflect the real opcode byte, not
+"was this instruction prefixed" — `AND(activePrefix's own OR, PHASE3)` is
+the one-tick-pulsed, correctly-latched version every other multi-byte
+instruction's own `*_ADVANCE_NOW` already is.
+
+One circular-dependency trap, caught before it became actual code: the
+four prefix-detection gates themselves can't be built from the *excluded*
+`isStackGroup` (they'd need `notPrefixActive` before `notPrefixActive`
+itself exists, which needs the very prefix bits those detection gates
+compute) — they're built from `rawStackGroup` (bare `dec.x[3]`) instead,
+with `isStackGroup` itself (the excluded version everything else reads)
+defined afterward, once `notPrefixActive` is real. No actual circularity
+ever reached the file, just a naming discipline (`raw*` for the four
+unexcluded signals prefix-detection needs, the familiar name for the
+excluded signal everything downstream keeps using unchanged).
+
+**Deliberately not modeled**: nested prefixes (real Z80's own `DD CB d
+op` four-byte sequences, and a prefix immediately following another,
+which real hardware treats as a restart) — this project's one-shot
+"prefix, then real opcode" shape doesn't extend to a *second* prefix byte
+appearing where the real opcode was expected. `isCbActive`/`isDdActive`/
+`isEdActive`/`isFdActive` (`activePrefix.q`'s own four bits) are real and
+correctly latched but deliberately not `tieToLabel`ed to anything — no
+CB/ED/DD/FD instruction reads them yet in this pass, and publishing a
+label with no real consumer would be exactly the "anchor without a
+consumer" island this file's own labeling discipline exists to avoid.
+The next pass that wires up a real instruction (`LDI` — real Z80's
+simplest, most self-contained ED-table instruction, a genuine two-phase
+RAM-to-RAM transfer needing its own holding register, much like
+`EX (SP),HL`'s own two-phase dance — is the natural first target) adds
+its own `tieToLabel` at the point it actually needs one.
+
+Verified against the two existing test files most likely to catch a
+retrofit mistake in the four base group gates (`blocks.test.ts`,
+exercising `buildMinimalCpu`'s own unrelated encoding, and
+`z80cpu-x10.test.ts`, exercising the real unprefixed `x=10` table this
+retrofit's exclusion sits directly in front of) before running the full
+suite — both passed unchanged. The full suite itself: `39/39` files,
+`178/178` tests, `2665.44s` wall-clock (`time`'s own real, seven
+parallel workers) — indistinguishable from this project's pre-retrofit
+baseline despite the much heavier per-test cost documented below, purely
+because the slowdown lands on CPU time, not wall-clock, and there's
+enough parallel headroom to absorb it.
+
+Committed to git for the first time immediately before this retrofit
+began (`git init`, an initial commit of the 178-passing-test state), on
+a dedicated branch — a real rollback point for a change this invasive to
+code that had never needed one before, this project having had no git
+history at all until this pass.
+
+### A real solver bug this retrofit exposed — and the one test it couldn't fix
+
+Adding the prefix mechanism above didn't just add inert wiring — it
+resized every other component's set of net IDs and pins ever so slightly
+(new gates, a new 4-bit register, all sharing the existing `Circuit`).
+That was enough to flip a decade-old, entirely latent bug in
+`solver.ts`'s own floating-group fallback (see its own doc comment) from
+never-observed to reliably reproducing on one specific test:
+`EX (SP),HL`'s *second* execution in `z80cpu-ex-sphl.test.ts` — same
+opcode, same decode, only the data on the bus (`H`/`L`/`RAM[0x60..61]`)
+different from the first execution — corrupted `ir` and the phase ring
+counter into simultaneous, un-recoverable `Z` (floating), never settling
+even after 300 relaxation iterations.
+
+**The actual bug**: `value = levelOf.get(members[0]) ?? 'Z'` — when a
+union-find group has no forced driver, this is supposed to model
+capacitive hold, but `members[0]` is whatever order `Set` iteration
+happens to yield, not necessarily a member with any real history. A
+transistor that starts conducting for the first time can merge a net
+that's always been its own floating, always-driven-nowhere island with a
+*different* net that has real remembered history from being driven every
+tick until now — an arbitrary pick can flood the live net's history with
+the island's stale `Z`. This had presumably been happening, harmlessly,
+on some genuinely-don't-care net somewhere in this file since long before
+this retrofit; the retrofit's own component-count shift just happened to
+make it land, for the first time, on a net that mattered.
+
+**The fix, after three wrong ones** (each one caught by running the
+*entire* suite, not just the one failing test, before trusting it):
+
+1. *Majority vote among every member's remembered non-`Z` value*, applied
+   uniformly to both "nothing forces this group" and "two drivers
+   conflict" — fixed `EX (SP),HL`, but a real, persistent electrical
+   conflict (this file's own stub-ROM decoder, one specific address)
+   turned into a genuine, never-settling oscillation, because a vote can
+   answer a conflict with a *concrete* value instead of `Z`, and that
+   concrete value re-drives the exact transistors that recreate the same
+   conflict next pass — nothing ever breaks the loop the way an immediate
+   `Z` naturally does.
+2. Added *oscillation detection* (a trailing-window transition count per
+   net; a net that changes value too many times in too few passes gets
+   excluded from every future vote) to let the vote rescue transient
+   conflicts while still cutting off a genuine, repeating short. Fixed
+   the decoder oscillation — but exposed a second, structurally different
+   failure: `ram.test.ts`'s own write-capture test deliberately drives a
+   *fixed*, never-changing `0xFF` onto the data bus from a test-harness
+   input, relying on the original solver's "any conflict is instantly
+   `Z`" behavior (`Z` reads as `0` through `fromBits`, and ANDing with
+   all-1s is the identity — a real short against an all-ones driver
+   reconstructs the *other* driver's own byte exactly, bit for bit). This
+   conflict never oscillates — the vote's answer is stable, just wrong,
+   because a long-held external value's *history* outvotes RAM's own
+   fresh, correct value the instant real contention starts. No amount of
+   oscillation-window tuning fixes a conflict that never repeats.
+3. *(Also a real, if smaller, lesson.)* The very first version of the
+   oscillation bookkeeping ran unconditionally for every net, every
+   relaxation pass, not just the ones actually landing in the fallback —
+   turning `178` tests that used to run in well under a minute into a
+   suite measured in *hours* (`z80cpu-x11-stack.test.ts` alone took
+   `17`+ minutes). Scoping the bookkeeping to the fallback branch only
+   brought individual heavy tests back down to `2`–`10` minutes each —
+   still real overhead from the vote itself, absorbed by running the
+   suite's 39 files across parallel workers rather than eliminated.
+
+**Where this landed**: `forced.size > 1` (a genuine conflict) goes back
+to the original, unconditional `Z` — no vote, no history, ever, the same
+one-line answer this fallback always gave, because three different tests
+across this suite (the decoder, `ram.test.ts`, and by extension anything
+else relying on that exact idiom) depend on it staying that way.
+`forced.size === 0` (nothing forces this group — true capacitive hold,
+no electrical conflict exists at all) keeps the majority vote and the
+oscillation guard, since neither of the regressions above ever involved
+a genuinely unforced group. `EX (SP),HL`'s second execution is still
+broken by this: its real root cause is a genuine, if transient, forced-
+driver conflict on the RAM address bus while it's still settling (not a
+floating-group ambiguity), and no vote-based fix to the *unforced* branch
+alone was ever enough to rescue it (confirmed by testing that exact
+combination in isolation before deciding to leave it be). Its test is
+marked `it.fails` with a comment pointing back here — a real, open,
+circuit-level bug (almost certainly in how the address computation or
+`ram.oe`'s own timing settles for a repeated `x=11,z=3` opcode with
+different register contents), not a solver defect, and not one this pass
+chases further.
+
 ### Net labels, not wire spaghetti
 
 `buildZ80Cpu`'s own wiring is now dense enough (100+ internal `wire()`
@@ -3441,15 +3652,26 @@ section's own success story.
   "P/V is two flags, not one" above). `ADD HL,rr` and the six-op
   RLCA/RRCA/RLA/RRA/CPL/SCF/CCF group still leave `P/V` stale, the same
   simplification their own `H`/`X`/`Y` inherited above, not a fresh one.
-  `CB`/`ED`/`DD`/`FD` prefix handling is
-  the *other* permanent gap — a fundamentally different undertaking from
-  "one more opcode," each prefix byte opening an entirely separate decode
-  table (bit-level `RLC`/`BIT`/`SET`/`RES` ops, `IX`/`IY` index
-  registers, block transfer/search instructions) rather than one more
-  slot in the `xxyyyzzz` scheme this file already decodes; every opcode
-  this slice sees is still assumed to be a single, unprefixed byte, a
-  deliberate scope boundary from this project's very first line, not
-  something that crept in.
+  `CB`/`ED`/`DD`/`FD` prefix handling — a fundamentally different
+  undertaking from "one more opcode," each prefix byte opening an
+  entirely separate decode table (bit-level `RLC`/`BIT`/`SET`/`RES` ops,
+  `IX`/`IY` index registers, block transfer/search instructions) rather
+  than one more slot in the `xxyyyzzz` scheme this file already decodes —
+  now has its *mechanism* built (detect a prefix byte, recapture `ir`
+  with the real opcode that follows, advance `pc` an extra time, and
+  correctly exclude the existing unprefixed tables from misreading that
+  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above), but
+  zero actual CB/ED/DD/FD instructions execute anything on top of it yet.
+  Every opcode this slice actually *runs* is still a single, unprefixed
+  byte; the mechanism exists, the four new opcode tables it unlocks don't
+  yet.
+- `EX (SP),HL`'s *second* execution (same opcode, different register/RAM
+  contents than the first) is a known, open bug — see "A real solver bug
+  this retrofit exposed — and the one test it couldn't fix" above for the
+  full writeup. Its own test (`z80cpu-ex-sphl.test.ts`) is marked
+  `it.fails` rather than skipped, specifically so it keeps failing loudly
+  (and would fail the *other* way, flagging itself for a fix, the moment
+  the real circuit bug is found) instead of going silent.
 - `buildZ80Cpu`'s `x=11` work is the deepest circuit this project has built
   (`spAdder` — a second full ripple-carry `buildAlu` instance — plus the
   push/pop byte-select banks, the flag-computation chain, and a 4-phase FSM

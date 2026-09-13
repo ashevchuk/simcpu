@@ -2074,6 +2074,168 @@ export function buildZ80Cpu(
   // as 13 separate long lines.
   fsm.phase.forEach((p, k) => tieToLabel(`PHASE${k}`, p!, { x: pos.x + k * 100, y: pos.y + 3500 }));
 
+  // --- CB/ED/DD/FD prefix bytes --------------------------------------
+  // Real Z80 puts all four prefix opcodes in x=11's own z=3/z=5 columns —
+  // the four y-slots this project's own PUSH rp/CALL nn/JP nn/EX(SP),HL/
+  // etc. groups never claimed: `CB`=0xCB (z=3,y=1, the one z=3 slot
+  // "x=11: EX DE,HL" and friends left empty), `DD`/`ED`/`FD`=0xDD/0xED/
+  // 0xFD (z=5,y=3/5/7, the three z=5 slots PUSH rp's own y=0,2,4,6 and
+  // CALL nn's y=1 never claimed). No new decode table needed to *find*
+  // them — `dec.x[3]`/`dec.z[3]`/`dec.z[5]`/`dec.y[1,3,5,7]` are exactly
+  // the same lines every other x=11 feature already reads.
+  //
+  // The hard part isn't detecting a prefix byte, it's what happens once
+  // one's been consumed. A real Z80 prefix byte doesn't execute anything
+  // itself — it's "read one more byte, and interpret THAT one through a
+  // completely different table." This project already has the exact
+  // mechanism a second-byte read needs: `LD r,n`'s own PHASE2-read/
+  // PHASE3-advance shape (see "x=00, z=6: LD r,n" above) — reused here
+  // wholesale, except the destination this second read lands in is `ir`
+  // itself (recapturing IR with the *real* opcode byte, not a data
+  // operand), and PC's own address is already right (PHASE1's own
+  // increment already moved it past the prefix byte before PHASE2 reads
+  // again — the identical "PC already the default read address, no new
+  // address-mux term needed" fact every immediate-reading feature already
+  // relies on).
+  //
+  // Once IR is recaptured, `dec.x`/`dec.y`/`dec.z` combinationally reflect
+  // the REAL opcode byte's own fields from PHASE2 onward — which collides
+  // head-on with every table this file already built: `0xA0` (real Z80
+  // `LDI`, once ED-prefixed) decomposes to `x=10,y=4,z=0`, exactly `AND B`
+  // in the plain unprefixed table this project already executes. Nothing
+  // about the existing `x=10`/`x=01`/`x=00`/`x=11` group gates knows to
+  // stay quiet just because the byte they're looking at arrived via a
+  // prefix. `activePrefix` (below) is a real one-hot latch — CB/DD/ED/FD,
+  // whichever fired, captured the instant IR is recaptured — and
+  // `notPrefixActive` (its own inverted OR) becomes a fifth term ANDed
+  // into all four base group gates (`isX0Group`/`isLdGroup`/`isAluGroup`/
+  // `isStackGroup`, redefined below using it, in place of the bare
+  // `dec.x[N]` each used to be) — every one of the hundreds of gates
+  // already built *on top of* those four inherits the exclusion for free,
+  // without touching one of them individually. Read at PHASE2 itself
+  // (this same tick's own recapture), `activePrefix` is still whatever
+  // *last* instruction's own FETCH reset it to (a real register's `.q`
+  // only moves on the next edge — the master-slave guarantee this whole
+  // file already leans on everywhere else) — 0, always, since FETCH
+  // (PHASE0) unconditionally resets it every single instruction — so the
+  // exclusion is correctly *inactive* for a prefix byte's own first-byte
+  // detection, and correctly *active* starting PHASE3 of the very same
+  // instruction, once the real opcode byte has actually landed in `ir`.
+  //
+  // Nested prefixes (real Z80's own `DD CB d op` 4-byte sequences, and a
+  // prefix immediately following another, which real hardware treats as a
+  // restart) aren't modeled — this project's own one-shot "prefix, then
+  // real opcode" shape doesn't extend to a *second* prefix byte appearing
+  // where the real opcode was expected, a real, documented limitation, not
+  // a hidden one.
+  const rawStackGroup = dec.x[3]!;
+  const isCbPrefixZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8700, y: pos.y - 4200 });
+  wire(parent, rawStackGroup, isCbPrefixZ.a);
+  wire(parent, dec.z[3]!, isCbPrefixZ.b);
+  const isCbPrefixRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8750, y: pos.y - 4200 });
+  wire(parent, isCbPrefixZ.out, isCbPrefixRaw.a);
+  wire(parent, dec.y[1]!, isCbPrefixRaw.b);
+  const isPrefixZ5 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8700, y: pos.y - 4150 });
+  wire(parent, rawStackGroup, isPrefixZ5.a);
+  wire(parent, dec.z[5]!, isPrefixZ5.b);
+  const isDdPrefixRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8750, y: pos.y - 4150 });
+  wire(parent, isPrefixZ5.out, isDdPrefixRaw.a);
+  wire(parent, dec.y[3]!, isDdPrefixRaw.b);
+  const isEdPrefixRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8750, y: pos.y - 4100 });
+  wire(parent, isPrefixZ5.out, isEdPrefixRaw.a);
+  wire(parent, dec.y[5]!, isEdPrefixRaw.b);
+  const isFdPrefixRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8750, y: pos.y - 4050 });
+  wire(parent, isPrefixZ5.out, isFdPrefixRaw.a);
+  wire(parent, dec.y[7]!, isFdPrefixRaw.b);
+
+  const isAnyPrefixRawStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 8800, y: pos.y - 4175 });
+  wire(parent, isCbPrefixRaw.out, isAnyPrefixRawStage.a);
+  wire(parent, isDdPrefixRaw.out, isAnyPrefixRawStage.b);
+  const isAnyPrefixRawStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 8800, y: pos.y - 4075 });
+  wire(parent, isEdPrefixRaw.out, isAnyPrefixRawStage2.a);
+  wire(parent, isFdPrefixRaw.out, isAnyPrefixRawStage2.b);
+  const isAnyPrefixRaw = buildOr(parent, vcc3, gnd3, { x: pos.x + 8850, y: pos.y - 4125 });
+  wire(parent, isAnyPrefixRawStage.out, isAnyPrefixRaw.a);
+  wire(parent, isAnyPrefixRawStage2.out, isAnyPrefixRaw.b);
+
+  const prefixReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8900, y: pos.y - 4125 });
+  wire(parent, isAnyPrefixRaw.out, prefixReadNow.a);
+  tieToLabel('PHASE2', prefixReadNow.b, { x: pos.x + 8800, y: pos.y - 4125 });
+  tieToLabel('PREFIX_READ_NOW', prefixReadNow.out, { x: pos.x + 9000, y: pos.y - 4125 }); // anchor — ramOeFinal (far) reads this via the label; `irWe` (right below) reads it by direct wire instead, same scope
+
+  // `activePrefix`: a real 4-bit one-hot register, not just a combinational
+  // signal — it has to survive from PHASE2 (when it's written) through
+  // every later phase of this same instruction, long after `ir`'s own
+  // recapture has overwritten the very bits `isCbPrefixRaw`/etc read to
+  // detect it. `we=OR(PHASE0, prefixReadNow)` fires on *every* instruction's
+  // own FETCH (writing all-zero — no prefix, the default) as well as on a
+  // genuine prefix detection (writing the real one-hot value) — the same
+  // "reset by default, override on the one condition that matters" mux-
+  // ahead-of-`d` shape `aReset` already established for `A`.
+  const activePrefix = buildRegister(parent, library, 4, { x: pos.x + 8900, y: pos.y - 6600 });
+  tieToLabel('CLK', activePrefix.clk, { x: pos.x + 8900, y: pos.y - 6620 });
+  const activePrefixWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y - 6500 });
+  tieToLabel('PHASE0', activePrefixWe.a, { x: pos.x + 8850, y: pos.y - 6500 });
+  wire(parent, prefixReadNow.out, activePrefixWe.b);
+  wire(parent, activePrefixWe.out, activePrefix.we);
+  const prefixBits = [isCbPrefixRaw.out, isDdPrefixRaw.out, isEdPrefixRaw.out, isFdPrefixRaw.out];
+  for (let i = 0; i < 4; i++) {
+    const dMux = makeChipInstance(parent, muxDef, { x: pos.x + 9000, y: pos.y - 6600 + i * 100 });
+    tieToLabel('PHASE0', dMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8900, y: pos.y - 6600 + i * 100 }); // sel: FETCH forces the reset branch
+    wire(parent, prefixBits[i]!, dMux.pins[muxDef.ports[1]!]!); // in0: the freshly-detected prefix, valid only when PHASE0=0 (i.e. this write is really prefixReadNow's)
+    wire(parent, gnd3, dMux.pins[muxDef.ports[2]!]!); // in1: FETCH's own reset-to-0
+    wire(parent, dMux.pins[muxDef.ports[3]!]!, activePrefix.d[i]!);
+  }
+  const isCbActive = activePrefix.q[0]!;
+  const isDdActive = activePrefix.q[1]!;
+  const isEdActive = activePrefix.q[2]!;
+  const isFdActive = activePrefix.q[3]!;
+  const anyPrefixActiveStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6550 });
+  wire(parent, isCbActive, anyPrefixActiveStage.a);
+  wire(parent, isDdActive, anyPrefixActiveStage.b);
+  const anyPrefixActiveStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6450 });
+  wire(parent, isEdActive, anyPrefixActiveStage2.a);
+  wire(parent, isFdActive, anyPrefixActiveStage2.b);
+  const anyPrefixActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6500 });
+  wire(parent, anyPrefixActiveStage.out, anyPrefixActive.a);
+  wire(parent, anyPrefixActiveStage2.out, anyPrefixActive.b);
+  const notPrefixActive = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6500 });
+  wire(parent, anyPrefixActive.out, notPrefixActive.in);
+  tieToLabel('NOT_PREFIX_ACTIVE', notPrefixActive.out, { x: pos.x + 9250, y: pos.y - 6500 }); // anchor — isX0Group/isLdGroup/isAluGroup/isStackGroup (all far) read this
+  // PC's own second advance (below) needs this true for exactly one phase,
+  // PHASE3 — not the bare latch, which stays high for the rest of the
+  // instruction (see the "CB/ED/DD/FD prefix bytes" doc comment above for
+  // why `pc.d`'s own mux only ever wants a fresh advance pulsed once, the
+  // identical shape every other multi-byte read's own `*_ADVANCE_NOW`
+  // already uses).
+  const prefixAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6450 });
+  wire(parent, anyPrefixActive.out, prefixAdvanceNow.a);
+  tieToLabel('PHASE3', prefixAdvanceNow.b, { x: pos.x + 9150, y: pos.y - 6450 });
+  tieToLabel('PREFIX_ADVANCE_NOW', prefixAdvanceNow.out, { x: pos.x + 9350, y: pos.y - 6450 }); // anchor — PC's own advance (far) reads this
+  // `isCbActive`/`isDdActive`/`isEdActive`/`isFdActive` (above) are real,
+  // correct, individually addressable signals — deliberately not
+  // `tieToLabel`ed to anything yet. No CB/ED/DD/FD-table instruction is
+  // wired up in this pass (see the doc comment above: this pass builds and
+  // proves the *mechanism* — detect a prefix, recapture `ir`, advance `pc`
+  // an extra time, and correctly exclude the old unprefixed tables from
+  // misreading the second byte — not any specific instruction on top of
+  // it). Publishing a label with no real consumer yet would be exactly the
+  // "anchor without a consumer" island this file's own labeling discipline
+  // exists to avoid; the next pass that wires up a real ED/CB/DD/FD
+  // instruction adds its own `tieToLabel('IS_ED_ACTIVE', isEdActive, ...)`
+  // (or the CB/DD/FD equivalent) at the point it actually needs one, not
+  // before.
+
+  // ir.we's own PHASE0 anchor above widens to a second term: PHASE2, but
+  // only while `prefixReadNow` is genuinely high — the identical "the
+  // shared bus already carries the right value by the time this fires"
+  // reasoning `LDIMM8_READ_NOW` relies on for every register that reads an
+  // immediate operand off it, except here the *destination* is `ir` itself.
+  const irWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 4300 });
+  tieToLabel('PHASE0', irWe.a, { x: pos.x + 8950, y: pos.y - 4300 });
+  wire(parent, prefixReadNow.out, irWe.b);
+  wire(parent, irWe.out, ir.we);
+
   // ir.q[3..5] (y's own real bits, not dec.y's one-hot lines — see the
   // RST-target doc comment further down for why that distinction matters)
   // only has one far consumer, RST's own PC-target mux at pos.x-200 — still
@@ -2102,27 +2264,43 @@ export function buildZ80Cpu(
   }
   pc.q.forEach((q, i) => tieToLabel(`REGPC${i}`, q, { x: pos.x - 100, y: pos.y - 40 - i * 20 }));
 
-  // FETCH (phase 0): RAM drives the bus, IR captures it. (ram.pins.oe/we
-  // are wired below, once the decode logic that gates them exists.) IR's
-  // own `d` is this composite's actual shared-bus net — RAM's data pins
-  // wire straight to it (short, local, no label needed), and it's also
-  // tied to the `BUS0`-`BUS7` labels every other bus touch point below
-  // uses, so it's the one thing anchoring the label group to a real net
-  // rather than the labels forming a same-named-but-disconnected island.
+  // FETCH (phase 0): RAM drives the bus, IR captures it. `ir.we` itself is
+  // wired above (`irWe`) — PHASE0 unconditionally, plus a second, later
+  // term for the CB/ED/DD/FD prefix bytes' own second-byte recapture — not
+  // a bare label anchor here anymore. (ram.pins.oe/we are wired below,
+  // once the decode logic that gates them exists.) IR's own `d` is this
+  // composite's actual shared-bus net — RAM's data pins wire straight to
+  // it (short, local, no label needed), and it's also tied to the
+  // `BUS0`-`BUS7` labels every other bus touch point below uses, so it's
+  // the one thing anchoring the label group to a real net rather than the
+  // labels forming a same-named-but-disconnected island.
   ramDataPins(ram).forEach((p, i) => {
     wire(parent, p, ir.d[i]!);
     tieToLabel(`BUS${i}`, ir.d[i]!, { x: pos.x + 2500, y: pos.y - 60 - i * 20 });
   });
-  tieToLabel('PHASE0', ir.we, { x: pos.x + 2500, y: pos.y - 40 });
 
   // Real Z80 decode: x=10 (dec.x[2]) is ALU-on-register, x=01 (dec.x[1]) is
   // LD r,r' — see the doc comment above for what each group's y/z mean.
-  const isAluGroup = dec.x[2]!;
+  // Each of the four is now `AND`ed with `NOT_PREFIX_ACTIVE` (see the
+  // "CB/ED/DD/FD prefix bytes" doc comment above) instead of a bare
+  // `dec.x[N]` — the one change every downstream gate already built on top
+  // of these four inherits for free, since none of them read `dec.x[N]`
+  // directly (verified: `dec.x[` has exactly these four call sites in the
+  // whole file).
+  const rawAluGroup = dec.x[2]!;
+  const isAluGroupGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y - 220 });
+  wire(parent, rawAluGroup, isAluGroupGate.a);
+  tieToLabel('NOT_PREFIX_ACTIVE', isAluGroupGate.b, { x: pos.x + 8850, y: pos.y - 220 });
+  const isAluGroup = isAluGroupGate.out;
   const aluGroupNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y - 200 });
   wire(parent, isAluGroup, aluGroupNow.a);
   tieToLabel('PHASE2', aluGroupNow.b, { x: pos.x + 8900, y: pos.y - 200 });
 
-  const isLdGroup = dec.x[1]!;
+  const rawLdGroup = dec.x[1]!;
+  const isLdGroupGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y + 130 });
+  wire(parent, rawLdGroup, isLdGroupGate.a);
+  tieToLabel('NOT_PREFIX_ACTIVE', isLdGroupGate.b, { x: pos.x + 8850, y: pos.y + 130 });
+  const isLdGroup = isLdGroupGate.out;
   const ldGroupNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y + 150 });
   wire(parent, isLdGroup, ldGroupNow.a);
   tieToLabel('PHASE2', ldGroupNow.b, { x: pos.x + 8900, y: pos.y + 150 });
@@ -2140,7 +2318,11 @@ export function buildZ80Cpu(
   // or writes RAM and never touches the shared operand bus, only the
   // register file directly, so none of the bus-fight machinery those two
   // signals exist for applies here.
-  const isX0Group = dec.x[0]!;
+  const rawX0Group = dec.x[0]!;
+  const isX0GroupGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 720 });
+  wire(parent, rawX0Group, isX0GroupGate.a);
+  tieToLabel('NOT_PREFIX_ACTIVE', isX0GroupGate.b, { x: pos.x + 8950, y: pos.y - 720 });
+  const isX0Group = isX0GroupGate.out;
   const isIncDecRr = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 700 });
   wire(parent, isX0Group, isIncDecRr.a);
   wire(parent, dec.z[3]!, isIncDecRr.b);
@@ -2857,16 +3039,26 @@ export function buildZ80Cpu(
   tieToLabel('NN_DATA_ADDR_PLUS_ONE_NOW', isNnDataAddrPlusOneNow.out, { x: pos.x + 9400, y: pos.y - 6300 });
 
   // x=11: PUSH rp / POP rp / RET / RST n — see the doc comment above
-  // ("x=11: SP, PUSH/POP, RET, RST n") for the full derivation.
-  const isStackGroup = dec.x[3]!;
+  // ("x=11: SP, PUSH/POP, RET, RST n") for the full derivation. `rawStackGroup`
+  // itself (bare `dec.x[3]`) was built way up with the CB/ED/DD/FD prefix
+  // detection, which needs the *unexcluded* signal (see that doc comment
+  // for why); `isStackGroup` here is the excluded one every real x=11
+  // feature below reads, the same "AND with NOT_PREFIX_ACTIVE" treatment
+  // `isX0Group`/`isLdGroup`/`isAluGroup` already got.
+  const isStackGroupGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6350 });
+  wire(parent, rawStackGroup, isStackGroupGate.a);
+  tieToLabel('NOT_PREFIX_ACTIVE', isStackGroupGate.b, { x: pos.x + 9250, y: pos.y - 6350 });
+  const isStackGroup = isStackGroupGate.out;
   const execPhaseActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 500 });
   tieToLabel('PHASE2', execPhaseActive.a, { x: pos.x + 9600, y: pos.y + 500 });
   tieToLabel('PHASE3', execPhaseActive.b, { x: pos.x + 9600, y: pos.y + 530 });
 
   // PUSH rp: z=101, valid only for y=000,010,100,110 (BC/DE/HL/AF) — the
-  // rest of this z-column is CALL nn and the CB/ED/DD/FD prefix bytes,
-  // none implemented; excluding them keeps those opcodes inert instead of
-  // silently corrupting RAM/SP if one is ever fetched.
+  // rest of this z-column is CALL nn (y=001, implemented) and the DD/ED/FD
+  // prefix bytes (y=011,101,111, detected above but never reaching PUSH's
+  // own logic — see "CB/ED/DD/FD prefix bytes"); excluding the latter here
+  // keeps this PUSH-specific decode from misfiring on them, same as it
+  // always did before the prefix bytes had any meaning of their own.
   const pushValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 650 });
   wire(parent, dec.y[0]!, pushValid1.a);
   wire(parent, dec.y[2]!, pushValid1.b);
@@ -3653,9 +3845,16 @@ export function buildZ80Cpu(
   // IN A,(n)/OUT (n),A's own immediate-byte read (see "x=11: IN A,(n) /
   // OUT (n),A" above) — a twenty-fifth widening, same "PC already the
   // default read address" reasoning.
-  const ramOeFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9850, y: pos.y + 0 });
-  wire(parent, ramOeStage24.out, ramOeFinal.a);
-  tieToLabel('IOIMM_READ_NOW', ramOeFinal.b, { x: pos.x + 9750, y: pos.y + 0 });
+  const ramOeStage25 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9850, y: pos.y + 0 });
+  wire(parent, ramOeStage24.out, ramOeStage25.a);
+  tieToLabel('IOIMM_READ_NOW', ramOeStage25.b, { x: pos.x + 9750, y: pos.y + 0 });
+  // CB/ED/DD/FD's own second-byte read (see "CB/ED/DD/FD prefix bytes"
+  // above) — a twenty-sixth and final widening, same "PC already the
+  // default read address" reasoning every immediate-reading feature above
+  // already established.
+  const ramOeFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 25 });
+  wire(parent, ramOeStage25.out, ramOeFinal.a);
+  tieToLabel('PREFIX_READ_NOW', ramOeFinal.b, { x: pos.x + 9800, y: pos.y + 25 });
   wire(parent, ramOeFinal.out, ram.pins.oe!);
 
   // SP's own +-1 adder: a *second* buildAlu instance (width addrBits, not
@@ -3927,8 +4126,16 @@ export function buildZ80Cpu(
   const pcHoldStage15 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 950 });
   wire(parent, pcHoldStage14.out, pcHoldStage15.a);
   tieToLabel('IOIMM_ADVANCE_NOW', pcHoldStage15.b, { x: pos.x - 400, y: pos.y - 950 });
+  // CB/ED/DD/FD's own second advance, past the real opcode byte their own
+  // prefix byte was standing in front of (see "CB/ED/DD/FD prefix bytes"
+  // above) — `PREFIX_ADVANCE_NOW` (the latch ANDed with PHASE3), not the
+  // bare latch itself, which stays high for the rest of the instruction
+  // and would otherwise re-fire this same advance every phase after.
+  const pcHoldFinal = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1000 });
+  wire(parent, pcHoldStage15.out, pcHoldFinal.a);
+  tieToLabel('PREFIX_ADVANCE_NOW', pcHoldFinal.b, { x: pos.x - 400, y: pos.y - 1000 });
   const notPhase1 = buildNot(parent, vcc, gnd, { x: pos.x - 200, y: pos.y - 200 });
-  wire(parent, pcHoldStage15.out, notPhase1.in);
+  wire(parent, pcHoldFinal.out, notPhase1.in);
   wire(parent, notPhase1.out, pc.load);
 
   // JP nn's own target: a dedicated `addrBits`-wide holding register, not
