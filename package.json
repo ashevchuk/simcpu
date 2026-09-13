@@ -1,0 +1,19 @@
+{
+  "name": "z80-circuit-sim",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Transistor-level circuit simulator, foundation for an in-browser Z80-based retro computer (inspired by cs.khanin.info).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
+  }
+}

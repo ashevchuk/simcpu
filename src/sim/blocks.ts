@@ -1,0 +1,5684 @@
+// Composite structures built by *using the hierarchy system itself*
+// (fold()/foldExposing() + makeChipInstance() in a loop), not by wiring
+// more raw transistors by hand. This is the point of hierarchy: an N-bit
+// register or ALU is "one bit, folded into a chip, replicated N times and
+// wired together" — the same technique already proven in
+// hierarchy.test.ts's nested-fold tests, now put to actual use.
+
+import type { ChipDef, ChipLibrary } from './ChipLibrary.js';
+import { Circuit } from './Circuit.js';
+import { foldExposing } from './hierarchy.js';
+import {
+  buildAnd,
+  buildDecoder,
+  buildFullAdder,
+  buildHalfAdder,
+  buildMux2,
+  buildMux4,
+  buildNot,
+  buildOr,
+  buildTriStateBuffer,
+  CHIP_INSTANCE_WIDTH,
+  buildXor,
+  chipInstanceHeight,
+  makeChipInstance,
+  makeLabel,
+  makeRam,
+  makeSource,
+  ramAddrPins,
+  ramDataPins,
+  wire,
+} from './library.js';
+import { buildRegisterBit } from './sequential.js';
+import type { Pin, Point, RamComponent } from './types.js';
+
+/** Fold buildRegisterBit() into a reusable 1-bit register chip. Ports, in order: d, we, clk, q, qn. */
+function makeRegisterBitChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  const vcc = makeSource(scratch, 1).pins.out;
+  const gnd = makeSource(scratch, 0).pins.out;
+  const bit = buildRegisterBit(scratch, vcc, gnd);
+  return foldExposing(scratch, 'REG_BIT', library, [
+    { pin: bit.d, isOutput: false },
+    { pin: bit.we, isOutput: false },
+    { pin: bit.clk, isOutput: false },
+    { pin: bit.q, isOutput: true },
+    { pin: bit.qn, isOutput: true },
+  ]);
+}
+
+// One REG_BIT def per ChipLibrary, however many registers get built against
+// it — keeps the chip palette from accumulating a duplicate-named entry
+// per call, since every instance of a register is just this one chip
+// placed several times over (see buildRegister below).
+const registerBitDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getRegisterBitChip(library: ChipLibrary): ChipDef {
+  let def = registerBitDefs.get(library);
+  if (!def) {
+    def = makeRegisterBitChip(library);
+    registerBitDefs.set(library, def);
+  }
+  return def;
+}
+
+export interface Register {
+  d: Pin[];
+  q: Pin[];
+  qn: Pin[];
+  we: Pin;
+  clk: Pin;
+}
+
+/**
+ * Places `bits` instances of the (shared) 1-bit register chip into
+ * `parent`, ties all their WE pins together into one net and all their CLK
+ * pins together into another, and returns per-bit D/Q/QN pins for the
+ * caller to wire up individually — exactly the same composable-primitive
+ * shape as buildFullAdder() or buildMux2(), just assembled from chip
+ * instances instead of bare transistors.
+ */
+export function buildRegister(parent: Circuit, library: ChipLibrary, bits: number, pos: Point = { x: 0, y: 0 }): Register {
+  const def = getRegisterBitChip(library);
+  const d: Pin[] = [];
+  const q: Pin[] = [];
+  const qn: Pin[] = [];
+  let we!: Pin;
+  let clk!: Pin;
+  const stepY = chipInstanceHeight(def.ports.length) + 20; // box height + a visible gap between instances
+
+  for (let i = 0; i < bits; i++) {
+    const inst = makeChipInstance(parent, def, { x: pos.x, y: pos.y + i * stepY });
+    const dPin = inst.pins[def.ports[0]!]!;
+    const wePin = inst.pins[def.ports[1]!]!;
+    const clkPin = inst.pins[def.ports[2]!]!;
+    const qPin = inst.pins[def.ports[3]!]!;
+    const qnPin = inst.pins[def.ports[4]!]!;
+    d.push(dPin);
+    q.push(qPin);
+    qn.push(qnPin);
+    if (i === 0) {
+      we = wePin;
+      clk = clkPin;
+    } else {
+      wire(parent, we, wePin);
+      wire(parent, clk, clkPin);
+    }
+  }
+
+  return { d, q, qn, we, clk };
+}
+
+export interface AluSlice {
+  a: Pin;
+  b: Pin;
+  cin: Pin;
+  op0: Pin;
+  op1: Pin;
+  out: Pin;
+  cout: Pin;
+}
+
+/**
+ * 1-bit ALU slice: a full adder plus AND/OR/XOR of the same two inputs, all
+ * four results fed into a 4:1 mux selected by a 2-bit opcode — op=00 ADD,
+ * 01 AND, 10 OR, 11 XOR. `cout` always reflects the adder regardless of
+ * the selected op (chaining N of these — see buildAlu below — only makes
+ * sense for ADD, but there's no harm wiring the carry chain unconditionally).
+ */
+export function buildAluSlice(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): AluSlice {
+  const adder = buildFullAdder(circuit, vcc, gnd, pos);
+  const andG = buildAnd(circuit, vcc, gnd, { x: pos.x, y: pos.y + 1400 });
+  const orG = buildOr(circuit, vcc, gnd, { x: pos.x, y: pos.y + 1700 });
+  const xorG = buildXor(circuit, vcc, gnd, { x: pos.x, y: pos.y + 2000 });
+  const mux = buildMux4(circuit, vcc, gnd, { x: pos.x + 1500, y: pos.y + 800 });
+
+  wire(circuit, adder.a, andG.a);
+  wire(circuit, adder.a, orG.a);
+  wire(circuit, adder.a, xorG.a);
+  wire(circuit, adder.b, andG.b);
+  wire(circuit, adder.b, orG.b);
+  wire(circuit, adder.b, xorG.b);
+
+  wire(circuit, adder.sum, mux.in0); // op 00: ADD
+  wire(circuit, andG.out, mux.in1); // op 01: AND
+  wire(circuit, orG.out, mux.in2); // op 10: OR
+  wire(circuit, xorG.out, mux.in3); // op 11: XOR
+
+  return { a: adder.a, b: adder.b, cin: adder.cin, op0: mux.sel0, op1: mux.sel1, out: mux.out, cout: adder.cout };
+}
+
+/** Fold buildAluSlice() into a reusable 1-bit ALU chip. Ports, in order: a, b, cin, op0, op1, out, cout. */
+function makeAluSliceChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  const vcc = makeSource(scratch, 1).pins.out;
+  const gnd = makeSource(scratch, 0).pins.out;
+  const slice = buildAluSlice(scratch, vcc, gnd);
+  return foldExposing(scratch, 'ALU_SLICE', library, [
+    { pin: slice.a, isOutput: false },
+    { pin: slice.b, isOutput: false },
+    { pin: slice.cin, isOutput: false },
+    { pin: slice.op0, isOutput: false },
+    { pin: slice.op1, isOutput: false },
+    { pin: slice.out, isOutput: true },
+    { pin: slice.cout, isOutput: true },
+  ]);
+}
+
+// One ALU_SLICE def per ChipLibrary — see the identical reasoning on
+// registerBitDefs above.
+const aluSliceDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getAluSliceChip(library: ChipLibrary): ChipDef {
+  let def = aluSliceDefs.get(library);
+  if (!def) {
+    def = makeAluSliceChip(library);
+    aluSliceDefs.set(library, def);
+  }
+  return def;
+}
+
+export interface Alu {
+  a: Pin[];
+  b: Pin[];
+  out: Pin[];
+  cin: Pin;
+  cout: Pin;
+  op0: Pin;
+  op1: Pin;
+  /** Each slice's own `cout`, LSB to MSB — `carries[bits-1] === cout`, the same pin, not a copy. Exposed so a caller can read an *interior* carry (e.g. `carries[3]`, the nibble boundary every half-carry flag on real hardware is defined by) without reaching past this interface into the chip instances `buildAlu` folded away. */
+  carries: Pin[];
+}
+
+/**
+ * N-bit ALU: `bits` instances of the (shared) 1-bit ALU-slice chip, ripple-
+ * carry chained — each slice's `cout` wired straight into the next slice's
+ * `cin`, LSB (index 0) to MSB. `op0`/`op1` are tied together across every
+ * slice (the whole ALU performs one operation at a time on all bits); the
+ * overall `cin`/`cout` are simply the chain's two open ends, bit 0's cin and
+ * bit `bits-1`'s cout.
+ *
+ * For AND/OR/XOR the carry chain is along for the ride but electrically
+ * inert (each slice's own cout still reflects its internal adder,
+ * regardless of the selected op — see buildAluSlice's doc comment) — only
+ * ADD's result actually depends on the incoming carry.
+ */
+export function buildAlu(parent: Circuit, library: ChipLibrary, bits: number, pos: Point = { x: 0, y: 0 }): Alu {
+  const def = getAluSliceChip(library);
+  const a: Pin[] = [];
+  const b: Pin[] = [];
+  const out: Pin[] = [];
+  const carries: Pin[] = [];
+  let cin!: Pin;
+  let cout!: Pin;
+  let op0!: Pin;
+  let op1!: Pin;
+
+  for (let i = 0; i < bits; i++) {
+    const inst = makeChipInstance(parent, def, { x: pos.x + i * (CHIP_INSTANCE_WIDTH + 40), y: pos.y });
+    const aPin = inst.pins[def.ports[0]!]!;
+    const bPin = inst.pins[def.ports[1]!]!;
+    const cinPin = inst.pins[def.ports[2]!]!;
+    const op0Pin = inst.pins[def.ports[3]!]!;
+    const op1Pin = inst.pins[def.ports[4]!]!;
+    const outPin = inst.pins[def.ports[5]!]!;
+    const coutPin = inst.pins[def.ports[6]!]!;
+
+    a.push(aPin);
+    b.push(bPin);
+    out.push(outPin);
+
+    if (i === 0) {
+      cin = cinPin;
+      op0 = op0Pin;
+      op1 = op1Pin;
+    } else {
+      wire(parent, cout, cinPin); // ripple: previous slice's carry-out feeds this slice's carry-in
+      wire(parent, op0, op0Pin);
+      wire(parent, op1, op1Pin);
+    }
+    cout = coutPin;
+    carries.push(coutPin);
+  }
+
+  return { a, b, out, cin, cout, op0, op1, carries };
+}
+
+/** Fold buildHalfAdder() into a reusable chip. Ports, in order: a, b, sum, cout. */
+function makeHalfAdderChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  const vcc = makeSource(scratch, 1).pins.out;
+  const gnd = makeSource(scratch, 0).pins.out;
+  const ha = buildHalfAdder(scratch, vcc, gnd);
+  return foldExposing(scratch, 'HALF_ADDER', library, [
+    { pin: ha.a, isOutput: false },
+    { pin: ha.b, isOutput: false },
+    { pin: ha.sum, isOutput: true },
+    { pin: ha.cout, isOutput: true },
+  ]);
+}
+
+/** Fold buildMux2() into a reusable chip. Ports, in order: sel, in0, in1, out. */
+function makeMux2Chip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  const vcc = makeSource(scratch, 1).pins.out;
+  const gnd = makeSource(scratch, 0).pins.out;
+  const m = buildMux2(scratch, vcc, gnd);
+  return foldExposing(scratch, 'MUX2', library, [
+    { pin: m.sel, isOutput: false },
+    { pin: m.in0, isOutput: false },
+    { pin: m.in1, isOutput: false },
+    { pin: m.out, isOutput: true },
+  ]);
+}
+
+// One def each per ChipLibrary — see the identical reasoning on
+// registerBitDefs above. buildProgramCounter caches its own HALF_ADDER and
+// MUX2 rather than assuming seedStandardCells() already registered
+// same-named ones, so it works standalone in a library that never called it.
+const halfAdderDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getHalfAdderChip(library: ChipLibrary): ChipDef {
+  let def = halfAdderDefs.get(library);
+  if (!def) {
+    def = makeHalfAdderChip(library);
+    halfAdderDefs.set(library, def);
+  }
+  return def;
+}
+const mux2Defs = new WeakMap<ChipLibrary, ChipDef>();
+function getMux2Chip(library: ChipLibrary): ChipDef {
+  let def = mux2Defs.get(library);
+  if (!def) {
+    def = makeMux2Chip(library);
+    mux2Defs.set(library, def);
+  }
+  return def;
+}
+
+export interface ProgramCounter {
+  d: Pin[];
+  load: Pin;
+  reset: Pin;
+  clk: Pin;
+  q: Pin[];
+}
+
+/**
+ * An N-bit program counter: a register that increments its own value every
+ * clock edge, except when `load` is high (captures `d` instead) or `reset`
+ * is high (forces 0, taking priority over both — a real power-on/branch-
+ * misprediction reset line, not something a caller has to bolt on with its
+ * own OR/mux pair every time it needs one).
+ *
+ * The increment is a chain of half adders (see buildHalfAdder): bit i's `b`
+ * input is bit i-1's carry-out, with bit 0's carry-in tied to a constant
+ * 1 — the textbook way an incrementer differs from a general adder (no
+ * second operand to supply, just "count one more"). Two 2:1 muxes per bit,
+ * chained, pick the final value *before* it ever reaches the register, so
+ * the register's own write-enable stays tied permanently high: every clock
+ * edge writes something, the muxes decide what. The inner mux picks
+ * increment-vs-`d` (gated by `load`); the outer mux picks that-vs-0 (gated
+ * by `reset`) — `reset` sits in front of `load`, so it wins regardless of
+ * what `load`/`d` are doing, exactly like a real reset line should.
+ */
+export function buildProgramCounter(parent: Circuit, library: ChipLibrary, bits: number, pos: Point = { x: 0, y: 0 }): ProgramCounter {
+  const haDef = getHalfAdderChip(library);
+  const muxDef = getMux2Chip(library);
+  const reg = buildRegister(parent, library, bits, { x: pos.x + 800, y: pos.y });
+
+  const incVcc = makeSource(parent, 1, { x: pos.x - 100, y: pos.y - 100 }).pins.out;
+  const gnd = makeSource(parent, 0, { x: pos.x - 100, y: pos.y - 60 }).pins.out;
+  wire(parent, incVcc, reg.we); // the mux chain (not WE) decides increment-vs-load-vs-reset; the register always writes
+
+  const rowStep = Math.max(chipInstanceHeight(haDef.ports.length), chipInstanceHeight(muxDef.ports.length)) + 20;
+  const d: Pin[] = [];
+  let carry = incVcc; // bit 0's carry-in = 1: that's the "+1"
+  let load!: Pin;
+  let reset!: Pin;
+
+  for (let i = 0; i < bits; i++) {
+    const ha = makeChipInstance(parent, haDef, { x: pos.x, y: pos.y + i * rowStep });
+    const haA = ha.pins[haDef.ports[0]!]!;
+    const haB = ha.pins[haDef.ports[1]!]!;
+    const haSum = ha.pins[haDef.ports[2]!]!;
+    const haCout = ha.pins[haDef.ports[3]!]!;
+    wire(parent, reg.q[i]!, haA);
+    wire(parent, carry, haB);
+    carry = haCout;
+
+    const loadMux = makeChipInstance(parent, muxDef, { x: pos.x + 400, y: pos.y + i * rowStep });
+    const loadSel = loadMux.pins[muxDef.ports[0]!]!;
+    const loadIn0 = loadMux.pins[muxDef.ports[1]!]!;
+    const loadIn1 = loadMux.pins[muxDef.ports[2]!]!;
+    const loadOut = loadMux.pins[muxDef.ports[3]!]!;
+    wire(parent, haSum, loadIn0); // load=0: take the incremented value
+    d.push(loadIn1); // load=1: take the externally supplied value
+
+    const resetMux = makeChipInstance(parent, muxDef, { x: pos.x + 900, y: pos.y + i * rowStep });
+    const resetSel = resetMux.pins[muxDef.ports[0]!]!;
+    const resetIn0 = resetMux.pins[muxDef.ports[1]!]!;
+    const resetIn1 = resetMux.pins[muxDef.ports[2]!]!;
+    const resetOut = resetMux.pins[muxDef.ports[3]!]!;
+    wire(parent, loadOut, resetIn0); // reset=0: whatever the load mux picked
+    wire(parent, gnd, resetIn1); // reset=1: force this bit to 0
+    wire(parent, resetOut, reg.d[i]!);
+
+    if (i === 0) {
+      load = loadSel;
+      reset = resetSel;
+    } else {
+      wire(parent, load, loadSel);
+      wire(parent, reset, resetSel);
+    }
+  }
+
+  return { d, load, reset, clk: reg.clk, q: reg.q };
+}
+
+/**
+ * The instruction register. Deliberately *not* a new primitive: an IR is
+ * structurally nothing but an 8-bit `buildRegister` — load on a WE&CLK
+ * edge, hold otherwise, no increment/carry logic like `buildProgramCounter`
+ * needs. Giving it its own name (rather than telling every caller to
+ * remember "REG, 8 bits, wired to the data bus") is the only thing this
+ * function is for.
+ *
+ * Width is fixed at 8, not a parameter: the Z80 opcode byte is always
+ * 8 bits. Multi-byte instructions (the CB/ED/DD/FD-prefixed ones) are a
+ * *sequencing* concern — the control FSM runs extra fetch cycles and
+ * re-loads this same 8-bit IR each time — not a width concern, so widening
+ * it here would be modeling the wrong layer.
+ */
+export function buildInstructionRegister(parent: Circuit, library: ChipLibrary, pos: Point = { x: 0, y: 0 }): Register {
+  return buildRegister(parent, library, 8, pos);
+}
+
+export interface RingCounter {
+  phase: Pin[]; // one-hot: phase[i] is high exactly during state i
+  load: Pin;
+  d: Pin[]; // external one-hot pattern to seed, when load=1
+  clk: Pin;
+}
+
+/**
+ * An N-phase one-hot control-FSM sequencer: every clock edge, the single
+ * high `phase` bit rotates to the next position (`phase[i]` feeds
+ * `phase[i+1]`, wrapping from the last phase back to phase 0). This is the
+ * "T-state counter" a multi-cycle CPU's control unit is built around —
+ * structurally a `buildRegister` with each bit's next value wired from its
+ * predecessor's current value instead of from a half-adder chain, so unlike
+ * `buildProgramCounter` it needs no arithmetic at all, just wiring.
+ *
+ * Like every register-based structure here, it has no power-on reset —
+ * nothing makes it start at phase 0 on its own. The caller must explicitly
+ * seed a one-hot pattern (e.g. `d = [1,0,...,0]`) through one `load=1` edge
+ * before relying on the rotation, the same explicit-init discipline
+ * `buildProgramCounter`'s own tests already require.
+ */
+export function buildRingCounter(parent: Circuit, library: ChipLibrary, phases: number, pos: Point = { x: 0, y: 0 }): RingCounter {
+  if (phases < 2) throw new Error('a ring counter needs at least 2 phases');
+  const muxDef = getMux2Chip(library);
+  const reg = buildRegister(parent, library, phases, { x: pos.x + 400, y: pos.y });
+
+  const incVcc = makeSource(parent, 1, { x: pos.x - 100, y: pos.y - 100 }).pins.out;
+  wire(parent, incVcc, reg.we); // always writes; the muxes decide rotate-vs-load
+
+  const rowStep = chipInstanceHeight(muxDef.ports.length) + 20;
+  const d: Pin[] = [];
+  let load!: Pin;
+
+  for (let i = 0; i < phases; i++) {
+    const mux = makeChipInstance(parent, muxDef, { x: pos.x, y: pos.y + i * rowStep });
+    const muxSel = mux.pins[muxDef.ports[0]!]!;
+    const muxIn0 = mux.pins[muxDef.ports[1]!]!;
+    const muxIn1 = mux.pins[muxDef.ports[2]!]!;
+    const muxOut = mux.pins[muxDef.ports[3]!]!;
+    const prev = (i - 1 + phases) % phases;
+    wire(parent, reg.q[prev]!, muxIn0); // load=0: rotate in from the previous phase bit
+    d.push(muxIn1); // load=1: externally supplied one-hot pattern
+    wire(parent, muxOut, reg.d[i]!);
+    if (i === 0) load = muxSel;
+    else wire(parent, load, muxSel);
+  }
+
+  return { phase: reg.q, load, d, clk: reg.clk };
+}
+
+/** Fold buildTriStateBuffer() into a reusable chip. Ports, in order: a, en, out. */
+function makeTriBufChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  const vcc = makeSource(scratch, 1).pins.out;
+  const gnd = makeSource(scratch, 0).pins.out;
+  const buf = buildTriStateBuffer(scratch, vcc, gnd);
+  return foldExposing(scratch, 'TRI_BUF', library, [
+    { pin: buf.a, isOutput: false },
+    { pin: buf.en, isOutput: false },
+    { pin: buf.out, isOutput: true },
+  ]);
+}
+
+// See the identical reasoning on registerBitDefs above: buildStubRom caches
+// its own TRI_BUF rather than assuming seedStandardCells() already
+// registered one, so it works standalone in a library that never called it.
+const triBufDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getTriBufChip(library: ChipLibrary): ChipDef {
+  let def = triBufDefs.get(library);
+  if (!def) {
+    def = makeTriBufChip(library);
+    triBufDefs.set(library, def);
+  }
+  return def;
+}
+
+export interface StubRom {
+  addr: Pin[];
+  oe: Pin; // must be 1 for `data` to be driven onto the bus at all
+  data: Pin[];
+}
+
+/**
+ * A fixed, hand-authored "ROM": `words[i]` (one bit array per word, LSB
+ * first) is what reading address `i` returns. There is no storage here at
+ * all — every bit is wired straight from a constant `makeSource`, and there
+ * is no write port. This is deliberately a stub, not small real memory:
+ * building even a writable few words from `buildRegister` would still not
+ * be the representation real RAM needs at a realistic address-space scale
+ * (see ARCHITECTURE.md's "Known simplifications") — that's a separate,
+ * later problem. This slice's job is proving the *bus and control-FSM
+ * handshake* actually works, with a memory-shaped thing to fetch from.
+ *
+ * `words.length` must be a power of two (`addr` is `log2(words.length)`
+ * bits wide). Every word gets its own bank of `buildTriStateBuffer`
+ * instances, one per data bit, each gated by (this word's decoded address
+ * line) AND `oe`; every word's bank drives the same shared `data` bus. At
+ * most one word is ever selected at a time — the decoder's whole job — so
+ * the bus never sees the two-driver contention `buildTriStateBuffer`'s own
+ * tests deliberately provoke.
+ */
+export function buildStubRom(parent: Circuit, library: ChipLibrary, words: (0 | 1)[][], pos: Point = { x: 0, y: 0 }): StubRom {
+  const wordCount = words.length;
+  const addrBits = Math.log2(wordCount);
+  if (!Number.isInteger(addrBits) || addrBits < 1) throw new Error('buildStubRom needs a power-of-two word count of at least 2');
+  const dataBits = words[0]?.length ?? 0;
+  if (!words.every((w) => w.length === dataBits)) throw new Error('buildStubRom: every word must be the same width');
+
+  const vcc = makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 }).pins.out;
+  const gnd = makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 80 }).pins.out;
+  const dec = buildDecoder(parent, vcc, gnd, addrBits, { x: pos.x, y: pos.y });
+
+  const bufDef = getTriBufChip(library);
+  const bufRowStep = chipInstanceHeight(bufDef.ports.length) + 10;
+  const data: Pin[] = [];
+  let oe: Pin | undefined; // the first AND gate's `.b` becomes the shared, externally-driven oe handle
+
+  for (let bit = 0; bit < dataBits; bit++) {
+    let bus: Pin | undefined;
+    for (let w = 0; w < wordCount; w++) {
+      const row = w * dataBits + bit;
+      const gate = buildAnd(parent, vcc, gnd, { x: pos.x + 800, y: pos.y + row * 100 }); // selected & oe
+      wire(parent, gate.a, dec.lines[w]!);
+      if (!oe) oe = gate.b;
+      else wire(parent, oe, gate.b);
+      const bitValue = makeSource(parent, words[w]![bit]!, { x: pos.x + 1050, y: pos.y + row * 100 - 20 }).pins.out;
+      const buf = makeChipInstance(parent, bufDef, { x: pos.x + 1150, y: pos.y + row * bufRowStep });
+      wire(parent, buf.pins[bufDef.ports[0]!]!, bitValue); // a = this word's fixed bit
+      wire(parent, buf.pins[bufDef.ports[1]!]!, gate.out); // en = selected & oe
+      const bufOut = buf.pins[bufDef.ports[2]!]!;
+      if (!bus) bus = bufOut;
+      else wire(parent, bus, bufOut);
+    }
+    data.push(bus!);
+  }
+
+  return { addr: dec.addr, oe: oe!, data };
+}
+
+export interface MinimalCpu {
+  clk: Pin; // drives PC/IR/ACC — see the doc comment for why this is deliberately not the same wire as `phaseClk`
+  phaseClk: Pin; // drives only the FSM's own phase register
+  reset: Pin; // PC's power-on reset (see buildProgramCounter) — pulse once, before ever pulsing phaseClk/clk
+  fsmLoad: Pin;
+  fsmD: Pin[]; // seed the FSM to phase 0 (e.g. [1, 0, 0]) through one fsmLoad=1 phaseClk edge, before relying on it
+  pc: Pin[];
+  ir: Pin[];
+  acc: Pin[];
+  phase: Pin[]; // one-hot: phase[0]=FETCH, phase[1]=INCREMENT, phase[2]=DECODE_EXECUTE
+  ram: RamComponent;
+}
+
+/**
+ * A complete, if deliberately tiny, working CPU: PC + RAM + IR + an
+ * accumulator + an ALU, sequenced by a 3-phase FETCH / INCREMENT /
+ * DECODE_EXECUTE ring counter. This is the payoff of every earlier slice —
+ * nothing here is a new kind of primitive, it's `buildProgramCounter`,
+ * `makeRam`, `buildInstructionRegister`, `buildRegister`, `buildAlu`,
+ * `buildTriStateBuffer` and `buildRingCounter`, wired together exactly the
+ * way "A control FSM: the fetch loop" (ARCHITECTURE.md) already proved
+ * works, extended with one more phase that actually *does something with*
+ * the fetched instruction instead of just fetching it.
+ *
+ * The instruction set is a deliberately tiny, made-up 8-slot encoding —
+ * not real Z80 opcodes, which need a much larger decoder this slice
+ * doesn't build yet (see ARCHITECTURE.md's "Decode and execute" for why,
+ * and what a real opcode decoder would need on top of this):
+ *
+ *   bits 7-5 = 000: LDI imm    ACC <- bits 0-4 of the instruction (0-31)
+ *   bits 7-5 = 001: ADI imm    ACC <- ACC + imm
+ *   bits 7-5 = 010: ANI imm    ACC <- ACC & imm
+ *   bits 7-5 = 011: ORI imm    ACC <- ACC | imm
+ *   bits 7-5 = 100: XRI imm    ACC <- ACC ^ imm
+ *   bits 7-5 = 101: STORE addr RAM[addr] <- ACC (ACC unchanged)
+ *   bits 7-5 = 110: LOAD addr  ACC <- RAM[addr]
+ *   bits 7-5 = 111: reserved   no-op: neither ACC nor RAM changes
+ *
+ * (`ANI`/`ORI`/`XRI` follow the 8080/Z80 assembly convention for
+ * "AND/OR/XOR immediate" — the one place this made-up ISA's naming
+ * deliberately echoes the real one it's a toy stand-in for.) STORE and
+ * LOAD's target address is encoded in the same 5 low bits the ACC-writing
+ * instructions use for their immediate, so `addrBits <= 5` — a RAM wider
+ * than that has addresses STORE/LOAD simply cannot reach (FETCH, which
+ * addresses RAM from PC directly, has no such limit).
+ *
+ * Decode is a real one-hot `buildDecoder` over all 3 opcode bits, not an
+ * ad hoc gate tree — past 4 instructions, no single opcode bit splits the
+ * encoding cleanly anymore (5 ACC-writing instructions vs. 3 others isn't
+ * a power-of-two split any one bit can express the way `bit7` used to).
+ * `dec.lines[0..6]` are `isLdi`/`isAdi`/`isAni`/`isOri`/`isXri`/`isStore`/
+ * `isLoad` (`lines[7]`, the reserved pattern, is never referenced by
+ * name — every control signal below is built from what an instruction
+ * *should* do, so the reserved pattern is inert by simply matching none of
+ * them, not by being checked for and excluded). From there:
+ *
+ * - **ALU op-select** (`alu.op0`/`op1`, matching `buildAluSlice`'s own
+ *   00=ADD/01=AND/10=OR/11=XOR): `op0 = OR(isAni, isXri)`, `op1 =
+ *   OR(isOri, isXri)`. ADI needs neither line, which is exactly what
+ *   "both ORs default to 0" already gives it — no separate case needed.
+ * - **ACC write-enable**: `phase2 AND OR(isLdi, isAdi, isAni, isOri, isXri,
+ *   isLoad)` (a 6-input OR tree, since none of these lines share a single
+ *   bit the way the old 4-instruction encoding's ACC-writers did — LOAD
+ *   writes ACC too, from the bus rather than the ALU/imm, and belongs in
+ *   this OR exactly as much as the other five; a version of this tree that
+ *   omitted it left LOAD decoding correctly, RAM driving the bus
+ *   correctly, and ACC simply never latching any of it — see the note
+ *   below on how that was found).
+ * - **Memory access**: `memSel = OR(isStore, isLoad)`; `storeNow =
+ *   isStore AND phase2` drives `ram.we`; `loadNow = isLoad AND phase2` is
+ *   ORed into `ram.oe` alongside FETCH's own phase-0 read (the two never
+ *   overlap: FETCH only happens in phase 0, a LOAD's read only in
+ *   phase 2).
+ *
+ * None of this needs its own clocked phase, for the same reason
+ * `buildStubRom`'s address decode doesn't: nothing needs to be *captured*
+ * merely from deciding what to do, only from actually doing it during
+ * DECODE_EXECUTE.
+ *
+ * STORE and LOAD both need RAM's address bus to carry something other
+ * than "PC" during their own DECODE_EXECUTE: a per-bit 2:1 mux, selected
+ * by `memSel AND phase2`, picks between `pc.q` (every other case) and the
+ * instruction's own embedded target address — both instructions read that
+ * address the same way, the mux doesn't need to distinguish which one is
+ * asking. A bank of `buildTriStateBuffer`s drives `ACC` onto the *same*
+ * shared data bus `ram.data`/`ir.d` already share for fetches, enabled
+ * only by `storeNow`, so it never contests RAM's own drive (RAM drives
+ * during FETCH and LOAD, ACC drives during STORE — mutually exclusive by
+ * phase and opcode, never two drivers live at once, the same discipline
+ * `buildStubRom`'s decoder-gated banks rely on, just gated differently).
+ *
+ * `ACC`'s own next value is two chained 2:1 muxes, not one wider mux —
+ * three genuinely different sources can land in ACC (`imm`, the ALU's
+ * already-op-selected result, or the bus) and no single decoded bit ties
+ * them into a clean 2-level tree the way `(bit7, bit6)` used to for 4
+ * instructions. The first mux picks `imm` (`isLdi`) vs. the ALU's result
+ * (everything else that writes ACC); the second overrides that with the
+ * bus's current reading whenever `isLoad`. Neither stage's output is ever
+ * latched for STORE or the reserved pattern (`accWeGate` is 0 for both),
+ * so what they compute in those cases doesn't matter.
+ *
+ * PC holds during FETCH *and* DECODE_EXECUTE (self-looped, `load` tied to
+ * NOT(phase[1])) and advances only during INCREMENT — the same "gate data,
+ * not clock" hold trick "A control FSM" already established, just gating
+ * on two of the three phases being "not phase 1" instead of one.
+ */
+export function buildMinimalCpu(
+  parent: Circuit,
+  library: ChipLibrary,
+  addrBits: number,
+  program?: Uint8Array,
+  pos: Point = { x: 0, y: 0 },
+): MinimalCpu {
+  if (addrBits > 5) throw new Error('buildMinimalCpu: STORE/LOAD encode their target address in 5 bits, so addrBits must be <= 5');
+  const vcc = makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 400 }).pins.out;
+  const gnd = makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 360 }).pins.out;
+
+  const pc = buildProgramCounter(parent, library, addrBits, { x: pos.x, y: pos.y });
+  const ram = makeRam(parent, addrBits, 8, program, { x: pos.x + 1400, y: pos.y });
+  const ir = buildInstructionRegister(parent, library, { x: pos.x + 2600, y: pos.y });
+  const acc = buildRegister(parent, library, 8, { x: pos.x + 4600, y: pos.y });
+  const alu = buildAlu(parent, library, 8, { x: pos.x + 3400, y: pos.y + 1200 });
+  const fsm = buildRingCounter(parent, library, 3, { x: pos.x, y: pos.y + 2400 });
+  const muxDef = getMux2Chip(library);
+  const bufDef = getTriBufChip(library);
+
+  // FETCH (phase 0): RAM drives the bus, IR captures it. (ram.pins.oe
+  // itself is wired further below, once ORed with a LOAD's own read.)
+  ramDataPins(ram).forEach((p, i) => wire(parent, p, ir.d[i]!));
+  wire(parent, fsm.phase[0]!, ir.we);
+
+  // PC holds during FETCH and DECODE_EXECUTE, advances only during INCREMENT.
+  const notPhase1 = buildNot(parent, vcc, gnd, { x: pos.x - 200, y: pos.y - 200 });
+  wire(parent, fsm.phase[1]!, notPhase1.in);
+  wire(parent, notPhase1.out, pc.load);
+  pc.q.forEach((q, i) => wire(parent, q, pc.d[i]!)); // self-loop: "reload" == hold
+
+  // Decode. Past 4 instructions, no single opcode bit cleanly splits the
+  // encoding in half anymore (5 ACC-writing instructions vs. 3 others
+  // isn't a power-of-two split any bit can express) — this is a genuine
+  // one-hot decoder over all 3 opcode bits, `buildDecoder` (already used
+  // for `buildStubRom`'s addressing), not an ad hoc AND/OR/NOT tree.
+  const dec = buildDecoder(parent, vcc, gnd, 3, { x: pos.x + 3200, y: pos.y - 500 });
+  wire(parent, ir.q[5]!, dec.addr[0]!);
+  wire(parent, ir.q[6]!, dec.addr[1]!);
+  wire(parent, ir.q[7]!, dec.addr[2]!);
+  const [isLdi, isAdi, isAni, isOri, isXri, isStore, isLoad] = dec.lines; // lines[7]: reserved, unused
+
+  // The ALU's own op0/op1 (00 ADD, 01 AND, 10 OR, 11 XOR — see
+  // buildAluSlice) read straight off which arithmetic instruction decoded:
+  // op0=1 for AND or XOR, op1=1 for OR or XOR. ADI needs neither line high
+  // (op=00=ADD already), so it drives nothing here — the two ORs already
+  // default to 0 when isAni/isOri/isXri are all 0.
+  const aluOp0 = buildOr(parent, vcc, gnd, { x: pos.x + 3600, y: pos.y - 500 });
+  wire(parent, isAni!, aluOp0.a);
+  wire(parent, isXri!, aluOp0.b);
+  wire(parent, aluOp0.out, alu.op0);
+  const aluOp1 = buildOr(parent, vcc, gnd, { x: pos.x + 3600, y: pos.y - 300 });
+  wire(parent, isOri!, aluOp1.a);
+  wire(parent, isXri!, aluOp1.b);
+  wire(parent, aluOp1.out, alu.op1);
+  wire(parent, gnd, alu.cin);
+  acc.q.forEach((q, i) => wire(parent, q, alu.a[i]!));
+
+  // ACC writes on DECODE_EXECUTE for any of the 5 ACC-writing instructions
+  // (LDI/ADI/ANI/ORI/XRI) — a 4-input OR tree, since none of them share a
+  // single bit the way the old 4-instruction encoding's LDI/ADI/LOAD did.
+  const accWeOr1 = buildOr(parent, vcc, gnd, { x: pos.x + 3900, y: pos.y - 500 });
+  wire(parent, isLdi!, accWeOr1.a);
+  wire(parent, isAdi!, accWeOr1.b);
+  const accWeOr2 = buildOr(parent, vcc, gnd, { x: pos.x + 3900, y: pos.y - 400 });
+  wire(parent, isAni!, accWeOr2.a);
+  wire(parent, isOri!, accWeOr2.b);
+  const accWeOr3 = buildOr(parent, vcc, gnd, { x: pos.x + 3900, y: pos.y - 300 }); // XRI or LOAD — the two odd ones out of a 6-way OR
+  wire(parent, isXri!, accWeOr3.a);
+  wire(parent, isLoad!, accWeOr3.b);
+  const accWeOr12 = buildOr(parent, vcc, gnd, { x: pos.x + 4100, y: pos.y - 450 });
+  wire(parent, accWeOr1.out, accWeOr12.a);
+  wire(parent, accWeOr2.out, accWeOr12.b);
+  const accWeRaw = buildOr(parent, vcc, gnd, { x: pos.x + 4300, y: pos.y - 400 });
+  wire(parent, accWeOr12.out, accWeRaw.a);
+  wire(parent, accWeOr3.out, accWeRaw.b);
+  const accWeGate = buildAnd(parent, vcc, gnd, { x: pos.x + 4500, y: pos.y - 450 });
+  wire(parent, fsm.phase[2]!, accWeGate.a);
+  wire(parent, accWeRaw.out, accWeGate.b);
+  wire(parent, accWeGate.out, acc.we);
+
+  const memSel = buildOr(parent, vcc, gnd, { x: pos.x + 3900, y: pos.y - 100 }); // STORE or LOAD, whichever it is
+  wire(parent, isStore!, memSel.a);
+  wire(parent, isLoad!, memSel.b);
+  const memNow = buildAnd(parent, vcc, gnd, { x: pos.x + 4100, y: pos.y - 100 }); // memSel AND phase2: either one's own execute step
+  wire(parent, memSel.out, memNow.a);
+  wire(parent, fsm.phase[2]!, memNow.b);
+  const storeNow = buildAnd(parent, vcc, gnd, { x: pos.x + 4200, y: pos.y + 100 }); // STORE only
+  wire(parent, isStore!, storeNow.a);
+  wire(parent, fsm.phase[2]!, storeNow.b);
+  wire(parent, storeNow.out, ram.pins.we!);
+  const loadNow = buildAnd(parent, vcc, gnd, { x: pos.x + 4200, y: pos.y + 300 }); // LOAD only
+  wire(parent, isLoad!, loadNow.a);
+  wire(parent, fsm.phase[2]!, loadNow.b);
+  const ramOe = buildOr(parent, vcc, gnd, { x: pos.x + 4500, y: pos.y + 200 }); // FETCH's own read, OR a LOAD's
+  wire(parent, fsm.phase[0]!, ramOe.a);
+  wire(parent, loadNow.out, ramOe.b);
+  wire(parent, ramOe.out, ram.pins.oe!);
+
+  // RAM's address bus: PC, except during a STORE or LOAD's own
+  // DECODE_EXECUTE, when it's the instruction's own embedded target
+  // address instead — both share the same low 5 bits, reinterpreted by
+  // whichever opcode is actually using them.
+  ramAddrPins(ram).forEach((p, i) => {
+    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
+    wire(parent, memNow.out, mux.pins[muxDef.ports[0]!]!); // sel
+    wire(parent, pc.q[i]!, mux.pins[muxDef.ports[1]!]!); // in0: normal — address from PC
+    wire(parent, ir.q[i]!, mux.pins[muxDef.ports[2]!]!); // in1: STORE/LOAD — address embedded in the instruction
+    wire(parent, mux.pins[muxDef.ports[3]!]!, p);
+  });
+
+  // ACC's own next value: imm = ir.q[0..4] with bits 5-7 forced to 0 (a
+  // 5-bit immediate — 3 opcode bits leave less room than the 4-instruction
+  // encoding's 6 did). Two chained 2:1 muxes, since three genuinely
+  // different sources can end up in ACC and no single decoded bit ties
+  // them into a clean 2-level tree the way (bit7, bit6) used to: the first
+  // picks `imm` (LDI) vs the ALU's already-op-selected result (ADI/ANI/
+  // ORI/XRI); the second overrides that with the shared bus's current
+  // reading whenever this is a LOAD. Neither mux's output is ever latched
+  // for STORE or the reserved pattern (`accWeGate` is 0 for both), so
+  // what each computes for them doesn't matter.
+  for (let i = 0; i < 8; i++) {
+    const imm = i < 5 ? ir.q[i]! : gnd;
+    wire(parent, imm, alu.b[i]!);
+
+    const stage1 = makeChipInstance(parent, muxDef, { x: pos.x + 4000, y: pos.y + i * 100 });
+    wire(parent, isLdi!, stage1.pins[muxDef.ports[0]!]!); // sel
+    wire(parent, alu.out[i]!, stage1.pins[muxDef.ports[1]!]!); // in0: ADI/ANI/ORI/XRI
+    wire(parent, imm, stage1.pins[muxDef.ports[2]!]!); // in1: LDI
+    const stage2 = makeChipInstance(parent, muxDef, { x: pos.x + 4700, y: pos.y + i * 100 });
+    wire(parent, isLoad!, stage2.pins[muxDef.ports[0]!]!); // sel
+    wire(parent, stage1.pins[muxDef.ports[3]!]!, stage2.pins[muxDef.ports[1]!]!); // in0: stage1's result
+    wire(parent, ir.d[i]!, stage2.pins[muxDef.ports[2]!]!); // in1: LOAD — the freshly-read bus value
+    wire(parent, stage2.pins[muxDef.ports[3]!]!, acc.d[i]!);
+
+    // STORE: drive ACC onto the shared data bus, enabled only while storing.
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 5600, y: pos.y + i * 100 });
+    wire(parent, acc.q[i]!, buf.pins[bufDef.ports[0]!]!); // a
+    wire(parent, storeNow.out, buf.pins[bufDef.ports[1]!]!); // en
+    wire(parent, buf.pins[bufDef.ports[2]!]!, ir.d[i]!); // out, onto the same bus ir.d/ram.data already share
+  }
+
+  // Two non-overlapping clocks — see "A control FSM: the fetch loop" for
+  // why the FSM's own phase transition and the datapath registers it
+  // gates can never safely share one edge in this solver.
+  wire(parent, pc.clk, ir.clk);
+  wire(parent, pc.clk, acc.clk);
+  wire(parent, pc.clk, ram.pins.clk!);
+
+  return { clk: pc.clk, phaseClk: fsm.clk, reset: pc.reset, fsmLoad: fsm.load, fsmD: fsm.d, pc: pc.q, ir: ir.q, acc: acc.q, phase: fsm.phase, ram };
+}
+
+export interface Z80Decoder {
+  x: Pin[]; // one-hot, 4 lines — bits 7-6 as a 2-bit number
+  y: Pin[]; // one-hot, 8 lines — bits 5-3 as a 3-bit number
+  z: Pin[]; // one-hot, 8 lines — bits 2-0 as a 3-bit number
+}
+
+/**
+ * The real Z80's own opcode decomposition — not this project's made-up
+ * `buildMinimalCpu` encoding, but the canonical `xxyyyzzz` bit grouping
+ * every Z80/8080 disassembler and reference (e.g. z80.info/decoding.htm)
+ * decodes an opcode byte into: `x` (bits 7-6) picks which broad instruction
+ * group an opcode belongs to, `y` (bits 5-3) and `z` (bits 2-0) mean
+ * different things *within* each `x` group (register, ALU operation,
+ * condition code, ..., depending on which group). This function does
+ * exactly the field extraction and nothing else — three `buildDecoder`
+ * calls (2 bits for `x`, 3 each for `y`/`z`), producing one-hot lines for
+ * each field's every possible value. What those lines *mean* is entirely
+ * up to the caller; `buildZ80Cpu` below wires two groups (`x=10`, the
+ * ALU-on-register instructions, and `x=01`, `LD r,r'`) up to real
+ * execution.
+ *
+ * Verified directly against real, well-known opcode bytes in
+ * `blocks.test.ts` (`0x80`=`ADD A,B`, `0xA7`=`AND A`, `0xBE`=`CP (HL)`,
+ * ...) rather than just against this function's own derivation — the
+ * whole point of building this is that it matches real Z80 silicon, not
+ * just its own internally-consistent logic.
+ */
+export function buildZ80Decoder(parent: Circuit, opcode: Pin[], pos: Point = { x: 0, y: 0 }): Z80Decoder {
+  if (opcode.length !== 8) throw new Error('buildZ80Decoder needs an 8-bit opcode');
+  const vcc = makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 }).pins.out;
+  const gnd = makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 80 }).pins.out;
+
+  const decX = buildDecoder(parent, vcc, gnd, 2, { x: pos.x, y: pos.y });
+  wire(parent, opcode[6]!, decX.addr[0]!); // bit6: x's own LSB
+  wire(parent, opcode[7]!, decX.addr[1]!); // bit7: x's own MSB
+
+  const decY = buildDecoder(parent, vcc, gnd, 3, { x: pos.x, y: pos.y + 400 });
+  wire(parent, opcode[3]!, decY.addr[0]!);
+  wire(parent, opcode[4]!, decY.addr[1]!);
+  wire(parent, opcode[5]!, decY.addr[2]!);
+
+  const decZ = buildDecoder(parent, vcc, gnd, 3, { x: pos.x, y: pos.y + 1000 });
+  wire(parent, opcode[0]!, decZ.addr[0]!);
+  wire(parent, opcode[1]!, decZ.addr[1]!);
+  wire(parent, opcode[2]!, decZ.addr[2]!);
+
+  return { x: decX.lines, y: decY.lines, z: decZ.lines };
+}
+
+export interface Z80Cpu {
+  clk: Pin; // drives PC/IR/A/the register file — see the doc comment for why this is deliberately not the same wire as `phaseClk`
+  phaseClk: Pin; // drives only the FSM's own phase register
+  reset: Pin; // PC's power-on reset — pulse once, before ever pulsing phaseClk/clk
+  aReset: Pin; // A's own power-on reset (forces 0) — see the doc comment on why A needs one and PC's own reset doesn't cover it
+  fsmLoad: Pin;
+  fsmD: Pin[]; // seed the FSM to phase 0 (e.g. [1, 0, 0]) through one fsmLoad=1 phaseClk edge, before relying on it
+  pc: Pin[];
+  ir: Pin[];
+  a: Pin[]; // accumulator ("A") output — its own d/we are driven internally by decoded instructions, not exposed
+  rB: Register; // B/C/D/E/H/L: `d`/`we` here are a *seed* path only — LD r,r' (x=01) can now also write these internally; see the doc comment for the mux-ahead-of-d treatment that keeps the two from fighting over one sink pin
+  rC: Register;
+  rD: Register;
+  rE: Register;
+  rH: Register;
+  rL: Register;
+  f: Pin[]; // flags (S Z - H - P/V N C, real Z80 bit order) — driven internally by ADD/SUB/AND/XOR/OR/CP and by POP AF; see the doc comment on flags below
+  aP: Register; // A' — real Z80's own shadow accumulator, same *seed*-path contract as rB..rL: external d/we seed its first value, EX AF,AF' drives it internally from then on (see "x=00: EX AF,AF'")
+  fP: Register; // F' — A''s own shadow flags, identical contract
+  bP: Register; // B'/C'/D'/E'/H'/L' — EXX's own shadow register-pair set, identical seed-path contract (see "x=11: EXX")
+  cP: Register;
+  dP: Register;
+  eP: Register;
+  hP: Register;
+  lP: Register;
+  sp: Register; // stack pointer — same seed-path contract as rB..rL: external d/we seed its first value, PUSH/POP/RET/RST drive it internally from then on
+  phase: Pin[];
+  ram: RamComponent;
+  // A minimal I/O-port concept, invented for IN A,(n)/OUT (n),A (see
+  // "x=11: IN A,(n) / OUT (n),A") — this simulator never needed one
+  // before. `ioPortAddr`/`ioPortDataOut` are live output taps (the bus,
+  // and A, respectively), valid only while `ioRead`/`ioWrite` is high;
+  // `ioPortDataIn` is a genuine external sink, the identical contract
+  // `Register.d` already uses — a caller's own device drives it, this file
+  // never does. Real Z80 hardware also puts A on the *upper* half of a
+  // 16-bit port address; this slice only ever exposes `n` on `ioPortAddr`
+  // — a real, documented simplification.
+  ioPortAddr: Pin[];
+  ioPortDataOut: Pin[];
+  ioPortDataIn: Pin[];
+  ioRead: Pin;
+  ioWrite: Pin;
+}
+
+/**
+ * A second tiny CPU, alongside `buildMinimalCpu` — this one executes real
+ * Z80 opcodes, not a made-up encoding, for two opcode groups: `x=10` (the
+ * ALU-operation-on-a-register group, real opcodes `0x80`-`0xBF`) and `x=01`
+ * (`LD r,r'`, real opcodes `0x40`-`0x7F`, register-to-register and
+ * register<->`(HL)` moves — everything this group can do except the one
+ * `0x76` slot, `HALT`, this slice deliberately leaves inert). Built from
+ * exactly the same pieces `buildMinimalCpu` already proved out (PC/RAM/IR,
+ * a 3-phase FETCH/INCREMENT/DECODE_EXECUTE `buildRingCounter`,
+ * `buildTriStateBuffer` banks sharing one bus) plus `buildZ80Decoder` for
+ * genuine `x`/`y`/`z` field extraction and a real 6-register file
+ * (B/C/D/E/H/L) alongside the accumulator.
+ *
+ * This is deliberately a *second* composite, not a replacement for
+ * `buildMinimalCpu`: the toy ISA's entire byte space is already spoken for
+ * by LDI/ADI/ANI/ORI/XRI/STORE/LOAD/reserved (see "Decode and execute"),
+ * and reusing those same opcode bytes for real Z80 semantics would mean
+ * redesigning that whole instruction set, not adding to it. Keeping them
+ * separate lets each make its own point cleanly: `buildMinimalCpu` shows
+ * the FETCH/DECODE/EXECUTE *mechanism* works; this shows the same
+ * mechanism decoding and executing *real* Z80 opcode bytes.
+ *
+ * **`x=10` (ALU-on-register) — what `y`/`z` mean:**
+ *
+ * ```
+ * y: 000 ADD  001 ADC  010 SUB  011 SBC  100 AND  101 XOR  110 OR  111 CP
+ * z: 000 B    001 C    010 D    011 E    100 H    101 L    110 (HL) 111 A
+ * ```
+ *
+ * `ADD`/`AND`/`XOR`/`OR` map straight onto the ALU's own `op0`/`op1`
+ * select (see `buildAluSlice`: 00 ADD, 01 AND, 10 OR, 11 XOR). `SUB` reuses
+ * ADD's own mode (`op0=op1=0`) with the operand bitwise-inverted and
+ * `cin` forced to 1 — the standard two's-complement trick, needing one XOR
+ * stage ahead of the existing adder, not a new ALU mode. `ADC`/`SBC`
+ * (`y=1,3` — see "x=10: ADC/SBC" below) reuse that same adder a third and
+ * fourth way: `ADC` is `ADD` with `cin` fed from `F`'s own `C` instead of a
+ * hardcoded 0; `SBC` is `SUB` the identical way, `cin` fed from `C`
+ * inverted instead of forced to 1. Both were genuinely undoable until a
+ * real flags register existed to route `C` from at all — once one did,
+ * wiring them up cost nothing new: no new adder, no new op-select, just a
+ * fresh `cin` source. `CP` (`y=7`) never writing `A` isn't a simplification
+ * at all — real Z80 `CP` only sets flags and leaves `A` alone regardless,
+ * so excluding `y=7` from what writes `A` is just correct.
+ *
+ * **`x=01` (`LD r,r'`) — what `y`/`z` mean:**
+ *
+ * ```
+ * y/z (same 8-way encoding as x=10's z): 000 B  001 C  010 D  011 E
+ *                                         100 H  101 L  110 (HL) 111 A
+ * ```
+ *
+ * Here `y` is the *destination*, `z` the *source* — `LD y,z` copies `z`'s
+ * value into `y`, one real move, no arithmetic. `y=110,z=110` (opcode
+ * `0x76`) is the one hole in this otherwise-complete 8x8 grid: real Z80
+ * silicon special-cases that exact byte as `HALT` rather than the
+ * pointless "read a byte from memory and write the same byte back" a
+ * literal `LD (HL),(HL)` would be. This slice doesn't implement `HALT`
+ * either, so it leaves the slot genuinely inert rather than guessing at
+ * one behavior or the other: `ramWriteNow` (below) explicitly excludes
+ * `z=110`, so `0x76` reads `(HL)` onto the bus for no reason and writes
+ * nowhere — the same "a pattern matching no control signal does nothing,
+ * by construction, not by being special-cased" discipline `buildMinimalCpu`'s
+ * own reserved `111` opcode already established.
+ *
+ * `LD (HL),r` is this slice's first instruction that *writes* RAM —
+ * `ram.pins.we` was hardwired to `gnd` ("read-only") before this group
+ * existed; it's now `ramWriteNow = AND(ldGroupNow, y=110, NOT(z=110))`.
+ * `LD r,(HL)` (memory into a register) needs no new RAM-write plumbing —
+ * it's a read, covered by `hlNow`, redefined below to fire whenever
+ * *either* group's `z` says `(HL)`, not just `x=10`'s.
+ *
+ * **What's shared between the two groups:** `groupActive =
+ * OR(AND(x=10,phase2), AND(x=01,phase2))` replaces the old `aluGroupNow`
+ * everywhere something needs to know "one of the groups this slice
+ * executes is in its own DECODE_EXECUTE right now" rather than specifically
+ * the ALU one: the 7 register-source `buildTriStateBuffer` banks (a source
+ * read is a source read, whether it's about to be ALU'd or just moved),
+ * `hlNow`, and — critically — `ramOe`'s FETCH-term exclusion. That
+ * exclusion (`AND(phase0, NOT(...))`) exists at all because of a real bug
+ * found building the `x=10`-only version — a ring counter's rotation
+ * transiently overlaps adjacent phase bits, and any phase-2-gated signal
+ * that can drive the shared bus races RAM's own FETCH read for it unless
+ * excluded (see "A real Z80 decoder" in ARCHITECTURE.md for the full
+ * post-mortem) — generalizing it to `groupActive` keeps that fix covering
+ * *every* bus driver this slice has, not just the one that existed when
+ * the fix was first written.
+ *
+ * `z=110` (`(HL)`) is real Z80 memory-indirect addressing — the operand is
+ * the byte at the address held in registers H and L, not a register at
+ * all. This slice's RAM is far smaller than the 64K a real 16-bit H:L
+ * pair could address, so only `L`'s own low `addrBits` bits are actually
+ * wired to the address bus; `H` exists as a register (so `y`/`z`
+ * decoding stays complete and `LD r,H`-style code works) but never
+ * participates in addressing here — a real, documented limitation, not a
+ * hidden one.
+ *
+ * All eight `z` sources — six registers, `(HL)`, and `A` itself — share
+ * one bus (the same `ir.d`/`ram.data` pins `buildMinimalCpu` already
+ * reuses for fetches): a `buildTriStateBuffer` bank per register source,
+ * each enabled by `AND(groupActive, that source's own z line)`, plus RAM's
+ * own `oe` (already tri-stated) for `(HL)`. Since `z` is one-hot by
+ * construction and `groupActive` is only ever true during one of these two
+ * groups' own DECODE_EXECUTE, at most one driver is ever live — the
+ * identical bus discipline "Buses" documents for `buildStubRom`'s
+ * decoder-gated banks, reused with opcode fields standing in for a memory
+ * decoder's address lines.
+ *
+ * **Writing a destination that isn't always `A`:** `x=10` only ever writes
+ * `A`. `x=01` can write *any* of the 7 non-memory registers, decoded from
+ * `y`. `B`/`C`/`D`/`E`/`H`/`L` used to have no internal writer at all —
+ * their raw `d`/`we` were bare sink pins for the caller to seed directly.
+ * Now that `LD r,r'` needs to write them too, each gets the same "mux
+ * ahead of `d`, OR into `we`" treatment `aReset` already established for
+ * `A`: a 2:1 mux per bit (`sel` = that register's own `AND(ldGroupNow,
+ * y=<its line>)`, `in0` = a *new* external seed pin — what a caller now
+ * sees as this `Register`'s own `d` — `in1` = the bus), and `we` =
+ * `OR(external seed we, that same ld-write-enable)`. The raw
+ * `buildRegister`'s own `d`/`we` are fully internal from here on — exposing
+ * them directly, the way the pre-`LD` version did, would mean a caller's
+ * seed wire and this new internal write path fighting over the same sink
+ * pin the instant both are live, exactly the "own your sink pins" failure
+ * "Buses" documents the consequence of. `A` needs its own one-shot
+ * `aReset` (see the doc comment further down, next to where it's built)
+ * for a reason PC's own `reset` doesn't cover: the `x=10` group reads
+ * `alu.a = a.q` on every executed operation, and neither group has an
+ * `LDI`-style "set from an immediate" instruction — without some way to
+ * force a first real value, `A` would stay undefined forever. `A` gets an
+ * analogous but distinct treatment for `LD`: a mux ahead of the *existing*
+ * `alu.out`-vs-`gnd` reset mux, selecting `alu.out` vs the bus by `isLdA =
+ * AND(ldGroupNow, y=111)`, with `isLdA` ORed into `a.we` alongside the ALU
+ * group's own `aWe` — not a seventh copy of the register-file treatment,
+ * since `A`'s `d`/`we` were never externally exposed to begin with.
+ *
+ * **Flags (`F`):** computed from `alu.out`/`alu.cout` for every op the
+ * `x=10` group actually executes, *plus* `CP` (`y=111`) — `CP` never writes
+ * `A`, but real `CP` DOES write flags (it's "subtract, discard the result,
+ * keep only what it tells you"), and this is the first turn that gives it
+ * anywhere to write them. `isSubtract = OR(y=010, y=111)` (SUB or CP) feeds
+ * `alu.cin`/the per-bit invert exactly like the old SUB-only `isSub` did,
+ * just widened. Bits, real Z80 order (`S Z - H - P/V N C`): `C` =
+ * `XOR(alu.cout, isSubtract)` (adder carry for ADD, borrow-inverted for
+ * SUB/CP — the standard two's-complement convention), forced 0 for
+ * AND/OR/XOR (their `cout` is real but electrically meaningless — see
+ * `buildAluSlice`'s own doc comment — real Z80 always clears C for logic
+ * ops anyway); `Z` = NOR of all 8 `alu.out` bits; `P/V` is parity for
+ * AND/OR/XOR, signed arithmetic overflow for ADD/ADC/SUB/SBC/CP — see
+ * "P/V is two flags, not one" further down for the derivation; `S` =
+ * `alu.out[7]`, wired straight through; `N` = `isSubtract`, straight
+ * through. `H` (half-carry, bit 4) and the two undocumented bits (3/5)
+ * are real now too — see "Closing the half-carry gap: H, the two
+ * undocumented bits, and DAA" further down for their derivation, and for
+ * `DAA` itself, added in the same pass once a genuine `H` existed to
+ * read. `P/V` picking parity vs. overflow by which op ran (`pvMux`,
+ * gated by the identical `cIsArith` `C`/`H` already reuse) is a later
+ * addition still — see "P/V is two flags, not one" further down.
+ *
+ * **`x=11`: `SP`, `PUSH`/`POP`, `RET`, `RST n`.** `CALL nn`/`JP nn` (real
+ * 3-byte instructions — an opcode byte plus a 16-bit immediate) aren't
+ * implemented: every instruction so far is exactly one byte, and reading
+ * an operand *after* the opcode needs the FETCH/INCREMENT/EXEC cycle
+ * itself extended to conditionally read more bytes — a real piece of
+ * follow-up work, not attempted here. `RST n` (`z=111`, target = `y*8`,
+ * one of 8 fixed addresses `0x00`-`0x38`) gives the *mechanism* — push a
+ * return address, jump — a real, if narrower, form to prove out first.
+ *
+ * `PUSH`/`POP rp` (`z=101`/`z=001`, `rp` = `y`'s own value restricted to
+ * `y=000,010,100,110` selecting `BC`/`DE`/`HL`/`AF`) move a genuine 8-bit
+ * *register pair* — two independent registers, e.g. `B` and `C` — through
+ * memory. Since this slice's RAM has one address bus and writes one byte
+ * per clock edge, moving two independently-valued bytes fundamentally
+ * needs two sequential memory cycles; there is no way around this with an
+ * 8-bit-wide bus, real hardware included. That's what the FSM's 4th
+ * phase (`buildRingCounter(..., 4, ...)`, not 3) is for: `EXEC1`
+ * (`phase[2]`, same phase `x=10`/`x=01` already use) writes/reads the
+ * *high* byte (`B`/`D`/`H`/`A`), `EXEC2` (`phase[3]`, new) the *low* byte
+ * (`C`/`E`/`L`/`F`) — real Z80 stack-push order, so a `POP` later reads
+ * them back the same way it wrote them. `EXEC2` is a genuine no-op for
+ * every `x=10`/`x=01` instruction (their own logic only ever checks
+ * `phase[2]`), so this costs those instructions one "wasted" `phaseClk`
+ * pulse per instruction now, uniformly — a real, documented simplification
+ * (real hardware uses variable M-cycle counts per instruction; this slice
+ * uses a fixed phase count per instruction for architectural simplicity).
+ *
+ * `RET` only ever needs `EXEC1` — not because it's a simpler mechanism,
+ * but because of a scale coincidence specific to this slice: `PC` is only
+ * `addrBits` wide (every test so far uses 4-6 bits, nowhere near real
+ * Z80's 16), so a return address fits in *one* stack byte instead of the
+ * two a real 16-bit `PC` would need. `RET` (`z=001,y=001` — the one entry
+ * in `POP`'s own `z=001` column that isn't a `POP`) reads that one byte
+ * off the stack straight into `PC`, on `EXEC1`. `RST n` needs *both*
+ * phases, though, and NOT because the push itself is two bytes (it isn't
+ * — same one-byte-PC coincidence as `RET`): it writes `PC`'s *current*
+ * value (already past its own opcode — `INCREMENT` runs before `EXEC1`,
+ * same as every other instruction) to the stack on `EXEC1`, then loads
+ * `PC` with the fixed target on `EXEC2` — a *separate* edge from the push,
+ * on purpose. The first version did both on the same `EXEC1` edge; found
+ * live, that raced `PC`'s own jump against the push-data driver reading
+ * `PC` for what to write, and — per the addressing doc comment below,
+ * where a real write in this design always samples the fully-settled,
+ * post-edge state — RAM ended up with the *jump target* pushed, not the
+ * return address, so a subsequent `RET` landed right back at the `RST`
+ * target instead of resuming after it.
+ *
+ * `SP` decrements for `PUSH`/`RST` (stack grows down), increments for
+ * `POP`/`RET`, one step per `EXEC1`/`EXEC2` it's actually involved in — via
+ * `spAdder`, a *second* `buildAlu` instance (width `addrBits`, not 8) in
+ * permanent ADD mode with `b` fanned from one shared decrement/increment
+ * control line to every bit: `b=0,cin=1` computes `SP+1`; `b`=all-1s
+ * (already the complete two's-complement encoding of `-1`, needing no
+ * extra `+1` on top) pairs with `cin=0` — NOT `cin=1`, which would add one
+ * too many and silently wrap straight back to the original value — to
+ * compute `SP-1`. Reuses the proven ripple-carry ADD path rather than
+ * hand-building a fresh adder.
+ *
+ * Addressing the stack — both the write side (`PUSH`/`RST`) and the read
+ * side (`POP`/`RET`) — uses bare `sp.q`, no adder, for either direction.
+ * That this is correct for BOTH at once is a real, subtle asymmetry this
+ * solver has between its one behavioral component and everything built
+ * from real transistors: RAM (the deliberate non-transistor exception)
+ * commits its write using the address as fully settled, by which point
+ * `sp.q` already reflects its post-this-edge (new) value — exactly a
+ * write's target. A real register's capture (`buildDFlipFlop`, master-
+ * slave) works the opposite way — its master closes based on whatever was
+ * stable *before* this edge started, not whatever the circuit eventually
+ * settles to during it — so a register capturing a byte read *through*
+ * `sp.q` (POP/RET) sees the *old*, not-yet-incremented value, exactly a
+ * read's target. See the doc comment on the address mux itself, further
+ * down, for the full derivation and the two wrong turns (a dedicated "-1"
+ * adder for reads; suspecting insufficient relaxation depth) taken before
+ * landing on this.
+ *
+ * **A bus-fight this design deliberately avoids, not one it was debugged
+ * into:** `PUSH BC`'s own opcode byte has `z=101` — which, read as *this
+ * slice's other* z-encoding (the one `x=10`/`x=01`'s operand bus uses),
+ * means "`L`." Widening the operand bus's own enable signal
+ * (`groupActive`) to also cover the stack family would let `L`'s
+ * tri-state bank fire during a `PUSH`, fighting the new push-byte-select
+ * banks over the same wire — so `groupActive` stays narrow (`x=10`/`x=01`
+ * only, unchanged from before this turn), and a separate, wider
+ * `busActive` (`groupActive` OR "the stack family is in `EXEC1`/`EXEC2`
+ * right now") exists *only* to gate FETCH's own read exclusion, where the
+ * question genuinely is "is anything at all touching the shared bus."
+ * Within the stack family itself, the high-byte and low-byte push banks
+ * (`EXEC1` vs `EXEC2`) get the identical `NOT(sibling)` structural
+ * exclusion `ramOe`'s own fix (below) already established — the ring
+ * counter's phase bits transiently overlap on *every* rotation, `phase[2]`
+ * and `phase[3]` included, not just `phase[0]`/`phase[2]`.
+ *
+ * **`x=00`, `z=3`: `INC rr`/`DEC rr`.** The first `x=00` opcodes this slice
+ * executes — real `0x03`/`0x0B` (`BC`), `0x13`/`0x1B` (`DE`), `0x23`/`0x2B`
+ * (`HL`), `0x33`/`0x3B` (`SP`), one instruction per direction per pair,
+ * `y>>1` selecting the pair and `y`'s own low bit selecting `INC` (even) vs
+ * `DEC` (odd) — chosen for the same reason `RST` was chosen over `CALL nn`
+ * for `x=11`: it needs no new FSM phase and no immediate-byte fetch (both
+ * genuinely bigger changes — see Known Simplifications), and real Z80
+ * affects *no flags at all* for this family (unlike `INC`/`DEC r`, the
+ * 8-bit sibling this doesn't implement), so nothing here touches `F`.
+ * Single-cycle, `EXEC1` only, same as `x=10`/`x=01` — the 16-bit result is
+ * available combinationally the instant the operand is, no second phase
+ * needed the way `PUSH`/`POP`'s own two *independent* bytes required one.
+ *
+ * `BC`/`DE`/`HL` each get their own dedicated `buildAlu` instance (width
+ * 16, not 8 — `spAdder` above is the identical pattern at `addrBits` width
+ * for `SP` alone) rather than sharing one muxed adder: three separate,
+ * always-computing adders, gated only at the write-back stage
+ * (`INCDEC_BC_NOW`/`INCDEC_DE_NOW`/`INCDEC_HL_NOW`), mirroring `spAdder`'s
+ * and `alu`'s own "always compute, gate the commit" philosophy rather than
+ * adding an input-selection mux that would need its own correctness check.
+ * Each pair's high register (`B`/`D`/`H`) occupies bits `[8..15]`, the low
+ * one (`C`/`E`/`L`) `[0..15]` — the same high/low convention `PUSH`/`POP`'s
+ * own byte order already established. `b`/`cin` reuse `spAdder`'s exact
+ * `-1`/`+1` trick (see above for the full derivation and the `cin`
+ * off-by-one it guards against): the pair's own `DEC` `y`-line fans to
+ * every `b` bit, `cin` is that line inverted.
+ *
+ * The write-back itself layers a *third* mux-ahead-of-`d` stage
+ * (`wrapWithPairCommit`) on top of the existing LD-r,r'/POP wrapper
+ * (`ldExternal`) each of `B`/`C`/`D`/`E`/`H`/`L` already has — not a
+ * competing rewrite of it. The three sources (external seed, LD/POP's bus
+ * capture, this pair's own `+-1`) never fire in the same cycle regardless
+ * of layering order: `dec.x` one-hot decodes exactly one `x` value per
+ * opcode, so `x=00`'s `INC`/`DEC rr` and `x=01`/`x=11`'s own conditions are
+ * mutually exclusive by construction, the same guarantee `A`'s own
+ * two-layer `aWeStage`/`aWeFinal` (above) already relies on.
+ *
+ * `SP` reuses `spAdder` itself rather than getting a fourth adder: `INC
+ * SP`/`DEC SP` want the exact same `+-1` operation `PUSH`/`POP`/`RET`/`RST`
+ * already drive it with, just for a different *reason*. `spWantDec` widens
+ * the original `STACK_WRITE_NOW`-only direction control with
+ * `DEC_SP_NOW` (this instruction's own explicit `DEC SP`) via a plain
+ * `OR` — with `DEC_SP_NOW=0` (every `x=11` case, and every `x=00` case
+ * except `DEC SP` itself) this is exactly the original signal, unchanged;
+ * the two conditions can never both be `1` at once for the identical
+ * one-hot-`x` reason the paragraph above gives. `spAluActive` (also an
+ * `OR`, widening `stackActive` with `INCDEC_SP_NOW`) gates whether
+ * `spAdder.out` actually gets written to `sp.d` — `spAdder.out` is the
+ * right value either way, only whether it's committed, and why, differs.
+ *
+ * **`x=00`, `z=4`/`z=5`: `INC r`/`DEC r`.** `y` (not `z` — a genuine
+ * departure from every other group in this file, where `z` is the operand
+ * field) selects the register: `B`/`C`/`D`/`E`/`H`/`L`/`(HL)`/`A`, the same
+ * encoding `x=10`'s `z` and `x=01`'s `y`/`z` already use. `z` itself just
+ * picks the direction (`4`=`INC`, `5`=`DEC`). `(HL)` (`y=6`) is
+ * deliberately excluded: it needs a genuine read-modify-write through RAM
+ * (read the byte at `HL`, increment/decrement it, write it back) — real,
+ * different machinery from anything a plain register needs, not attempted
+ * here, the same way `CALL nn` stays out of `x=11`. Unlike `INC rr`/
+ * `DEC rr` above, real Z80 *does* set flags for this family — `S`/`Z`/`P`
+ * freshly computed, `N` = the direction itself, `C` deliberately
+ * *preserved* (real Z80 never touches it here) — `H` stays unmodeled, same
+ * simplification the `x=10` group's own flags already carry.
+ *
+ * One shared 8-bit `buildAlu` instance computes the result — not seven
+ * separate ones the way `BC`/`DE`/`HL` each got their own pair adder
+ * above. The difference: this group's flags need to read *one* place
+ * regardless of which register is involved, so computing seven separate
+ * `S`/`Z`/`P` chains (one per register, six of them thrown away every
+ * single cycle) would be pure waste for zero benefit — unlike `PUSH`ing
+ * `BC` vs `DE`, at most one of `B`/`C`/`D`/`E`/`H`/`L`/`A` is ever the
+ * *target* of `INC r`/`DEC r` in a given cycle, so there's exactly one
+ * "the" result to compute flags from. Feeding that one adder is a 7-way
+ * one-hot read-select: `dec.y`'s seven relevant lines (`y=0,1,2,3,4,5,7`)
+ * each `AND`ed with their register's own value, then `OR`ed together per
+ * bit — safe specifically because `dec.y` is one-hot (a real decoder
+ * output, not seven independently-set flags), so at most one `AND` term
+ * per bit is ever `1`, and `OR`ing a single `1` among six `0`s just passes
+ * it through. `b`/`cin` reuse the exact `spAdder`/pair-adder `-1`/`+1`
+ * trick a final time: `isDecR8` fans to every `b` bit, `cin` is that
+ * inverted.
+ *
+ * Write-back layers a *fourth* mux-ahead-of-`d` stage on `B`/`C`/`D`/`E`/
+ * `H`/`L` (on top of `ldExternal` and the `INC rr`/`DEC rr` layer above —
+ * `wrapWithPairCommit` is generic enough to reuse as-is a second time, one
+ * call per register, all six reading the identical `R8RESULT0`-`R8RESULT7`
+ * label safely since only one of the six ever commits per cycle) and a
+ * *third* condition on `A`'s own two-layer `aWeStage`/`aWeFinal` chain (a
+ * new mux ahead of `srcMux`'s own `in0`, the same shape). `F`'s own
+ * per-bit mux gets an equivalent extra layer: `N`/`P`/`Z`/`S`'s "computed"
+ * input becomes a small mux between the `x=10` value (default) and this
+ * group's own `R8_N`/`R8_P`/`R8_Z`/`R8_S`; `C`'s own equivalent mux gets
+ * `F`'s *own* `q[0]` fed back as the alternative — a hold, not a fresh
+ * value, the concrete wiring of "`C` stays untouched" above.
+ *
+ * **`x=00`, `z=6`: `LD r,n`.** The first instruction this slice executes
+ * that reads an operand *after* its own opcode byte — every prior group
+ * (`x=10`/`x=01`/`x=11`/`x=00`'s own `INC`/`DEC` families) is exactly one
+ * byte, decoded and acted on entirely from the opcode itself. `y` selects
+ * the destination the identical way `INC r`/`DEC r` above does
+ * (`B`/`C`/`D`/`E`/`H`/`L`/`(HL)`/`A`); `(HL)` (`y=6`, `LD (HL),n`) is
+ * excluded for the identical reason `INC (HL)`/`DEC (HL)` are — it needs a
+ * RAM *write* stacked on top of the read this mechanism already does,
+ * real, different follow-up work.
+ *
+ * The interesting design question this instruction raises isn't *how* to
+ * read a second byte — RAM addressed by `PC` already drives the bus
+ * combinationally whenever `oe=1`, the identical mechanism `FETCH` itself
+ * uses — it's *when*, and specifically whether it needs a fifth FSM phase.
+ * It doesn't: `PHASE2`/`PHASE3` (`EXEC1`/`EXEC2` for every other group)
+ * get reused here with different semantics instead. `PHASE2`
+ * (`ldImm8ReadNow`) reads RAM at `PC`'s *current* value — already past the
+ * opcode, since `INCREMENT` (`PHASE1`) already ran once, the same as every
+ * other instruction — and writes it straight into the destination
+ * register, reusing that register's *existing* "capture the bus" path
+ * (`isBusToA`/`ldWe`, both widened with one more `OR` term — see below)
+ * rather than adding a new mux layer, since the bus already carries the
+ * right value by construction. `PHASE3` (`ldImm8AdvanceNow`) then advances
+ * `PC` a *second* time, past the immediate byte, before the next `FETCH` —
+ * an `OR` widening `PC`'s own hold condition (`pcHold`, was bare `PHASE1`)
+ * rather than a new mux input the way `RET`/`RST` override `PC`'s *target*
+ * do, since this changes *when* `PC` advances, not *what* it loads.
+ *
+ * Every one of these three widenings (`pcHold`, `isBusToA`, `ldWe`) is the
+ * same shape: an existing `OR` gate gains one more term, and with that
+ * term at `0` (every instruction except `LD r,n`) the result is
+ * byte-for-byte the original signal — the same "prove it's an identity
+ * when inactive" discipline `spWantDec`/`spAluActive` already established
+ * for `x=00, z=3` above. `busActive` is deliberately **not** widened the
+ * way `stackActive` was for `PUSH`/`POP`: that existed to track a signal
+ * *spanning* `EXEC1` and `EXEC2` (two independent stack bytes), where
+ * `LD r,n`'s own bus use is confined to `PHASE2` alone — structurally the
+ * same single-phase shape `hlNow`'s own `(HL)` operand read already has,
+ * which never needed `busActive` either, and `ldImm8ReadNow` is OR'd
+ * straight into `ramOeStage` the identical way.
+ *
+ * `runInstruction()`-shaped test helpers elsewhere in this file (four
+ * phaseClk/dataClk pulse pairs: `INCREMENT`/`EXEC1`/`EXEC2`/`FETCH`) don't
+ * need to change at all to drive this two-byte instruction correctly —
+ * the concrete proof this design needed no fifth phase, not just an
+ * argument for why it shouldn't.
+ *
+ * **`x=00`, `z=1`: `LD dd,nn`.** `LD r,n`'s own reused-phase trick doesn't
+ * generalize past one operand byte on its own — a *second* byte needs a
+ * *second* read-then-advance cycle, and `EXEC1`/`EXEC2` are already spent
+ * on the first one. This is the one place so far this project's FSM
+ * actually grows past 4 phases: `buildRingCounter(..., 6, ...)`, not `4` —
+ * `EXEC3`/`EXEC4` (`phase[4]`/`phase[5]`), appended *after* `EXEC2`, not
+ * inserted before it, so every existing `PHASE0`-`PHASE3` label keeps its
+ * exact ring position and every already-built group's timing is
+ * byte-for-byte unchanged (`buildRingCounter` itself needed no change
+ * either — it was already generic over any phase count `>=2`). `EXEC3`
+ * mirrors `EXEC1`'s own "read, then write" shape for the *second*
+ * (high) byte; `EXEC4` mirrors `EXEC2`'s own "just advance `PC`" for it.
+ * Every instruction implemented so far now spends two more genuinely
+ * wasted phases per cycle, the identical "fixed phase count over real
+ * hardware's variable M-cycles" simplification already documented,
+ * stretched further — see Known Simplifications for the concrete
+ * performance cost this turned out to have, live, not just in the test
+ * suite.
+ *
+ * `y` (even values only — `0`/`2`/`4`/`6`) selects the pair the same way
+ * `INC rr`/`DEC rr` above does (`BC`/`DE`/`HL`/`SP`); the odd `y` values at
+ * this same `z` are `ADD HL,rr`, not implemented, correctly inert since
+ * nothing here reads those lines. Real Z80's own imm16 byte order is
+ * low-byte-first in memory — `EXEC1` reads the low byte (`PC`, already
+ * past the opcode) into the pair's *low* register (`C`/`E`/`L`), `EXEC3`
+ * reads the high byte into the *high* one (`B`/`D`/`H`) — the identical
+ * high/low convention `PUSH`/`POP`'s own byte order already established,
+ * just read instead of pushed.
+ *
+ * For `BC`/`DE`/`HL` this needed no new mux layer at all: `C`/`E`/`L`'s
+ * own low-byte-write condition, and `B`/`D`/`H`'s own high-byte-write
+ * condition, each fold into that register's *existing* `ldWe` `OR`-chain
+ * (`LD r,r'`/`POP`/`LD r,n`, now one term wider) as a *fourth* competing
+ * source — safe for the identical reason the third (`LD r,n`) already was:
+ * `dec.z` is one-hot, so `z=6` and `z=1` can never both decode the same
+ * opcode. The data path was already there too (`in1 = the bus`); only the
+ * enable condition is new.
+ *
+ * `SP` (`y=6`) can't reuse that trick: it's one monolithic `buildRegister`
+ * addr-bits wide, not two independently-addressable 8-bit ones the way
+ * `BC` (`B`+`C`) is, so there's no "write just the low half" the way
+ * writing only `C` naturally leaves `B` untouched — `sp.we` commits every
+ * bit at once, always. Solved with a *fifth* write-back layer wrapping
+ * the existing `spAluActive`-gated one (mirroring `wrapWithPairCommit`'s
+ * own sink-to-sink shape, hand-written here since the per-bit logic isn't
+ * a single static label lookup): each of `SP`'s bits gets a small mux
+ * that picks its own fresh byte (low bits from the bus during the
+ * low-byte phase, high bits from the bus during the high-byte phase)
+ * while *holding* — self-looping `sp.q[i]` — during the *other* phase, so
+ * each of the two write edges re-commits the untouched half right back to
+ * itself instead of losing it. Bits at or past `addrBits` for the high
+ * byte simply don't exist — the per-bit loop stops at `addrBits`, the
+ * same truncation `spAdder`'s own arithmetic already has for a narrower-
+ * than-16-bit `SP` in this project's smaller test-scale instantiations.
+ *
+ * **`x=11`: `JP nn`.** `z=3`, `y=0` (real `0xC3`) — at the time this was
+ * written, the rest of `z=3` (`EX (SP),HL`/`EX DE,HL`/`DI`/`EI`/the `CB`
+ * prefix/`OUT (n),A`/`IN A,(n)`) stayed unimplemented and correctly inert,
+ * since nothing here read those `y` lines yet. Since then, `EX (SP),HL`/
+ * `EX DE,HL` (see "x=11: EX (SP),HL" above) and `IN A,(n)`/`OUT (n),A`
+ * (see "x=11: IN A,(n) / OUT (n),A" below) all joined this column — `DI`/
+ * `EI` and the `CB` prefix are the two genuinely permanent exceptions (see
+ * the Known Simplifications section for why each). Reuses `LD dd,nn`'s
+ * exact `PHASE2`-`PHASE4`
+ * shape (read low byte, advance, read high byte) unchanged — the one
+ * real difference is `PHASE5`: `LD dd,nn` advances `PC` a third time
+ * there, `JP nn` *overwrites* it with the freshly-read target instead, so
+ * `PHASE5` is deliberately left **out** of `pcHold`'s own `OR`-chain for
+ * this one instruction (`JP_ADVANCE_NOW` only covers `PHASE3`) — with
+ * `pcHold=0` during `PHASE5`, `pc.load` naturally goes to `1`, and the
+ * new `jpMux` (a third layer on `retMux`/`rstMux`'s own chain, gated by
+ * `JP_JUMP_NOW`) supplies the actual target.
+ *
+ * `PC` itself can't play the "self-loop hold, mux in the fresh bits"
+ * role `SP` did for its own two-byte write, though — `SP` isn't also the
+ * address something *else* needs mid-write, but `PC` is exactly that:
+ * `PHASE2`'s and `PHASE4`'s own reads need `PC` to keep being the correct,
+ * un-corrupted read address (`PC`, `PC+1`) while the target is still only
+ * half-known. Writing a partial jump target into `PC` directly would
+ * corrupt the very address the *next* read depends on. `jpTarget` — a
+ * new, dedicated `addrBits`-wide `buildRegister` nothing else ever seeds
+ * — takes `SP`'s exact per-bit "hold vs fresh" write-back shape instead,
+ * entirely separate from `PC`, and only *that* register's settled output
+ * (one full tick after both bytes have landed) becomes `jpMux`'s own
+ * `in1` on `PHASE5` — the concrete reason the commit needs its own phase
+ * rather than landing on the same edge as the high-byte read: a
+ * register's own `q` only reflects a write on the *next* relaxation, not
+ * during the same edge that committed it, so wiring `jpTarget.q` straight
+ * into `PC`'s own `d` on `PHASE4` would load the *previous* target, not
+ * this one.
+ *
+ * **`x=11`: `CALL nn`.** `z=5`, `y=1` (real `0xCD`) — `PUSH`'s own `z=5`
+ * column only claims the even `y` values (`isPushValid` above), so `y=1`
+ * was always free. The FSM's second real widening, `6` phases to `8`
+ * (`EXEC5`/`EXEC6`, appended after `EXEC4`, the same "append, never
+ * insert" rule the first widening established) — `CALL nn` needs
+ * everything `JP nn` needs (read the low byte, advance, read the high
+ * byte, advance — `PHASE2`-`PHASE5`, unchanged shape) *plus* two more
+ * actions `JP nn` never had to: pushing the return address before
+ * jumping, not just jumping. `PHASE6` pushes, `PHASE7` jumps — six real
+ * `EXEC` phases altogether for this one instruction, the deepest single
+ * opcode this project has built.
+ *
+ * The return address itself is `PC`'s own value once both advances have
+ * run — already sitting there for free, since `PHASE5`'s own advance
+ * (unlike `JP nn`'s, which skips it) is *kept* here specifically so `PC`
+ * ends up pointing past all three bytes of this instruction, the address
+ * execution should resume at.
+ *
+ * **The push deliberately writes one stack byte, not two — mirroring
+ * `RST`'s own scale coincidence, not a new one.** A real Z80's return
+ * address is 16 bits, needing two stack bytes; this project's own `RET`
+ * (built for `RST`, long before this instruction existed) only ever reads
+ * *one* byte back, because `PC` here is only `addrBits` wide. Pushing two
+ * bytes for `CALL` while `RET` only ever pops one would silently break
+ * every `CALL`-then-`RET` pair — not a limitation to route around but a
+ * compatibility constraint already fixed by `RST`'s own design, so `CALL
+ * nn`'s own push reuses `RST`'s exact mechanism: `stackWriteNow` (already
+ * `OR(pushNow, rstNow)`) widens to a third term, `CALL_PUSH_NOW`, pulling
+ * in the *entire* existing stack-write apparatus for free — `SP`'s own
+ * decrement (`spWantDec` already reads the `STACK_WRITE_NOW` label this
+ * feeds), RAM's write-enable (`ramWe` already includes `stackWriteNow`),
+ * and RAM's own address-to-`SP` selection (`writeMux`, same label) — none
+ * of it rebuilt, only a new push-*data* driver bank (mirroring `RST`'s
+ * own PC-onto-the-bus bank exactly, gated by `CALL_PUSH_NOW` instead of
+ * `rstNow`) needed adding.
+ *
+ * `callTarget` — a *second*, separate holding register from `jpTarget`,
+ * not a shared, widened one — takes the identical per-bit low/high
+ * write-back shape `jpTarget` already established. `JP nn` and `CALL nn`
+ * are mutually exclusive by `dec.z` (`z=3` vs `z=5`), so sharing one
+ * register would have been electrically safe, but a second one costs
+ * nothing this project has ever rationed (component count) and means
+ * this addition touches zero already-proven `JP nn` wiring — the same
+ * "separate over shared-and-muxed" preference `spAdder`-style adders
+ * already established elsewhere in this file. `PC`'s own commit chain
+ * grows a *fourth* mux layer, `callMux` (`retMux` -> `rstMux` -> `jpMux`
+ * -> `callMux` -> `pc.d`), gated by `CALL_JUMP_NOW` on `PHASE7`, `PHASE6`/
+ * `PHASE7` both deliberately excluded from `pcHold` for the identical
+ * reason `JP nn`'s own `PHASE5` was: `PHASE7` overwrites `PC`, and
+ * `PHASE6` doesn't touch it at all.
+ *
+ * **`x=11`: `JP cc,nn`.** `z=2` (real `0xC2`/`0xCA`/`0xD2`/`0xDA`/`0xE2`/
+ * `0xEA`/`0xF2`/`0xFA`) reuses `JP nn`'s exact `PHASE2`-`PHASE5` read/
+ * advance shape unchanged — the one real difference is what `PHASE5`
+ * does: `JP nn` always overwrites `PC`; here it branches on a flag test
+ * instead, jumping (`JPCC_JUMP_NOW`) only if the tested condition holds,
+ * otherwise just advancing `PC` a third time (`JPCC_FALLTHROUGH_NOW`,
+ * `LD dd,nn`'s own `PHASE5` shape) so execution falls through to whatever
+ * comes after this instruction's own 3 bytes. No FSM widening needed —
+ * the ring already has every phase this instruction uses.
+ *
+ * `y` selects the condition the same one-hot way `INC r`/`DEC r`'s own
+ * `r8Select` picks a register (see "x=00, z=4/z=5" above): real Z80's own
+ * mapping is `NZ`=0, `Z`=1, `NC`=2, `C`=3, `PO`=4, `PE`=5, `P`=6, `M`=7 —
+ * `P`/`M` test `F`'s own `S` bit ("plus"/"minus", i.e. sign), not to be
+ * confused with `P/V`, which `PO`/`PE` ("parity odd"/"parity even") test
+ * instead. The whole 8-way select is computed unconditionally off `F`'s
+ * live bits — the same "always compute, gate only the commit" philosophy
+ * `alu`/`spAdder`/`r8Adder` already use, cheap regardless of which
+ * instruction (if any) is actually decoding.
+ *
+ * `jpCcTarget` — a *third* separate holding register, alongside
+ * `jpTarget` and `callTarget`, not a shared, widened one — takes the
+ * identical per-bit low/high write-back shape both already established.
+ * `z=3`, `z=5`, and `z=2` are mutually exclusive by construction, so
+ * sharing one register across all three would have been electrically
+ * safe, but a third register costs nothing this project has ever
+ * rationed and keeps this addition from touching any already-proven
+ * `JP nn`/`CALL nn` wiring — the same preference stated twice already in
+ * this doc comment, holding a third time. `PC`'s own commit chain grows
+ * a *fifth* mux layer, `jpCcMux` (`retMux` -> `rstMux` -> `jpMux` ->
+ * `callMux` -> `jpCcMux` -> `pc.d`), gated by `JPCC_JUMP_NOW` on `PHASE5`
+ * — `pcHold` gets both `JPCC_ADVANCE_LOW_NOW` (`PHASE3`, unconditional)
+ * and `JPCC_FALLTHROUGH_NOW` (`PHASE5`, the condition-*false* branch);
+ * `JPCC_JUMP_NOW` (`PHASE5`, condition-*true*) deliberately stays out,
+ * the same exclusion `JP nn`'s own `PHASE5` already established.
+ *
+ * **`x=11`: `CALL cc,nn`.** `z=4` (real `0xC4`/`0xCC`/`0xD4`/`0xDC`/
+ * `0xE4`/`0xEC`/`0xF4`/`0xFC`) is the composition `CALL nn` and `JP cc,nn`
+ * already set up to be trivial: `CALL nn`'s exact `PHASE2`-`PHASE5` read/
+ * advance shape, reused completely UNCONDITIONALLY (both branches need
+ * `PC` to end up past this instruction's own 3 bytes regardless of
+ * whether the call fires, since that address is either the fall-through
+ * target or the very return address about to be pushed), plus `JP cc,nn`'s
+ * own `conditionTrue` line, reused directly rather than recomputed — `y`'s
+ * condition encoding depends only on `dec.y` and `F`'s live bits, not
+ * `dec.z`, so the identical 8-way select tree is correct for both `z=2`
+ * and `z=4` without rebuilding a single gate of it. The only branch left
+ * is whether `PHASE6` (push) and `PHASE7` (jump) actually do anything:
+ * `CALLCC_PUSH_NOW`/`CALLCC_JUMP_NOW` are each `AND(phase, conditionTrue)`
+ * directly, no separate "false" signal needed the way `JP cc,nn`'s own
+ * `JPCC_FALLTHROUGH_NOW` was, since condition-false here just means
+ * "push nothing, jump nowhere" — `PC` already sits at the right address
+ * from `PHASE5`'s own unconditional advance, and nothing else needs an
+ * explicit gate to do nothing.
+ *
+ * `callCcTarget` — a *fourth* separate holding register, identical shape
+ * to `jpTarget`/`callTarget`/`jpCcTarget`, the same "separate over
+ * shared-and-muxed" preference restated a fourth time now. `PC`'s own
+ * commit chain grows a *sixth* mux layer, `callCcMux` (after `jpCcMux`),
+ * gated by `CALLCC_JUMP_NOW` on `PHASE7` — `pcHold` gets both
+ * `CALLCC_ADVANCE_LOW_NOW` (`PHASE3`) and `CALLCC_ADVANCE_HIGH_NOW`
+ * (`PHASE5`), both unconditional; `CALLCC_PUSH_NOW`/`CALLCC_JUMP_NOW`
+ * stay out entirely, the identical exclusion `CALL nn`'s own `PHASE6`/
+ * `PHASE7` already established. The push itself reuses every piece of
+ * `CALL nn`'s own machinery: `STACK_WRITE_NOW`'s `OR`-chain widens a
+ * fourth term (already gated by `conditionTrue` inside `CALLCC_PUSH_NOW`
+ * itself, so no extra condition check needed at the `OR`), and the
+ * push-data driver bank is a straight copy of `CALL nn`'s own, gated by
+ * `CALLCC_PUSH_NOW` instead of `CALL_PUSH_NOW` — SP decrement and the
+ * RAM-write address-select follow along automatically, exactly the way
+ * `CALL nn`'s own push already inherited them from `PUSH`/`RST` for free.
+ *
+ * **`x=11`: `RET cc`.** `z=0` (real `0xC0`/`0xC8`/`0xD0`/`0xD8`/`0xE0`/
+ * `0xE8`/`0xF0`/`0xF8`) is the last of the four flag-gated `x=11`
+ * instructions this project set out to build, and by far the cheapest:
+ * a single-byte opcode, no operand bytes to read or advance past at all.
+ * The not-taken branch needs nothing beyond `PC`'s own default `PHASE1`
+ * increment — no `FALLTHROUGH` signal, no extra `pcHold` term, unlike
+ * every other conditional instruction above. Reuses `JP cc,nn`'s own
+ * `conditionTrue` directly, a third time now, for the identical reason
+ * `CALL cc,nn` already reused it: `y`'s condition encoding depends only
+ * on `dec.y` and `F`'s live bits, never on `dec.z`. `RETCC_TAKEN_NOW`
+ * (`AND(isRetCcZ, PHASE2, conditionTrue)`) is the *only* new signal this
+ * instruction needs — it widens the *existing* unconditional `RET`'s own
+ * `readNow` (a third `OR` term, built with `popReadNow`/`retNow` long
+ * before `RET cc` or `conditionTrue` existed, so the widening — and
+ * `readNow`'s own real, final definition — waits until here, after both
+ * exist) rather than building a parallel read path: `SP`'s own recovery
+ * (`stackActive` -> `spAluActive` -> `sp.we`) and the RAM read address
+ * (`READ_NOW`'s own address-mux select) both already key off `readNow`,
+ * so every already-proven piece of `POP`/`RET`'s own read machinery comes
+ * along for free, the identical "reuse the whole apparatus, add one
+ * term" shape `CALL cc,nn`'s own push used on `STACK_WRITE_NOW`.
+ *
+ * No dedicated target register either — unlike `JP cc,nn`/`CALL cc,nn`,
+ * whose 2-byte targets have to be held across two read phases before
+ * `PC` (also the read address for those very bytes) can safely accept
+ * them, `RET cc`'s target is a *single* popped byte already sitting on
+ * the bus the instant it's read, the identical reason `RET`'s own
+ * `retMux` never needed one either. `PC`'s own commit chain grows a
+ * *seventh* mux layer, `retCcMux` (after `callCcMux`), gated by
+ * `RETCC_TAKEN_NOW` — `in1` is the raw bus, not a register's `q`, `retMux`'s
+ * own shape copied exactly.
+ *
+ * **`x=11`, `z=1`, `y=3`: `EXX`.** Real `0xD9` — the three-pair version of
+ * `EX AF,AF'` (see "x=00: EX AF,AF'" above), sharing `isStackReadZ`
+ * (`x=11, z=1`, already built for `RET`/`POP`) one more way. `B'`/`C'`/
+ * `D'`/`E'`/`H'`/`L'` are six more plain registers, seeded externally
+ * exactly like `rB`..`rL` themselves. Unlike `A`/`F`, `rB`..`rL` were
+ * *already* `wrapWithPairCommit`-wrapped one or more layers deep (`LD`/
+ * `POP`, `INC`/`DEC` pair, `INC`/`DEC` single, and — `B` specifically —
+ * `DJNZ`), so `EXX`'s own write-back needs no bespoke per-bit mux at all:
+ * one more `wrapWithPairCommit` call per register, stacked on whichever
+ * layer was previously outermost, reading `B'`..`L'`'s own old value
+ * (`BPOLD`..`LPOLD`) the identical way `EX AF,AF'` reads `APOLD`/`FPOLD`.
+ * `B'`..`L'` themselves are wrapped the same single layer `A'`/`F'` were,
+ * reading `BOLD`..`LOLD` (`rB`..`rL`'s own current bits, published
+ * alongside `AOLD`/`FOLD`). Six independent register-to-register swaps on
+ * one shared edge, same master-slave guarantee as the one-pair case,
+ * confirmed the identical way: the regression test reverses `EXX` twice
+ * in a row and checks every one of the twelve registers involved lands
+ * back on its starting value, not just `B`/`C`/`D`/`E`/`H`/`L`.
+ *
+ * **`x=11`, `z=1`, `y=5`: `JP (HL)`, `y=7`: `LD SP,HL`.** Real `0xE9`/
+ * `0xF9` — both sharing `isStackReadZ` a fourth and fifth way, both the
+ * cheapest kind of jump/load this file has built: single-byte, no operand
+ * read, no dedicated target register, `PHASE2` commits straight off `H`/
+ * `L`'s own current bits. `JP (HL)` gets a ninth mux layer on `PC`'s own
+ * chain (after `jrMux`), `in1` wired directly to `HL` (bits 0..7 from `L`,
+ * 8 and up from `H` — `addrBits` is narrower than 16 in every test this
+ * file has, so in practice this is just `L`, but the wiring is correct for
+ * a wider one too). `LD SP,HL` gets a third layer on `SP`'s own chain
+ * (after `LD SP,nn`'s own two-phase low/high wrapper), the *first* of
+ * `SP`'s own layers that doesn't need a two-phase split at all — `H`/`L`
+ * are both already sitting in registers simultaneously, unlike `LD SP,nn`'s
+ * own sequentially-read immediate bytes.
+ *
+ * With `EXX`/`JP (HL)`/`LD SP,HL`, every `x=11` opcode this project set
+ * out to build is in: `PUSH`/`POP`/`RET`/`RST n`/`JP nn`/`CALL nn`/
+ * `JP cc,nn`/`CALL cc,nn`/`RET cc`/`EXX`/`JP (HL)`/`LD SP,HL`.
+ *
+ * **`x=11`, `z=3`, `y=5`: `EX DE,HL`.** Real `0xEB`, sharing `isX11Z3`
+ * (`x=11, z=3`, the same condition `JP nn` above already sits on, renamed
+ * from `isJpNnZ` the identical honest reason `isX0Z0`/`isJrGroupZ` were —
+ * this project has never kept a label that quietly stopped describing
+ * what it actually gates). Unlike `EX AF,AF'`/`EXX`, no shadow registers
+ * at all: `D`/`H` and `E`/`L` are two ordinary, already-live pairs simply
+ * trading places. `HOLD`/`DOLD`/`EOLD`/`LOLD` — published earlier for
+ * `EXX`'s own swap — already carry exactly the values this needs (`D`'s
+ * new value is `H`'s old one and vice versa, `E`'s new value is `L`'s old
+ * one and vice versa), so this reuses those four labels outright: one more
+ * `wrapWithPairCommit` layer per register, no new per-bit publishing at
+ * all. The regression test proves the real cross-pair swap the same way
+ * `EX AF,AF'`/`EXX` do — reading `D`/`E` back directly, not just `H`/`L`.
+ *
+ * **`x=11`, `z=3`, `y=4`: `EX (SP),HL`.** Real `0xE3` — the one member of
+ * this file's whole "swap on one edge" family (`EX AF,AF'`/`EXX`/
+ * `EX DE,HL` above) that swaps a register pair with *RAM* instead of
+ * another register, and the only one that needs a real 4-phase
+ * read-modify-write to do it: `PHASE2` reads `[SP]` into a holding
+ * register, `PHASE3` reads `[SP+1]` into a second one (`exSpHlPlusOne`, a
+ * *dedicated* `addrBits`-wide adder — deliberately not a tap on `spAdder`
+ * itself, since this opcode never actually commits anything into `SP`,
+ * only ever addresses one past it), `PHASE4` writes `L`'s own old value to
+ * `[SP]` while `L` itself takes the first holding register's value on that
+ * same edge, `PHASE5` mirrors that for `H`/`[SP+1]`/the second holding
+ * register — four phases, well inside the existing 8-phase budget. Every
+ * one of the three adjacent-phase boundaries in that sequence
+ * (`PHASE2`/`PHASE3`, `PHASE3`/`PHASE4`, `PHASE4`/`PHASE5`) gets the
+ * identical "later phase explicitly excludes the earlier one" fix
+ * `LD (nn),HL`'s own live bug first taught this file (see "x=00, z=2"
+ * above) — applied pre-emptively this time, across all three boundaries
+ * at once, rather than found live a fourth (and fifth, and sixth) time.
+ *
+ * Found live, a genuinely new class this time — not another adjacent-phase
+ * bus fight: the first cut drove `L`/`H`'s own old value onto the bus
+ * straight from `REGL`/`REGH` (labels already anchored to `rL.q`/`rH.q`
+ * for the operand bus and `LD (nn),HL`'s own write above), reasoning that
+ * since those labels already worked for every earlier bus source, they'd
+ * work here too. They don't, for a reason specific to *this* opcode: `L`/
+ * `H` are *also* committing a brand-new value on this exact same edge
+ * (`rLExt8`/`rHExt8` below). A register safely reads *another* register's
+ * old value on a shared edge because the reader's own master latch
+ * freezes at whatever it saw *before* the edge (see the `sp.q`-during-a-
+ * read doc comment, "x=00: INC (HL)/DEC (HL)/LD (HL),n" above) — but a
+ * bare tri-state buffer has no master latch of its own to freeze anything;
+ * it just reflects whatever `rL.q`/`rH.q` settle to *within this same
+ * tick*, which is the fresh value the instant the slave releases it, not
+ * the pre-edge one. The bus ended up carrying the *new* `L` (the value
+ * about to be written from `[SP]`) instead of the old one — `RAM` never
+ * actually changed, silently, while `HL`'s own read-back looked completely
+ * correct (it *was* — only the write side was broken). `oldLTemp`/
+ * `oldHTemp` — two more holding registers, capturing `L`/`H` during
+ * `PHASE2` (well before either one's own same-instruction write at
+ * `PHASE4`/`PHASE5`) — fix it the same way every other "value must survive
+ * past its own bus's next user" case in this file already does: a real
+ * flip-flop's own master-slave discipline in between, not a live
+ * combinational tap on a register that's about to move. `L`/`H`'s own bus
+ * banks read `oldLTemp`/`oldHTemp` now, not `REGL`/`REGH` directly.
+ *
+ * `isX11Z3` (renamed from `isJpNnZ`, the identical honest-naming reason
+ * `isX0Z0`/`isJrGroupZ` were) is `x=11, z=3` shared four ways now: `JP nn`,
+ * `EX DE,HL`, and `EX (SP),HL`, with `DI`/`EI` deliberately still inert
+ * (see the Known Simplifications section — this simulator has no
+ * interrupt line at all, so a flip-flop nobody ever reads would be
+ * decoration, not a feature) and `IN A,(n)`/`OUT (n),A` covered separately
+ * (see "x=11: IN A,(n) / OUT (n),A" below) since they needed an I/O port
+ * concept this file never had before either.
+ *
+ * **`x=11`, `z=6`: `ALU op A,n`.** Real `0xC6`/`0xCE`/`0xD6`/`0xDE`/`0xE6`/
+ * `0xEE`/`0xF6`/`0xFE` (`ADD`/`ADC`/`SUB`/`SBC`/`AND`/`XOR`/`OR`/`CP A,n`)
+ * — the immediate-operand twin of `x=10`'s own ALU-on-register group,
+ * `isAluImm8`/`aluImm8ReadNow`/`aluImm8AdvanceNow` the exact `PHASE2`-
+ * read/`PHASE3`-advance shape `LD r,n`'s own `isLdImm8` established,
+ * gated by `x=11` instead of `x=00`. The genuinely interesting part is how
+ * little this needed: `alu.op0`/`op1`/`cin`/`bInv` (see "x=10: ADC/SBC"
+ * above) are keyed on `dec.y` alone, never `dec.x` — this column's own `y`
+ * values encode the identical eight operations `x=10`'s own `y` does, and
+ * `bInv`'s own operand already reads straight off the bus, unconditionally
+ * — so the instant `aluImm8ReadNow` puts the freshly-read immediate byte
+ * on the bus (`PC` already the default read address, no new address-mux
+ * term needed), `alu.out`/`alu.cout` are *already* the right answer, zero
+ * new op-select wiring. `aluAnyGroupNow` (`OR(aluGroupNow,
+ * aluImm8ReadNow)`) is the one new signal this needed — `A`/`F`'s own
+ * commit (`aWe`/`fWe`/`F`'s own per-bit `baseMux` sel) widens to it in
+ * place of bare `aluGroupNow`; `groupActive` (the *register*-operand bus
+ * enable) deliberately does not, since this opcode's operand is the
+ * immediate byte RAM already put on the bus, not a register's own read.
+ *
+ * **`x=11`, `z=3`, `y=2`: `OUT (n),A`, `y=3`: `IN A,(n)`.** Real `0xD3`/
+ * `0xDB` — the two opcodes in this file that finally needed a real I/O
+ * port concept, invented from scratch here since nothing before this ever
+ * touched anything outside `RAM`/registers. Kept deliberately minimal:
+ * `ioPortAddr` (a live tap of the bus, valid only while `ioRead`/
+ * `ioWrite` fires — the immediate byte `n`, addressed the same
+ * `PHASE2`-read/`PHASE3`-advance way `ALU op A,n` above reads its own),
+ * `ioPortDataOut` (a live tap of `A`, valid only while `ioWrite` fires),
+ * `ioPortDataIn` (a genuine external sink — the identical contract
+ * `Register.d`/`Register.we` already use, a caller's own device wires
+ * *into* it, this file never drives it), and the two strobes themselves.
+ * Real Z80 hardware also puts `A` on the *upper* half of a 16-bit port
+ * address (`A:n`, not just `n`) — this slice only ever exposes `n`, a
+ * real, documented simplification, not an oversight; building a genuine
+ * peripheral to sit on the other end of these pins is explicitly out of
+ * scope too — this file exposes the bus, not a keyboard controller.
+ *
+ * `OUT (n),A` commits at `PHASE2` itself: `n` (the address) and `A` (the
+ * data) are both already stable the instant `n` lands on the bus, no
+ * holding register needed the way `EX (SP),HL`'s own register-to-RAM swap
+ * above did — `A` isn't also changing on this same tick for this opcode.
+ * `IN A,(n)` reads at `PHASE2` too, and needs a genuinely new layer on
+ * `A`'s own write mux: `in1` there *is* `ioPortDataIn[i]`'s own raw port
+ * pin, not a value read off of it, so a caller's own device can drive it
+ * directly. `DI`/`EI` (`y=6`/`y=7`, the two remaining `y` values in this
+ * column) stay deliberately inert — see the Known Simplifications section.
+ *
+ * **`x=00`, `z=0`, `y=4..7`: `JR cc,e`.** Real `0x20`/`0x28`/`0x30`/`0x38`
+ * — `NZ`/`Z`/`NC`/`C` only. That four-condition limit is real Z80
+ * hardware, not a simplification: this `z`-column's other `y` values are
+ * `NOP`/`EX AF,AF'`/`DJNZ`/`JR` (unconditional), none implemented here,
+ * and `PO`/`PE`/`P`/`M` were never valid encodings for this opcode on
+ * real silicon either — `isJrCcYValid` (an `OR`-fold over `y=4..7`) keeps
+ * the other four `y` values in this column correctly inert rather than
+ * accidentally decoding as some other instruction's own `z=0` opcode.
+ * `JR cc`'s condition test reuses `JP cc,nn`'s own `F`-bit taps
+ * (`notFZ`/`f.q[6]`/`notFC`/`f.q[0]`) but NOT its `conditionTrue` pin
+ * directly — this opcode's own `y=4..7` encode the identical four
+ * conditions at *different* `y` values than `JP cc,nn`'s own `y=0..3`
+ * (real Z80's own encoding, not a choice made here), so a small, separate
+ * 4-way select tree (`jrCcConditionTrue`) pairs those same `F`-bit taps
+ * with this opcode's own `y` lines instead of rebuilding them.
+ *
+ * The real new piece this instruction needs — the reason it waited this
+ * long despite reusing so much — is genuine PC-relative arithmetic:
+ * `JP cc,nn` writes an absolute operand straight into `PC`; `JR cc` has to
+ * *add* a signed 8-bit displacement to whatever `PC` already is. A
+ * *second* `buildAlu` instance (`jrOffsetAdder`, width `addrBits`, the
+ * same "dedicated adder over one shared, muxed one" preference `spAdder`
+ * already established), permanently in ADD mode, `a` wired straight to
+ * `pc.q`. By the phase this fires (`PHASE4`), `PHASE3`'s own advance has
+ * already committed on the prior edge, so `pc.q` already equals "the
+ * address right after this instruction's own 2 bytes" — exactly the base
+ * a relative jump needs, with no special-cased "peek ahead" logic. `b` is
+ * `jrCcOffset`'s own 8 captured bits, sign-extended up to `addrBits` (bit
+ * 7 repeated into every bit above it) — correct only when `addrBits >= 8`,
+ * an explicit, documented limitation this project has never needed to
+ * lift rather than a silently wrong one for narrower address spaces.
+ *
+ * `jrCcOffset` itself is a *plain* 8-bit register, not a "hold vs fresh"
+ * mux pair the way every multi-byte target in this file needs — those
+ * exist because a single register captures two different byte-halves
+ * across two separate `we` pulses; a displacement byte is captured
+ * exactly once, so a bare `we`-gated capture (`B`/`C`/`D`/... 's own `LD
+ * r,n` shape) is enough. Only one phase's worth of new decode logic
+ * separates the two branches, the same economy `RET cc` already found:
+ * `jrCcJumpNow` (`PHASE4`, `AND` with `jrCcConditionTrue`) is the only new
+ * per-opcode signal `PC`'s commit chain needs — no `FALLTHROUGH` term,
+ * since condition-false needs nothing beyond `PHASE3`'s own
+ * already-unconditional advance. `PC`'s own commit chain grows an
+ * *eighth* mux layer, `jrMux` (after `retCcMux`), `in1` wired to
+ * `jrOffsetAdder.out` directly — a live adder output, not a register's
+ * own `q`, since the sum needs no separate holding place of its own once
+ * `jrCcOffset` already holds the one value that changes.
+ *
+ * **`x=00`, `z=0`, `y=2..3`: plain `JR e` and `DJNZ e`.** Real `0x18`
+ * (`JR`, unconditional) and `0x10` (`DJNZ`) round out this `z`-column now
+ * that the hard part — `jrCcOffset`/`jrOffsetAdder` — already exists.
+ * Plain `JR` reuses every piece of `JR cc,e`'s own machinery unchanged,
+ * minus the condition test: `jrReadNow`/`jrAdvanceNow`/`jrJumpNow` are
+ * each a single `AND(isJr, PHASE_n)`, no `F`-bit tap needed since this
+ * one always jumps. `isX0Z0` (renamed from `isJrCcZ`, then renamed again
+ * from `isJrGroupZ` once `EX AF,AF'` — see "x=00: EX AF,AF'" below — needed
+ * this exact same `x=00, z=0` condition for a `y` this file's own JR family
+ * doesn't touch at all; this project has never kept a label that quietly
+ * stopped describing what it actually gates) is the shared `x=00, z=0`
+ * decode this, `DJNZ`, `JR cc,e`'s own, and `EX AF,AF'` all sit on top of.
+ *
+ * `DJNZ` needs one genuinely new piece: `djnzAdder`, a *third* dedicated
+ * `buildAlu` (8 bits, `spAdder`'s own "b=all-1s, cin=0" decrement
+ * encoding), computed unconditionally off `rB.q` — the same "always
+ * compute, gate only the commit" shape every adder in this file already
+ * uses — feeding `B`'s own decremented value into its write-back below.
+ *
+ * The zero-test deliberately does NOT read `djnzAdder.out` — found live:
+ * by the phase the jump decision fires (`PHASE4`), `PHASE2`'s own write
+ * has already committed the decrement into `rB.q`, so `djnzAdder` (which
+ * recomputes "B minus one" continuously, off whatever `rB.q` currently
+ * is) would silently compute "B minus one *again*" at that point, one
+ * decrement too many for the *test* specifically (the committed value
+ * itself was still correct) — a bug that only misfires from the second
+ * loop pass onward, since the first pass's own off-by-one happens to
+ * still read nonzero. `bNotZeroChain`, a separate `OR`-fold built the
+ * identical way `r8ZChain` already is (stopped one step short of the
+ * final `NOT`) but over `rB.q`'s own bits directly, reads the register's
+ * real, already-decremented value instead. `B`'s own decremented value
+ * commits through a *fourth* write-back layer (`rBExt4`,
+ * `wrapWithPairCommit` again, gated by `DJNZ_DEC_NOW`) stacked on top of
+ * the three `B` already had (`LD`/`POP`, `INC`/`DEC BC`, `INC`/`DEC B`) —
+ * `DJNZ` hardcodes `B` specifically, never `y`-selected, so no other
+ * register ever competes for this particular layer.
+ *
+ * `JR_READ_NOW`/`JR_ADVANCE_NOW`/`JR_JUMP_NOW` (renamed from `JRCC_*` for
+ * the identical honest-naming reason `isX0Z0` was) are each a
+ * straight `OR`-fold across all three variants' own per-opcode signals —
+ * safe because `dec.y` one-hot means at most one of `JR cc,e`/plain
+ * `JR`/`DJNZ` is ever the opcode actually decoding, never two at once.
+ *
+ * **`x=00`, `z=0`, `y=1`: `EX AF,AF'`.** Real `0x08` — the one other `y` in
+ * this column besides `NOP` (`y=0`, needing no circuitry at all: nothing in
+ * this file has ever decoded to an action for it, which *is* correct real
+ * Z80 `NOP` behavior) that isn't part of the `JR` family, sharing `isX0Z0`
+ * one more way. `A'`/`F'` (`aP`/`fP`) are a real shadow accumulator/flags
+ * pair — two more plain 8-bit registers, seeded externally exactly like
+ * `rB`..`rL`, since real hardware gives them no defined power-on value
+ * either. The swap itself commits both directions on the identical edge:
+ * `A`'s own write mux gains a layer selecting `aP`'s old value; `aP` itself
+ * (via `wrapWithPairCommit`, built for `INC BC/DE/HL`'s own "+1 into a
+ * paused pair" shape but generic enough to hand a register's raw old value
+ * to instead of an adder's fresh one) commits `A`'s old value the same
+ * tick. `F`/`F'` mirror this exactly, except `F`'s own write mux needs the
+ * swap layer on *every* bit that reaches it (0/1/2/6/7 — bits 3/4/5 already
+ * `continue` out of that loop hardwired to `gnd`, so swapping two things
+ * that are always 0 needs no layer at all), not just the one or two bits
+ * most earlier features touched. A true two-register swap on one shared
+ * edge is a topology this file hasn't built before — every earlier
+ * register-reads-another-register's-old-value case (`sp.q` during a stack
+ * read, `a.q` feeding `F`'s own flags) was one-directional; the master-
+ * slave discipline that makes any of those safe (see the `sp.q` doc
+ * comment, "x=00: INC (HL)/DEC (HL)/LD (HL),n" above) doesn't care which
+ * direction the arrow points, or how many arrows there are at once, so it
+ * turned out to need nothing new — confirmed by the regression test round-
+ * tripping the swap twice in a row and landing back on the original values.
+ *
+ * **`x=00`, `z=1`, `y` odd: `ADD HL,rr`.** Real `0x09`/`0x19`/`0x29`/
+ * `0x39` (`BC`/`DE`/`HL`/`SP`) — the exact complement of `LD dd,nn`'s own
+ * even-`y` opcodes at this same `z`. Implementing this surfaced a real,
+ * pre-existing gap: `isLdDdNn` never checked `y`'s own parity at all, so
+ * before this, `PHASE3`/`PHASE5`'s own advances fired for *any* `y` at
+ * `z=1` — no register write ever committed for the odd half (nothing
+ * downstream read those lines), but `PC` would have silently advanced as
+ * if a fetched `ADD HL,rr` opcode had two nonexistent immediate bytes to
+ * skip. Never triggered before now, since no program byte sequence had
+ * ever included one of these opcodes; `isLdDdNnYValid` (even `y` only)
+ * and this instruction's own `isAddHlYValid` (odd `y` only) now partition
+ * every `y` value at `z=1` between exactly one of the two, none left
+ * ambiguous.
+ *
+ * `addHlAdder` is a *fourth* dedicated `buildAlu`, 16 bits this time — a
+ * genuine ripple-carry add across the full pair, not two independent
+ * 8-bit ones, `a` wired to `HL`'s own current value (`rL.q` low, `rH.q`
+ * high). `b` is a 4-way one-hot select among `BC`/`DE`/`HL`/`SP`'s own
+ * bits, the identical shape `r8Select` already uses for INC r/DEC r's own
+ * register choice, 16 lanes instead of 8. `SP` — this simulator's own
+ * address-space-only register, `addrBits` wide rather than a genuine 16
+ * bits — zero-extends past `addrBits`: an unsigned address, not a signed
+ * offset, so zero-extension is correct here, the opposite choice from
+ * `jrOffsetAdder`'s own sign-extension for a genuinely signed
+ * displacement. Real Z80 leaves `S`/`Z`/`P/V` untouched for this opcode
+ * and only updates the carry flag (`H` too, not tracked anywhere in this
+ * project's own `F`) — a *fourth* mux layer ahead of `F`'s own bit-0
+ * commit, inserted only for that one bit, gated by `ADDHL_NOW`, feeding
+ * `addHlAdder.cout` in; every other flag bit never sees this layer at
+ * all. `H`/`L` get a *fifth* write-back layer each (`rHExt4`/`rLExt4`,
+ * `wrapWithPairCommit` again, the identical shared-commit-label shape
+ * `INCDEC_HL_NOW` already established for the pair moving together).
+ *
+ * **`x=00`, `z=2`: indirect loads through `(BC)`/`(DE)`/`(nn)`.** Real
+ * `0x02`/`0x0A`/`0x12`/`0x1A`/`0x22`/`0x2A`/`0x32`/`0x3A` — all 8 `y`
+ * values are valid opcodes here, no gap. `y=0..3` (`LD (BC),A`/`LD
+ * A,(BC)`/`LD (DE),A`/`LD A,(DE)`) are single-byte, committing at
+ * `PHASE2` like every other 1-byte opcode in this file; `y=4..7` (`LD
+ * (nn),HL`/`LD HL,(nn)`/`LD (nn),A`/`LD A,(nn)`) are 3-byte, reusing `LD
+ * dd,nn`'s exact 4-phase read-low/advance/read-high/advance shape
+ * (`PHASE2`-`PHASE5`) to land a fresh address in `nnAddr`, then
+ * committing at `PHASE6` (`A`, one byte) or `PHASE6`+`PHASE7` (`HL`, low
+ * byte first — real Z80's own convention) — the full 8-phase budget, no
+ * FSM widening needed, the same fit `JR cc,e`'s own arithmetic found.
+ *
+ * `nnAddr` is a *fifth* dedicated holding register, the identical "hold
+ * vs fresh" shape `jpTarget`/`callTarget`/`jpCcTarget`/`callCcTarget`
+ * already use — needed for the same reason every one of those was: `PC`
+ * is busy being the read address for `nn`'s own two bytes, so the
+ * freshly-read address has to live somewhere else until the data phase
+ * needs it. `nnAddrPlusOne` is a *fifth* dedicated `buildAlu` (`spAdder`'s
+ * own "b=all-0s, cin=vcc" +1 encoding, `djnzAdder`'s own -1 mirrored) —
+ * `LD (nn),HL`/`LD HL,(nn)` need the address one past `nn` for `HL`'s own
+ * high byte.
+ *
+ * RAM's own address bus grows four more override layers past the
+ * existing `PC`-or-`HL`-or-`SP` chain: `BC`/`DE` (this simulator's own
+ * "only the low byte matters" convention `HL`'s own addressing already
+ * relies on) for the register-indirect opcodes, then `nnAddr` and
+ * `nnAddr + 1` for the absolute-indirect ones. `A` gets a new
+ * tri-state-buffer bank onto the bus for its own three writes (`LD
+ * (BC),A`/`LD (DE),A`/`LD (nn),A`, one shared enable — `dec.y` one-hot
+ * means at most one ever fires); `L`/`H` get one each, separately, for
+ * `LD (nn),HL`'s own low/high write phases. Reads go the other way:
+ * `isBusToA` (`A`'s own "read from the bus instead of the ALU" select,
+ * already widened three times before this) gets a fourth term for all
+ * three of this instruction's own reads into `A`; `H`/`L` each get a
+ * *sixth* write-back layer (`wrapWithPairCommit` again, `BUS` itself as
+ * the value label this time, since the data comes straight off the bus
+ * rather than a computed adder result).
+ *
+ * **`x=00`: `INC (HL)`/`DEC (HL)`/`LD (HL),n`.** Real `0x34`/`0x35`/
+ * `0x36` — the `y=6` slot every earlier `x=00` group (`INC r`/`DEC r`,
+ * `LD r,n`) deliberately left inert, a real RAM read-modify-write instead
+ * of a register touch. `INC (HL)`/`DEC (HL)` reuse `INC r`/`DEC r`'s own
+ * shared `r8Adder` rather than building a dedicated one: `r8Select`
+ * grows an eighth entry, `HLMEM`, selecting `hlMemTemp` — a *sixth*
+ * dedicated holding register (`jpTarget`'s own reasoning: `(HL)`'s value
+ * has to survive from the read phase to the write-back phase, one phase
+ * later, after the bus has moved on) — instead of a CPU register's own
+ * `q`. One shared adder computing eight different sources' `±1`, not
+ * nine, the identical economy that adder was built for in the first
+ * place.
+ *
+ * The existing `incDecR8Now` (the 7-register case's own `PHASE2` commit)
+ * explicitly excludes `y=6` now — `(HL)`'s own value isn't valid until a
+ * whole phase later, so committing on the old shared gate would read
+ * `hlMemTemp`'s stale previous contents. `HLMEM_READ_NOW` (`PHASE2`)
+ * captures the read; `INCDEC_HLMEM_NOW` (`PHASE3`, explicitly excluding
+ * `HLMEM_READ_NOW` — not bare `PHASE3`) commits it, both to `F`'s own
+ * flags (widening `INCDEC_R8_NOW` itself with this new term) and to RAM,
+ * via a plain tri-state buffer bank driving `R8RESULT0-7` onto the bus.
+ * That exclusion is the identical fix `LD (nn),HL`'s own live bug already
+ * taught this file — `PHASE2` (RAM driving the bus for the read) and
+ * `PHASE3` (this write's own buffer driving it right back) are adjacent
+ * ring positions, the same transient bus-fight risk — pre-empted here
+ * instead of found live a third time.
+ *
+ * `LD (HL),n` needs its own *seventh* holding register, `ldHlNImm`,
+ * capturing the immediate byte off the *same* bus `LD r,n`'s own
+ * `ldImm8ReadNow` already makes valid at `PHASE2` (no separate read
+ * needed — `z=6`'s existing read/advance shape already covers `y=6` like
+ * every other `y`, only the per-register write-backs ever excluded it).
+ * `ldHlNWriteNow` (`PHASE3`, explicitly excluding `ldHlNReadNow` —
+ * `PHASE2`, the identical adjacent-phase exclusion applied a second time
+ * in this same feature) drives `ldHlNImm` onto the bus and RAM's own
+ * `we`. RAM's own address bus gets two more override terms: `(HL)`'s own
+ * (`HLMEM_READ_NOW` OR'd with `INCDEC_HLMEM_NOW`) and `LD (HL),n`'s own
+ * `LDHLN_WRITE_NOW` (`PHASE3`-only — its own `PHASE2` still needs `PC`,
+ * to read the immediate byte itself, a genuinely mixed addressing need
+ * `INC (HL)`/`DEC (HL)` never has).
+ *
+ * Found live, and the worst decode bug this file has hit so far: the
+ * first cut forced RAM's address with the *unconditional* `isIncDecHlMem`
+ * (`dec.y`/`dec.z`, no phase gate at all), reasoned as "a single-byte
+ * opcode with no other RAM activity to conflict with, so holding `HL` for
+ * the instruction's entire lifetime is harmless." That reasoning missed
+ * that `ir.q` itself doesn't update to the *next* opcode until the exact
+ * same tick `FETCH`'s own read commits — so on that shared tick,
+ * `isIncDecHlMem` was still reading the *old* `ir.q` (still `INC (HL)`/
+ * `DEC (HL)`), still forcing the address to `HL`, at the precise moment
+ * `FETCH` needed `PC`. The fetch silently read `RAM[HL]` instead of the
+ * real next opcode and captured garbage into `ir` — a corrupted decode
+ * that only surfaced as a wrong `A` two full instructions later (`LD
+ * A,(HL)` reading a stale value after the write it depended on had
+ * already gone through correctly), which is what made this one take four
+ * rounds of a standalone debug build to chase down to the actual `ir`
+ * bits rather than the RAM write itself. `hlNow` (this same file's own
+ * x=10/x=01 `(HL)` addressing) never had this problem because it was
+ * already `PHASE2`-scoped from the start (folded into `groupActive`,
+ * itself `PHASE2`-gated) — it was never "unconditional across the whole
+ * instruction" to begin with. The fix gives `(HL)`'s own RMW that same
+ * discipline: force the address only during the two phases that actually
+ * touch RAM (`HLMEM_READ_NOW` at `PHASE2`, `INCDEC_HLMEM_NOW` at
+ * `PHASE3`), not for the instruction's entire lifetime. (A second,
+ * smaller slip on the way to the fix: the replacement terms were wired
+ * into a new OR stage that never actually fed the final address mux,
+ * `INCDEC_HLMEM_NOW`'s own branch dead-ending one node short — same
+ * symptom, caught by the same regression test on the very next run.)
+ */
+export function buildZ80Cpu(
+  parent: Circuit,
+  library: ChipLibrary,
+  addrBits: number,
+  program?: Uint8Array,
+  pos: Point = { x: 0, y: 0 },
+): Z80Cpu {
+  const vcc = makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 400 }).pins.out;
+  const gnd = makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 360 }).pins.out;
+
+  // Every gate primitive in library.ts (buildAnd/buildOr/buildNot/buildXor,
+  // etc.) takes concrete vcc/gnd *pins* and wires straight to them — so
+  // reusing the one pair above for a composite this wide (pos.x-400 to
+  // pos.x+11300) means the vast majority of this function's own wire()
+  // calls are actually the power rail, not signal, stretching clear across
+  // the canvas to reach it. Measured: 773 of 883 long top-level wires here
+  // were exactly this, before the fix below.
+  //
+  // The fix leans on a mechanism that already exists for a different
+  // reason: Circuit.computeNets() ties every `source` component's output
+  // pin to the net named "VCC" (value=1) or "GND" (value=0) *by value*,
+  // the same GLOBAL_NET_NAMES path a same-named `label` uses — no wire
+  // between them required. So a *second* makeSource(parent, 1, ...) placed
+  // right next to a distant cluster of gates lands on the exact same VCC
+  // net as the original, automatically, regardless of position or which
+  // local variable holds it. These are that: four more (vcc2/gnd2 ...
+  // vcc5/gnd5) parked beside the four gate clusters far enough from the
+  // original pair to matter, each feeding only the buildAnd/Or/Not/Xor
+  // calls physically near it. Unlike the label refactor, a mismatch here
+  // can't silently create a disconnected island — every Source(1) is VCC
+  // and every Source(0) is GND no matter what it's called, so the only way
+  // to get this wrong is leaving some gate's power pin unwired entirely,
+  // not misnaming a net.
+  const vcc2 = makeSource(parent, 1, { x: pos.x + 3700, y: pos.y + 1520 }).pins.out; // ALU / flags / A-write cluster
+  const gnd2 = makeSource(parent, 0, { x: pos.x + 3700, y: pos.y + 1560 }).pins.out;
+  const vcc3 = makeSource(parent, 1, { x: pos.x + 9700, y: pos.y - 380 }).pins.out; // x=10/x=01/x=11 decode cluster
+  const gnd3 = makeSource(parent, 0, { x: pos.x + 9700, y: pos.y - 340 }).pins.out;
+  const vcc4 = makeSource(parent, 1, { x: pos.x + 8300, y: pos.y + 2820 }).pins.out; // SP adder / F mux / SP mux cluster
+  const gnd4 = makeSource(parent, 0, { x: pos.x + 8300, y: pos.y + 2860 }).pins.out;
+  const vcc5 = makeSource(parent, 1, { x: pos.x + 10500, y: pos.y - 580 }).pins.out; // operand bus / push-pop banks cluster
+  const gnd5 = makeSource(parent, 0, { x: pos.x + 10500, y: pos.y - 540 }).pins.out;
+
+  const pc = buildProgramCounter(parent, library, addrBits, { x: pos.x, y: pos.y });
+  const ram = makeRam(parent, addrBits, 8, program, { x: pos.x + 1400, y: pos.y });
+  const ir = buildInstructionRegister(parent, library, { x: pos.x + 2600, y: pos.y });
+  const a = buildRegister(parent, library, 8, { x: pos.x + 3800, y: pos.y });
+  const rB = buildRegister(parent, library, 8, { x: pos.x + 5000, y: pos.y });
+  const rC = buildRegister(parent, library, 8, { x: pos.x + 5000, y: pos.y + 1200 });
+  const rD = buildRegister(parent, library, 8, { x: pos.x + 6200, y: pos.y });
+  const rE = buildRegister(parent, library, 8, { x: pos.x + 6200, y: pos.y + 1200 });
+  const rH = buildRegister(parent, library, 8, { x: pos.x + 7400, y: pos.y });
+  const rL = buildRegister(parent, library, 8, { x: pos.x + 7400, y: pos.y + 1200 });
+  // B'/C'/D'/E'/H'/L' — real Z80's own shadow register-pair set, `EXX`'s
+  // own registers: see "x=11: EXX" below for the three-pair swap itself.
+  // Same "real CPU state, built here, wired later" reasoning as `aP`/`fP`
+  // above.
+  const bP = buildRegister(parent, library, 8, { x: pos.x + 5000, y: pos.y + 3800 });
+  const cP = buildRegister(parent, library, 8, { x: pos.x + 5000, y: pos.y + 4600 });
+  const dP = buildRegister(parent, library, 8, { x: pos.x + 6200, y: pos.y + 3800 });
+  const eP = buildRegister(parent, library, 8, { x: pos.x + 6200, y: pos.y + 4600 });
+  const hP = buildRegister(parent, library, 8, { x: pos.x + 7400, y: pos.y + 3800 });
+  const lP = buildRegister(parent, library, 8, { x: pos.x + 7400, y: pos.y + 4600 });
+  const f = buildRegister(parent, library, 8, { x: pos.x + 8000, y: pos.y + 2200 });
+  const sp = buildRegister(parent, library, addrBits, { x: pos.x + 8000, y: pos.y + 3000 });
+  // A'/F' — real Z80's own shadow accumulator/flags pair, `EX AF,AF'`'s own
+  // register: see "x=00: EX AF,AF'" below for the swap itself. Built here,
+  // alongside `a`/`f`, for the identical reason every other register lives
+  // here — the swap wiring (needing `wrapWithPairCommit`, defined much
+  // further down) happens later, but the registers themselves are real CPU
+  // state, same as anything else in this block.
+  const aP = buildRegister(parent, library, 8, { x: pos.x + 3800, y: pos.y + 3800 });
+  const fP = buildRegister(parent, library, 8, { x: pos.x + 8000, y: pos.y + 3800 });
+  const alu = buildAlu(parent, library, 8, { x: pos.x + 3400, y: pos.y + 2400 });
+  const fsm = buildRingCounter(parent, library, 8, { x: pos.x, y: pos.y + 3600 }); // FETCH/INCREMENT/EXEC1-EXEC6 — see the doc comment above ("x=11: SP, PUSH/POP, RET, RST n" for why a 4th phase exists; "x=00, z=1: LD dd,nn" for why a 5th and 6th do too; "x=11: CALL nn" for why a 7th and 8th do too). Widening is, again, a pure parameter change — buildRingCounter is fully generic (any N>=2), and every existing PHASE0-PHASE5 label keeps its exact ring position, the two new phases appended after EXEC4, before the wrap back to FETCH.
+  const dec = buildZ80Decoder(parent, ir.q, { x: pos.x + 8600, y: pos.y });
+  const muxDef = getMux2Chip(library);
+  const bufDef = getTriBufChip(library);
+
+  // This composite is dense enough (100+ internal wire() calls, several
+  // signals fanned out across the whole coordinate space — CLK to 11
+  // registers, the shared bus, both decoder outputs, both EXEC phase
+  // bits, SP's own value) that drawing every one of them as a literal
+  // point-to-point line makes the canvas unreadable, not just cluttered.
+  // `tieToLabel` ties a pin to a net *label* instead of a wire — same
+  // net (see Circuit.computeNets()'s "same-named label" tie, same
+  // mechanism the UI's own `label` tool already exposes), no line drawn.
+  // Used below only for signals with genuinely long-distance or
+  // multi-destination fanout; adjacent gates a few hundred units apart
+  // stay plain `wire()` calls — labeling *everything* would just trade
+  // one kind of clutter for another. Safe here specifically because
+  // `buildZ80Cpu` is called once per placement, not folded into a chip
+  // def instantiated multiple times — flatten() namespaces component
+  // *ids* per instance but not a label's own `name` string (see
+  // Circuit.ts), so reusing these names *inside* a multiply-instantiated
+  // chip def would wrongly tie separate instances' nets together. Two
+  // `buildZ80Cpu`s placed in the same project and using these same
+  // names would collide the same way — a real, documented limitation,
+  // not a hidden one.
+  const tieToLabel = (name: string, p: Pin, labelPos: Point): void => {
+    wire(parent, p, makeLabel(parent, name, labelPos).pins.net);
+  };
+
+  // `EX AF,AF'` (see "x=00: EX AF,AF'" above) is a real *swap*, both
+  // directions committing on the same edge: A gets A''s old value, A' gets
+  // A's old value, simultaneously (not sequentially — there is no
+  // "sequentially" at the gate level, just two master-slave flip-flops
+  // each freezing at whatever the *other's* `.q` stood at before this
+  // edge, the identical old-value guarantee every register-to-register
+  // capture in this file already relies on — see the `sp.q`-during-a-read
+  // doc comment, "x=00: INC (HL)/DEC (HL)/LD (HL),n" above, for the
+  // fullest treatment of why that's safe). `AOLD`/`FOLD` publish `a`/`f`'s
+  // own current bits for the swap's A'/F'-bound half; A/F's own write mux
+  // (far below) reads `aP`/`fP` directly by JS reference instead of a
+  // label back the other way — `aP`/`fP` were created earlier, in scope
+  // for the rest of this function, unlike `wrapWithPairCommit` (needed to
+  // wire A'/F' themselves), which isn't defined until much further down.
+  a.q.forEach((q, i) => tieToLabel(`AOLD${i}`, q, { x: pos.x + 3800, y: pos.y + 3820 + i * 20 }));
+  f.q.forEach((q, i) => tieToLabel(`FOLD${i}`, q, { x: pos.x + 8000, y: pos.y + 3820 + i * 20 }));
+  // `EXX` (see "x=11: EXX" below) is the identical three-pair version of
+  // the same swap — `BOLD`/`COLD`/`DOLD`/`EOLD`/`HOLD`/`LOLD` publish
+  // `rB`..`rL`'s own current bits the same way `AOLD`/`FOLD` just did.
+  rB.q.forEach((q, i) => tieToLabel(`BOLD${i}`, q, { x: pos.x + 5000, y: pos.y + 3820 + i * 20 }));
+  rC.q.forEach((q, i) => tieToLabel(`COLD${i}`, q, { x: pos.x + 5000, y: pos.y + 4620 + i * 20 }));
+  rD.q.forEach((q, i) => tieToLabel(`DOLD${i}`, q, { x: pos.x + 6200, y: pos.y + 3820 + i * 20 }));
+  rE.q.forEach((q, i) => tieToLabel(`EOLD${i}`, q, { x: pos.x + 6200, y: pos.y + 4620 + i * 20 }));
+  rH.q.forEach((q, i) => tieToLabel(`HOLD${i}`, q, { x: pos.x + 7400, y: pos.y + 3820 + i * 20 }));
+  rL.q.forEach((q, i) => tieToLabel(`LOLD${i}`, q, { x: pos.x + 7400, y: pos.y + 4620 + i * 20 }));
+
+  // dec.z[] and most of dec.y[] stay direct wires — every consumer sits
+  // within a thousand-ish units of `dec` itself (the x=11 decode section
+  // right next to it). The ALU/flags section (pos.x+2900 to +4600) is a
+  // genuinely long way from `dec` (pos.x+8600) and reuses y=0..7 several
+  // times each — anchored here to DECY0-7 labels once, used at every far
+  // site below instead of eight separate ~5000-unit lines each redrawn for
+  // every one of their several consumers. y=1/y=3 (ADC/SBC) joined the
+  // other six once this file actually started executing them, not just
+  // decoding them — see "x=10: ADC/SBC" below.
+  [0, 1, 2, 3, 4, 5, 6, 7].forEach((k, i) => tieToLabel(`DECY${k}`, dec.y[k]!, { x: pos.x + 8500, y: pos.y - 100 - i * 40 }));
+
+  // fsm.phase[] fans out even wider than dec.y[] does — every phase bit
+  // gates decode logic scattered from pos.x-200 (PC's own hold mux) to
+  // pos.x+10500 (the push/pop byte-select banks), with `fsm` itself sitting
+  // at pos.x,pos.y+3600 (below everything). Anchored to PHASE0-PHASE3
+  // labels once each, right here, instead of redrawing that whole spread
+  // as 13 separate long lines.
+  fsm.phase.forEach((p, k) => tieToLabel(`PHASE${k}`, p!, { x: pos.x + k * 100, y: pos.y + 3500 }));
+
+  // ir.q[3..5] (y's own real bits, not dec.y's one-hot lines — see the
+  // RST-target doc comment further down for why that distinction matters)
+  // only has one far consumer, RST's own PC-target mux at pos.x-200 — still
+  // labeled, since `ir` itself sits all the way at pos.x+2600.
+  [3, 4, 5].forEach((k) => tieToLabel(`IRQ${k}`, ir.q[k]!, { x: pos.x + 2500, y: pos.y + 40 + k * 20 }));
+
+  // Every register's own `q` feeds a tri-state bank's *input* far away too
+  // (the operand bus, one or two push-byte banks) — a second class of long
+  // wire the BUS/DECY/PHASE anchors above don't touch, since those only
+  // covered each bank's *output* side (onto ir.d). Anchored once per
+  // register here (REGB0-7, REGC0-7, ... REGPC0-5), reused at every far
+  // tri-buf .a input below instead of redrawing straight back to each
+  // register's own position.
+  const regAnchors: [string, Register | { q: Pin[] }, Point][] = [
+    ['REGB', rB, { x: pos.x + 4900, y: pos.y - 40 }],
+    ['REGC', rC, { x: pos.x + 4900, y: pos.y + 1160 }],
+    ['REGD', rD, { x: pos.x + 6100, y: pos.y - 40 }],
+    ['REGE', rE, { x: pos.x + 6100, y: pos.y + 1160 }],
+    ['REGH', rH, { x: pos.x + 7300, y: pos.y - 40 }],
+    ['REGL', rL, { x: pos.x + 7300, y: pos.y + 1160 }],
+    ['REGA', a, { x: pos.x + 3700, y: pos.y - 40 }],
+    ['REGF', f, { x: pos.x + 7900, y: pos.y + 2160 }],
+  ];
+  for (const [name, reg, p] of regAnchors) {
+    reg.q.forEach((q, i) => tieToLabel(`${name}${i}`, q, { x: p.x, y: p.y - i * 20 }));
+  }
+  pc.q.forEach((q, i) => tieToLabel(`REGPC${i}`, q, { x: pos.x - 100, y: pos.y - 40 - i * 20 }));
+
+  // FETCH (phase 0): RAM drives the bus, IR captures it. (ram.pins.oe/we
+  // are wired below, once the decode logic that gates them exists.) IR's
+  // own `d` is this composite's actual shared-bus net — RAM's data pins
+  // wire straight to it (short, local, no label needed), and it's also
+  // tied to the `BUS0`-`BUS7` labels every other bus touch point below
+  // uses, so it's the one thing anchoring the label group to a real net
+  // rather than the labels forming a same-named-but-disconnected island.
+  ramDataPins(ram).forEach((p, i) => {
+    wire(parent, p, ir.d[i]!);
+    tieToLabel(`BUS${i}`, ir.d[i]!, { x: pos.x + 2500, y: pos.y - 60 - i * 20 });
+  });
+  tieToLabel('PHASE0', ir.we, { x: pos.x + 2500, y: pos.y - 40 });
+
+  // Real Z80 decode: x=10 (dec.x[2]) is ALU-on-register, x=01 (dec.x[1]) is
+  // LD r,r' — see the doc comment above for what each group's y/z mean.
+  const isAluGroup = dec.x[2]!;
+  const aluGroupNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y - 200 });
+  wire(parent, isAluGroup, aluGroupNow.a);
+  tieToLabel('PHASE2', aluGroupNow.b, { x: pos.x + 8900, y: pos.y - 200 });
+
+  const isLdGroup = dec.x[1]!;
+  const ldGroupNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y + 150 });
+  wire(parent, isLdGroup, ldGroupNow.a);
+  tieToLabel('PHASE2', ldGroupNow.b, { x: pos.x + 8900, y: pos.y + 150 });
+
+  // Anything that can drive the shared bus, or that gates RAM, needs to key
+  // off "one of the two groups this slice executes is decoding right now",
+  // not just the ALU one anymore — see the doc comment above ("What's
+  // shared between the two groups").
+  const groupActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 25 });
+  wire(parent, aluGroupNow.out, groupActive.a);
+  wire(parent, ldGroupNow.out, groupActive.b);
+  // x=00, z=3: INC BC/DE/HL/SP, DEC BC/DE/HL/SP — see the doc comment above
+  // ("x=00, z=3: INC rr/DEC rr") for the full derivation. Deliberately does
+  // NOT feed into groupActive/busActive above: this instruction never reads
+  // or writes RAM and never touches the shared operand bus, only the
+  // register file directly, so none of the bus-fight machinery those two
+  // signals exist for applies here.
+  const isX0Group = dec.x[0]!;
+  const isIncDecRr = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 700 });
+  wire(parent, isX0Group, isIncDecRr.a);
+  wire(parent, dec.z[3]!, isIncDecRr.b);
+  const incDecRrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 700 });
+  wire(parent, isIncDecRr.out, incDecRrNow.a);
+  tieToLabel('PHASE2', incDecRrNow.b, { x: pos.x + 9200, y: pos.y - 730 });
+
+  // Pair select: y>>1 picks BC/DE/HL/SP (y=0,1 -> BC; 2,3 -> DE; 4,5 -> HL;
+  // 6,7 -> SP); within each pair the odd y-line is DEC, the even one INC.
+  const pairBC = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 850 });
+  wire(parent, dec.y[0]!, pairBC.a);
+  wire(parent, dec.y[1]!, pairBC.b);
+  const pairDE = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 800 });
+  wire(parent, dec.y[2]!, pairDE.a);
+  wire(parent, dec.y[3]!, pairDE.b);
+  const pairHL = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 750 });
+  wire(parent, dec.y[4]!, pairHL.a);
+  wire(parent, dec.y[5]!, pairHL.b);
+  const pairSP = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 700 });
+  wire(parent, dec.y[6]!, pairSP.a);
+  wire(parent, dec.y[7]!, pairSP.b);
+
+  const incDecBcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 850 });
+  wire(parent, incDecRrNow.out, incDecBcNow.a);
+  wire(parent, pairBC.out, incDecBcNow.b);
+  const incDecDeNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 800 });
+  wire(parent, incDecRrNow.out, incDecDeNow.a);
+  wire(parent, pairDE.out, incDecDeNow.b);
+  const incDecHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 750 });
+  wire(parent, incDecRrNow.out, incDecHlNow.a);
+  wire(parent, pairHL.out, incDecHlNow.b);
+  const incDecSpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 700 });
+  wire(parent, incDecRrNow.out, incDecSpNow.a);
+  wire(parent, pairSP.out, incDecSpNow.b);
+  // DEC SP specifically (not INC SP) — spAdder's own direction control
+  // needs to know *which* of the two SP conditions this cycle is, unlike
+  // BC/DE/HL's own pair adders below, which read dec.y[1]/[3]/[5] directly
+  // since they're built right next to `dec` (no label needed there); this
+  // one has to cross to spAdder's own location, hence the label.
+  const decSpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 650 });
+  wire(parent, incDecRrNow.out, decSpNow.a);
+  wire(parent, dec.y[7]!, decSpNow.b);
+
+  tieToLabel('INCDEC_BC_NOW', incDecBcNow.out, { x: pos.x + 9600, y: pos.y - 850 });
+  tieToLabel('INCDEC_DE_NOW', incDecDeNow.out, { x: pos.x + 9600, y: pos.y - 800 });
+  tieToLabel('INCDEC_HL_NOW', incDecHlNow.out, { x: pos.x + 9600, y: pos.y - 750 });
+  tieToLabel('INCDEC_SP_NOW', incDecSpNow.out, { x: pos.x + 9600, y: pos.y - 700 });
+  tieToLabel('DEC_SP_NOW', decSpNow.out, { x: pos.x + 9600, y: pos.y - 650 });
+
+  // BC/DE/HL's own +-1: three more buildAlu instances (width 16, not 8 —
+  // spAdder below is the identical pattern at addrBits width for SP alone),
+  // each permanently in ADD mode, its own pair's DEC y-line (dec.y[1]/[3]/
+  // [5], read directly — `dec` sits right here, no label needed) fanned to
+  // `b` (all-1s when set) with cin=NOT(that same line) — see spAdder's own
+  // doc comment below for why b=all-1s/cin=0 computes -1 and b=0/cin=1
+  // computes +1, and why getting cin backwards silently no-ops the
+  // decrement (found live there once already; not repeated here). High
+  // byte is bits [8..15], low byte [0..15] — B/D/H high, C/E/L low, the
+  // same convention PUSH/POP's own byte order above already established.
+  // Always computing regardless of which instruction is actually decoding
+  // (same philosophy as spAdder, and as `alu` itself) — only the write-back
+  // stage below (`wrapWithPairCommit`, gated by INCDEC_xx_NOW) decides
+  // whether any of this is ever read.
+  const buildPairAdder = (highRegLabel: string, lowRegLabel: string, outLabel: string, decY: Pin, adderPos: Point): void => {
+    const adder = buildAlu(parent, library, 16, adderPos);
+    wire(parent, gnd4, adder.op0);
+    wire(parent, gnd4, adder.op1);
+    const notDecY = buildNot(parent, vcc4, gnd4, { x: adderPos.x - 100, y: adderPos.y - 50 });
+    wire(parent, decY, notDecY.in);
+    wire(parent, notDecY.out, adder.cin);
+    for (let i = 0; i < 8; i++) {
+      tieToLabel(`${lowRegLabel}${i}`, adder.a[i]!, { x: adderPos.x - 150, y: adderPos.y + i * 20 });
+      tieToLabel(`${highRegLabel}${i}`, adder.a[i + 8]!, { x: adderPos.x - 150, y: adderPos.y + 200 + i * 20 });
+      wire(parent, decY, adder.b[i]!);
+      wire(parent, decY, adder.b[i + 8]!);
+      tieToLabel(`${outLabel}LO${i}`, adder.out[i]!, { x: adderPos.x + 2100, y: adderPos.y + i * 20 });
+      tieToLabel(`${outLabel}HI${i}`, adder.out[i + 8]!, { x: adderPos.x + 2100, y: adderPos.y + 200 + i * 20 });
+    }
+  };
+  buildPairAdder('REGB', 'REGC', 'BCADD', dec.y[1]!, { x: pos.x + 8900, y: pos.y - 1300 });
+  buildPairAdder('REGD', 'REGE', 'DEADD', dec.y[3]!, { x: pos.x + 8900, y: pos.y - 900 });
+  buildPairAdder('REGH', 'REGL', 'HLADD', dec.y[5]!, { x: pos.x + 8900, y: pos.y - 500 });
+
+  // x=00, z=4/z=5: INC r/DEC r — see the doc comment above ("x=00, z=4/z=5:
+  // INC r/DEC r") for the full derivation. `y` (not `z`, unlike the ALU
+  // group's own operand field) selects the register: B/C/D/E/H/L/(HL)/A,
+  // same encoding `x=10`'s `z` and `x=01`'s `y`/`z` already use. `(HL)`
+  // (`y=6`) now gets its own real read-modify-write through RAM — see
+  // "x=00: INC (HL)/DEC (HL)/LD (HL),n" above.
+  const isIncR8 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 1600 });
+  wire(parent, isX0Group, isIncR8.a);
+  wire(parent, dec.z[4]!, isIncR8.b);
+  const isDecR8 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 1550 });
+  wire(parent, isX0Group, isDecR8.a);
+  wire(parent, dec.z[5]!, isDecR8.b);
+  const isIncDecR8 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 1575 });
+  wire(parent, isIncR8.out, isIncDecR8.a);
+  wire(parent, isDecR8.out, isIncDecR8.b);
+  // `(HL)` (`y=6`) now gets its own real read-modify-write (see "x=00:
+  // INC (HL)/DEC (HL)/LD (HL),n" above) — `incDecR8Now` (the 7-register
+  // case's own commit) explicitly excludes it, since `(HL)`'s own value
+  // isn't valid until a whole phase later (`hlMemTemp` has to actually
+  // read RAM first); committing it early, off `hlMemTemp`'s stale
+  // previous contents, would be a real bug even though it wouldn't
+  // corrupt registers B/C/D/E/H/L/A themselves (none of their own
+  // per-register commits below check `y=6`) — only `F`'s own flags would
+  // transiently glitch, `INCDEC_HLMEM_NOW`'s own later, correct commit
+  // fixing it a phase after.
+  const isIncDecHlMem = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 1650 });
+  wire(parent, isIncDecR8.out, isIncDecHlMem.a);
+  wire(parent, dec.y[6]!, isIncDecHlMem.b);
+  tieToLabel('IS_INCDEC_HLMEM', isIncDecHlMem.out, { x: pos.x + 9360, y: pos.y - 1650 }); // anchor — RAM's own address mux (far) reads this
+  const notY6ForIncDecR8 = buildNot(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 1620 });
+  wire(parent, dec.y[6]!, notY6ForIncDecR8.in);
+  const incDecR8Stage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 1575 });
+  wire(parent, isIncDecR8.out, incDecR8Stage.a);
+  tieToLabel('PHASE2', incDecR8Stage.b, { x: pos.x + 9300, y: pos.y - 1600 });
+  const incDecR8Now = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 1575 });
+  wire(parent, incDecR8Stage.out, incDecR8Now.a);
+  wire(parent, notY6ForIncDecR8.out, incDecR8Now.b);
+
+  // `(HL)`'s own read: `PHASE2`, capturing the bus (RAM, addressed
+  // through `HL` the same way `hlNow`'s own x=10/x=01 case already
+  // addresses it, widened below) into `hlMemTemp` — a *sixth* dedicated
+  // holding register, the same "the bus moves on, so hold what's on it
+  // now" reason every earlier target register in this file needed one.
+  const hlMemReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 1650 });
+  wire(parent, isIncDecHlMem.out, hlMemReadNow.a);
+  tieToLabel('PHASE2', hlMemReadNow.b, { x: pos.x + 9300, y: pos.y - 1620 });
+  const hlMemTemp = buildRegister(parent, library, 8, { x: pos.x - 700, y: pos.y - 6200 });
+  wire(parent, hlMemReadNow.out, hlMemTemp.we);
+  hlMemTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 6200 + i * 20 }));
+  hlMemTemp.q.forEach((q, i) => tieToLabel(`HLMEM${i}`, q, { x: pos.x - 800, y: pos.y - 6180 + i * 20 })); // anchor — r8Select's own read (far) reads this
+  tieToLabel('CLK', hlMemTemp.clk, { x: pos.x - 700, y: pos.y - 6220 }); // learned from jpTarget's own missing-CLK bug, several features back — checked off explicitly, every time, no exceptions
+
+  // `(HL)`'s own commit: `PHASE3`, one phase after its own read — by now
+  // `hlMemTemp` already holds the fresh value (the same one-phase-later
+  // timing every earlier "read into a holding register, use it next
+  // phase" shape in this file relies on) — explicitly excluding
+  // `hlMemReadNow` (`PHASE2`), not bare `PHASE3`: found by applying the
+  // *same* fix `LD (nn),HL`'s own live bug already taught this file —
+  // `PHASE2` (RAM driving the bus for the read) and `PHASE3` (this
+  // instruction's own `R8RESULT`-sourced buffer driving the bus for the
+  // write-back, below) are adjacent ring positions, so the identical
+  // transient bus-fight risk applies here too, pre-empted this time
+  // instead of found live again.
+  const isIncDecHlMemPhase3 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 1700 });
+  wire(parent, isIncDecHlMem.out, isIncDecHlMemPhase3.a);
+  tieToLabel('PHASE3', isIncDecHlMemPhase3.b, { x: pos.x + 9300, y: pos.y - 1670 });
+  const notHlMemReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 1680 });
+  wire(parent, hlMemReadNow.out, notHlMemReadNow.in);
+  const incDecHlMemNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9440, y: pos.y - 1700 });
+  wire(parent, isIncDecHlMemPhase3.out, incDecHlMemNow.a);
+  wire(parent, notHlMemReadNow.out, incDecHlMemNow.b);
+  tieToLabel('HLMEM_READ_NOW', hlMemReadNow.out, { x: pos.x + 9450, y: pos.y - 1650 }); // anchor — ramOeStage and RAM's own address mux (far) both read this
+  tieToLabel('INCDEC_HLMEM_NOW', incDecHlMemNow.out, { x: pos.x + 9460, y: pos.y - 1700 }); // anchor — ramWe/RAM's own address mux, F's own INCDEC_R8_NOW widening, and the R8RESULT-onto-bus bank (all far) read this
+
+  const incDecR8NowFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9440, y: pos.y - 1580 });
+  wire(parent, incDecR8Now.out, incDecR8NowFinal.a);
+  wire(parent, incDecHlMemNow.out, incDecR8NowFinal.b);
+  tieToLabel('INCDEC_R8_NOW', incDecR8NowFinal.out, { x: pos.x + 9450, y: pos.y - 1550 }); // anchor — F's own mux (far away) reads this via the label
+
+  // One shared 8-bit adder (not seven) — its own `a` is a 7-way one-hot
+  // read-select (`dec.y` is a one-hot decode, so at most one AND term per
+  // bit is ever 1; OR-ing them together picks that one term, the same
+  // "AND-then-OR" shape `computedFlagBit`'s own per-bit mux below already
+  // uses) off REGB0-7/REGC0-7/.../REGA0-7 (already-anchored labels — see
+  // `regAnchors` above), rather than seven separate adders each gated only
+  // at write-back the way `spAdder`/`buildPairAdder` are: unlike those,
+  // this result also feeds one shared flag computation (S/Z/P/N below), and
+  // duplicating that seven times for no benefit (only one register's own
+  // INC/DEC is ever active at once) is exactly the complexity this
+  // composite has otherwise avoided by always-compute-gate-the-commit.
+  const r8Select: [string, Pin][] = [
+    ['REGB', dec.y[0]!],
+    ['REGC', dec.y[1]!],
+    ['REGD', dec.y[2]!],
+    ['REGE', dec.y[3]!],
+    ['REGH', dec.y[4]!],
+    ['REGL', dec.y[5]!],
+    ['REGA', dec.y[7]!],
+    ['HLMEM', dec.y[6]!], // (HL)'s own freshly-read value, not a CPU register — see "x=00: INC (HL)/DEC (HL)/LD (HL),n" above
+  ];
+  const r8Adder = buildAlu(parent, library, 8, { x: pos.x + 9600, y: pos.y - 1900 });
+  wire(parent, gnd3, r8Adder.op0);
+  wire(parent, gnd3, r8Adder.op1);
+  const notIsDecR8 = buildNot(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1950 });
+  wire(parent, isDecR8.out, notIsDecR8.in);
+  wire(parent, notIsDecR8.out, r8Adder.cin);
+  for (let i = 0; i < 8; i++) {
+    let term: Pin | null = null;
+    for (const [regName, y] of r8Select) {
+      const and = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 1900 + i * 60 });
+      tieToLabel(`${regName}${i}`, and.a, { x: pos.x + 9100, y: pos.y - 1900 + i * 60 });
+      wire(parent, y, and.b);
+      if (term === null) {
+        term = and.out;
+      } else {
+        const or = buildOr(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 1900 + i * 60 });
+        wire(parent, term, or.a);
+        wire(parent, and.out, or.b);
+        term = or.out;
+      }
+    }
+    wire(parent, term!, r8Adder.a[i]!);
+    wire(parent, isDecR8.out, r8Adder.b[i]!);
+    tieToLabel(`R8RESULT${i}`, r8Adder.out[i]!, { x: pos.x + 9700, y: pos.y - 1900 + i * 60 });
+  }
+
+  // Flags: S/Z/P computed fresh off r8Adder.out (mirroring the ALU group's
+  // own zChain/pChain/sBit below, but for this adder, not `alu`) — N is
+  // just isDecR8 itself. C is deliberately NOT computed here at all: real
+  // Z80 preserves C across INC/DEC r untouched, and F's own per-bit mux
+  // (below) reflects that by feeding F's *own* q[0] back as this group's
+  // "computed" C instead of a freshly-derived one.
+  let r8ZChain: Pin = r8Adder.out[0]!;
+  for (let i = 1; i < 8; i++) {
+    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 1900 + i * 60 });
+    wire(parent, r8ZChain, orGate.a);
+    wire(parent, r8Adder.out[i]!, orGate.b);
+    r8ZChain = orGate.out;
+  }
+  const r8ZBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 1400 });
+  wire(parent, r8ZChain, r8ZBit.in);
+  // `INC r`/`DEC r` are purely arithmetic — real Z80 never gives this
+  // family a parity variant the way the main ALU group's `AND`/`XOR`/`OR`
+  // get one — so `R8_P` is unconditionally signed overflow, no mux needed
+  // to pick between the two the way the main ALU group's own `pvMux`
+  // (further down) has to. Same `XOR(carry into the sign bit, carry out
+  // of the sign bit)` identity that mux's own `pvOverflow` uses, read off
+  // `r8Adder.carries` instead of `alu.carries`.
+  const r8Overflow = buildXor(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y - 1400 });
+  wire(parent, r8Adder.carries[6]!, r8Overflow.a);
+  wire(parent, r8Adder.carries[7]!, r8Overflow.b);
+  tieToLabel('R8_Z', r8ZBit.out, { x: pos.x + 9900, y: pos.y - 1350 });
+  tieToLabel('R8_P', r8Overflow.out, { x: pos.x + 10000, y: pos.y - 1350 });
+  tieToLabel('R8_S', r8Adder.out[7]!, { x: pos.x + 9700, y: pos.y - 1300 });
+  tieToLabel('R8_N', isDecR8.out, { x: pos.x + 9200, y: pos.y - 1300 });
+  // H (bit 4) and X/Y (bits 3/5, undocumented): real Z80 sets these fresh
+  // for INC r/DEC r too, not just for the x=10 ALU group — H the identical
+  // `XOR(carries[3], isSubtractLike)` idiom (`isDecR8` standing in for
+  // `isSubtractLike`: INC is the "ADD" direction, DEC the "SUB" one, the
+  // same +1/-1-via-adder trick `r8Adder`'s own `cin`/`b` wiring above
+  // already uses), X/Y a straight mirror of the result's own bits.
+  const r8HRaw = buildXor(parent, vcc3, gnd3, { x: pos.x + 9850, y: pos.y - 1300 });
+  wire(parent, r8Adder.carries[3]!, r8HRaw.a);
+  wire(parent, isDecR8.out, r8HRaw.b);
+  tieToLabel('R8_H', r8HRaw.out, { x: pos.x + 9850, y: pos.y - 1280 });
+  tieToLabel('R8_X', r8Adder.out[3]!, { x: pos.x + 9750, y: pos.y - 1260 });
+  tieToLabel('R8_Y', r8Adder.out[5]!, { x: pos.x + 9800, y: pos.y - 1260 });
+
+  const incDecBNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1200 });
+  wire(parent, incDecR8Now.out, incDecBNow.a);
+  wire(parent, dec.y[0]!, incDecBNow.b);
+  const incDecCNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1150 });
+  wire(parent, incDecR8Now.out, incDecCNow.a);
+  wire(parent, dec.y[1]!, incDecCNow.b);
+  const incDecDNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1100 });
+  wire(parent, incDecR8Now.out, incDecDNow.a);
+  wire(parent, dec.y[2]!, incDecDNow.b);
+  const incDecENow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1050 });
+  wire(parent, incDecR8Now.out, incDecENow.a);
+  wire(parent, dec.y[3]!, incDecENow.b);
+  const incDecHNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1000 });
+  wire(parent, incDecR8Now.out, incDecHNow.a);
+  wire(parent, dec.y[4]!, incDecHNow.b);
+  const incDecLNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 950 });
+  wire(parent, incDecR8Now.out, incDecLNow.a);
+  wire(parent, dec.y[5]!, incDecLNow.b);
+  const incDecANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 900 });
+  wire(parent, incDecR8Now.out, incDecANow.a);
+  wire(parent, dec.y[7]!, incDecANow.b);
+  tieToLabel('INCDEC_B_NOW', incDecBNow.out, { x: pos.x + 9600, y: pos.y - 1200 });
+  tieToLabel('INCDEC_C_NOW', incDecCNow.out, { x: pos.x + 9600, y: pos.y - 1150 });
+  tieToLabel('INCDEC_D_NOW', incDecDNow.out, { x: pos.x + 9600, y: pos.y - 1100 });
+  tieToLabel('INCDEC_E_NOW', incDecENow.out, { x: pos.x + 9600, y: pos.y - 1050 });
+  tieToLabel('INCDEC_H_NOW', incDecHNow.out, { x: pos.x + 9600, y: pos.y - 1000 });
+  tieToLabel('INCDEC_L_NOW', incDecLNow.out, { x: pos.x + 9600, y: pos.y - 950 });
+  tieToLabel('INCDEC_A_NOW', incDecANow.out, { x: pos.x + 9600, y: pos.y - 900 });
+
+  // x=00, z=6: LD r,n — this slice's first instruction that reads an
+  // operand *after* its own opcode byte. See the doc comment above ("x=00,
+  // z=6: LD r,n") for why this needs no new FSM phase at all: PHASE2/
+  // PHASE3 (already `EXEC1`/`EXEC2` for every other group) get reused here
+  // with different semantics — read the operand, then advance PC past it
+  // — instead of "commit, then a no-op." `(HL)` (`y=6`, `LD (HL),n`) now
+  // gets its own real write, stacked on top of the read this mechanism
+  // already does — see "x=00: INC (HL)/DEC (HL)/LD (HL),n" above.
+  const isLdImm8 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 2200 });
+  wire(parent, isX0Group, isLdImm8.a);
+  wire(parent, dec.z[6]!, isLdImm8.b);
+  const ldImm8ReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2200 });
+  wire(parent, isLdImm8.out, ldImm8ReadNow.a);
+  tieToLabel('PHASE2', ldImm8ReadNow.b, { x: pos.x + 9200, y: pos.y - 2170 });
+  const ldImm8AdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2150 });
+  wire(parent, isLdImm8.out, ldImm8AdvanceNow.a);
+  tieToLabel('PHASE3', ldImm8AdvanceNow.b, { x: pos.x + 9200, y: pos.y - 2120 });
+  tieToLabel('LDIMM8_READ_NOW', ldImm8ReadNow.out, { x: pos.x + 9400, y: pos.y - 2200 }); // anchor — ramOeStage2 (above) and every register's own commit below read this
+
+  // `LD (HL),n`'s own immediate byte: captured off the *same* bus
+  // `ldImm8ReadNow`'s own read already makes valid at `PHASE2` — a
+  // *seventh* dedicated holding register (`jpTarget`'s own reasoning: the
+  // bus moves on to something else before the write-back phase arrives).
+  // The write-back (`ldHlNWriteNow`) fires at `PHASE3` — the same phase
+  // `PC`'s own advance already uses, harmless since that advance never
+  // touches RAM — but explicitly excludes `ldHlNReadNow` (`PHASE2`), not
+  // bare `PHASE3`: the identical adjacent-phase bus-fight this file has
+  // now hit twice (`LD (nn),HL`'s own live bug, `INC (HL)`/`DEC (HL)`'s
+  // own pre-empted one above) — RAM driving the bus for the read at
+  // `PHASE2`, this write's own buffer driving it right back at `PHASE3`,
+  // adjacent ring positions either way.
+  const ldHlNReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 2250 });
+  wire(parent, ldImm8ReadNow.out, ldHlNReadNow.a);
+  wire(parent, dec.y[6]!, ldHlNReadNow.b);
+  const ldHlNImm = buildRegister(parent, library, 8, { x: pos.x - 700, y: pos.y - 6400 });
+  wire(parent, ldHlNReadNow.out, ldHlNImm.we);
+  ldHlNImm.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 6400 + i * 20 }));
+  ldHlNImm.q.forEach((q, i) => tieToLabel(`LDHLNIMM${i}`, q, { x: pos.x - 800, y: pos.y - 6380 + i * 20 })); // anchor — the write-back bus-driver bank (far) reads this
+  tieToLabel('CLK', ldHlNImm.clk, { x: pos.x - 700, y: pos.y - 6420 }); // learned from jpTarget's own missing-CLK bug, several features back — checked off explicitly, every time, no exceptions
+  const ldHlNWriteStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 2300 });
+  wire(parent, ldImm8AdvanceNow.out, ldHlNWriteStage.a);
+  wire(parent, dec.y[6]!, ldHlNWriteStage.b);
+  const notLdHlNReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9370, y: pos.y - 2270 });
+  wire(parent, ldHlNReadNow.out, notLdHlNReadNow.in);
+  const ldHlNWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9390, y: pos.y - 2300 });
+  wire(parent, ldHlNWriteStage.out, ldHlNWriteNow.a);
+  wire(parent, notLdHlNReadNow.out, ldHlNWriteNow.b);
+  tieToLabel('LDHLN_WRITE_NOW', ldHlNWriteNow.out, { x: pos.x + 9400, y: pos.y - 2300 }); // anchor — ramWe/RAM's own address mux (both far) and ldHlNImm's own bus-driver bank (far) read this
+  tieToLabel('LDIMM8_ADVANCE_NOW', ldImm8AdvanceNow.out, { x: pos.x + 9400, y: pos.y - 2150 }); // anchor — PC's own hold/advance (far) reads this
+
+  const ldImm8BNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2300 });
+  wire(parent, ldImm8ReadNow.out, ldImm8BNow.a);
+  wire(parent, dec.y[0]!, ldImm8BNow.b);
+  const ldImm8CNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2250 });
+  wire(parent, ldImm8ReadNow.out, ldImm8CNow.a);
+  wire(parent, dec.y[1]!, ldImm8CNow.b);
+  const ldImm8DNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2200 });
+  wire(parent, ldImm8ReadNow.out, ldImm8DNow.a);
+  wire(parent, dec.y[2]!, ldImm8DNow.b);
+  const ldImm8ENow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2150 });
+  wire(parent, ldImm8ReadNow.out, ldImm8ENow.a);
+  wire(parent, dec.y[3]!, ldImm8ENow.b);
+  const ldImm8HNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2100 });
+  wire(parent, ldImm8ReadNow.out, ldImm8HNow.a);
+  wire(parent, dec.y[4]!, ldImm8HNow.b);
+  const ldImm8LNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2050 });
+  wire(parent, ldImm8ReadNow.out, ldImm8LNow.a);
+  wire(parent, dec.y[5]!, ldImm8LNow.b);
+  const ldImm8ANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2000 });
+  wire(parent, ldImm8ReadNow.out, ldImm8ANow.a);
+  wire(parent, dec.y[7]!, ldImm8ANow.b);
+  tieToLabel('LDIMM8_B_NOW', ldImm8BNow.out, { x: pos.x + 9600, y: pos.y - 2300 });
+  tieToLabel('LDIMM8_C_NOW', ldImm8CNow.out, { x: pos.x + 9600, y: pos.y - 2250 });
+  tieToLabel('LDIMM8_D_NOW', ldImm8DNow.out, { x: pos.x + 9600, y: pos.y - 2200 });
+  tieToLabel('LDIMM8_E_NOW', ldImm8ENow.out, { x: pos.x + 9600, y: pos.y - 2150 });
+  tieToLabel('LDIMM8_H_NOW', ldImm8HNow.out, { x: pos.x + 9600, y: pos.y - 2100 });
+  tieToLabel('LDIMM8_L_NOW', ldImm8LNow.out, { x: pos.x + 9600, y: pos.y - 2050 });
+  tieToLabel('LDIMM8_A_NOW', ldImm8ANow.out, { x: pos.x + 9600, y: pos.y - 2000 });
+
+  // x=00, z=1, y even (q=0): LD dd,nn — this slice's first 3-byte
+  // instruction, and the reason the FSM grew a 5th and 6th phase. See the
+  // doc comment above ("x=00, z=1: LD dd,nn") for the full derivation.
+  // `y` odd (q=1) at this same `z` is `ADD HL,rr` (see "x=00: ADD HL,rr"
+  // below) — `isLdDdNnYValid` (an `OR`-fold over `y=0,2,4,6`) excludes it
+  // explicitly. Found live while wiring up `ADD HL,rr`: without this
+  // check, `isLdDdNn` fired for *any* `y` at `z=1`, so its own PHASE3/
+  // PHASE5 advances would have fired for `ADD HL,rr` opcodes too — no
+  // register write ever committed for odd `y` (nothing downstream reads
+  // those lines, so THAT half of "stays correctly inert" was true), but
+  // `PC` would have silently advanced twice as far as a real 1-byte `ADD
+  // HL,rr` opcode should, treating it as if it had two nonexistent
+  // immediate bytes to skip. Never triggered before now because no test
+  // or program byte sequence had ever actually included one of these
+  // opcodes.
+  const isX0Z1 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2650 });
+  wire(parent, isX0Group, isX0Z1.a);
+  wire(parent, dec.z[1]!, isX0Z1.b);
+  const isLdDdNnYValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2620 });
+  wire(parent, dec.y[0]!, isLdDdNnYValid1.a);
+  wire(parent, dec.y[2]!, isLdDdNnYValid1.b);
+  const isLdDdNnYValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2610 });
+  wire(parent, isLdDdNnYValid1.out, isLdDdNnYValid2.a);
+  wire(parent, dec.y[4]!, isLdDdNnYValid2.b);
+  const isLdDdNnYValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2605 });
+  wire(parent, isLdDdNnYValid2.out, isLdDdNnYValid.a);
+  wire(parent, dec.y[6]!, isLdDdNnYValid.b);
+  const isLdDdNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 2600 });
+  wire(parent, isX0Z1.out, isLdDdNn.a);
+  wire(parent, isLdDdNnYValid.out, isLdDdNn.b);
+  const ldDdNnLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2600 });
+  wire(parent, isLdDdNn.out, ldDdNnLowNow.a);
+  tieToLabel('PHASE2', ldDdNnLowNow.b, { x: pos.x + 9200, y: pos.y - 2570 });
+  const ldDdNnLowAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2550 });
+  wire(parent, isLdDdNn.out, ldDdNnLowAdvanceNow.a);
+  tieToLabel('PHASE3', ldDdNnLowAdvanceNow.b, { x: pos.x + 9200, y: pos.y - 2520 });
+  const ldDdNnHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2500 });
+  wire(parent, isLdDdNn.out, ldDdNnHighNow.a);
+  tieToLabel('PHASE4', ldDdNnHighNow.b, { x: pos.x + 9200, y: pos.y - 2470 });
+  const ldDdNnHighAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2450 });
+  wire(parent, isLdDdNn.out, ldDdNnHighAdvanceNow.a);
+  tieToLabel('PHASE5', ldDdNnHighAdvanceNow.b, { x: pos.x + 9200, y: pos.y - 2420 });
+  tieToLabel('LDDDNN_LOW_NOW', ldDdNnLowNow.out, { x: pos.x + 9400, y: pos.y - 2600 }); // anchor — ramOeStage (far) reads this
+  tieToLabel('LDDDNN_HIGH_NOW', ldDdNnHighNow.out, { x: pos.x + 9400, y: pos.y - 2500 }); // anchor — ramOeStage (far) reads this
+  tieToLabel('LDDDNN_LOW_ADVANCE_NOW', ldDdNnLowAdvanceNow.out, { x: pos.x + 9400, y: pos.y - 2550 }); // anchor — PC's own hold/advance (far) reads this
+  tieToLabel('LDDDNN_HIGH_ADVANCE_NOW', ldDdNnHighAdvanceNow.out, { x: pos.x + 9400, y: pos.y - 2450 }); // anchor — PC's own hold/advance (far) reads this
+
+  // Low byte -> the low register of the pair (C/E/L), high byte -> the
+  // high one (B/D/H) — the same high/low convention PUSH/POP's own byte
+  // order established, and real Z80's own imm16 byte order (low byte
+  // first in memory). `SP` (y=6) is deliberately excluded here — it's one
+  // monolithic register, not two independently-addressable ones the way
+  // `BC`/`DE`/`HL` are, and gets its own write-back mechanism entirely,
+  // below (see "x=00, z=1: LD dd,nn" above for why).
+  const ldDdNnLowCNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2650 });
+  wire(parent, ldDdNnLowNow.out, ldDdNnLowCNow.a);
+  wire(parent, dec.y[0]!, ldDdNnLowCNow.b);
+  const ldDdNnLowENow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2600 });
+  wire(parent, ldDdNnLowNow.out, ldDdNnLowENow.a);
+  wire(parent, dec.y[2]!, ldDdNnLowENow.b);
+  const ldDdNnLowLNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2550 });
+  wire(parent, ldDdNnLowNow.out, ldDdNnLowLNow.a);
+  wire(parent, dec.y[4]!, ldDdNnLowLNow.b);
+  const ldDdNnHighBNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2500 });
+  wire(parent, ldDdNnHighNow.out, ldDdNnHighBNow.a);
+  wire(parent, dec.y[0]!, ldDdNnHighBNow.b);
+  const ldDdNnHighDNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2450 });
+  wire(parent, ldDdNnHighNow.out, ldDdNnHighDNow.a);
+  wire(parent, dec.y[2]!, ldDdNnHighDNow.b);
+  const ldDdNnHighHNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2400 });
+  wire(parent, ldDdNnHighNow.out, ldDdNnHighHNow.a);
+  wire(parent, dec.y[4]!, ldDdNnHighHNow.b);
+  tieToLabel('LDDDNN_LOW_C_NOW', ldDdNnLowCNow.out, { x: pos.x + 9600, y: pos.y - 2650 });
+  tieToLabel('LDDDNN_LOW_E_NOW', ldDdNnLowENow.out, { x: pos.x + 9600, y: pos.y - 2600 });
+  tieToLabel('LDDDNN_LOW_L_NOW', ldDdNnLowLNow.out, { x: pos.x + 9600, y: pos.y - 2550 });
+  tieToLabel('LDDDNN_HIGH_B_NOW', ldDdNnHighBNow.out, { x: pos.x + 9600, y: pos.y - 2500 });
+  tieToLabel('LDDDNN_HIGH_D_NOW', ldDdNnHighDNow.out, { x: pos.x + 9600, y: pos.y - 2450 });
+  tieToLabel('LDDDNN_HIGH_H_NOW', ldDdNnHighHNow.out, { x: pos.x + 9600, y: pos.y - 2400 });
+
+  // x=00, z=1, y odd (q=1): ADD HL,rr (real 0x09/0x19/0x29/0x39 — BC/DE/
+  // HL/SP). See the doc comment above ("x=00: ADD HL,rr") for the full
+  // derivation. `y` odd (`isX0Z1` shared with `LD dd,nn`'s own `z=1`
+  // check above, `isAddHlYValid` an `OR`-fold over `y=1,3,5,7`) — the
+  // exact complement of `LD dd,nn`'s own even-`y` gate at this same `z`,
+  // so between the two, every `y` value at `z=1` is now covered by
+  // exactly one of them, none left ambiguously double-decoded.
+  const isAddHlYValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2350 });
+  wire(parent, dec.y[1]!, isAddHlYValid1.a);
+  wire(parent, dec.y[3]!, isAddHlYValid1.b);
+  const isAddHlYValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2320 });
+  wire(parent, isAddHlYValid1.out, isAddHlYValid2.a);
+  wire(parent, dec.y[5]!, isAddHlYValid2.b);
+  const isAddHlYValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2300 });
+  wire(parent, isAddHlYValid2.out, isAddHlYValid.a);
+  wire(parent, dec.y[7]!, isAddHlYValid.b);
+  const isAddHlRr = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 2300 });
+  wire(parent, isX0Z1.out, isAddHlRr.a);
+  wire(parent, isAddHlYValid.out, isAddHlRr.b);
+  const addHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2300 });
+  wire(parent, isAddHlRr.out, addHlNow.a);
+  tieToLabel('PHASE2', addHlNow.b, { x: pos.x + 9250, y: pos.y - 2270 }); // single-byte opcode — the same commit phase INC r/DEC r's own incDecR8Now already uses
+  tieToLabel('ADDHL_NOW', addHlNow.out, { x: pos.x + 9400, y: pos.y - 2300 }); // anchor — H's and L's own fifth write-back layer (far) and F's own C-bit mux (far) both read this
+
+  // A genuine 16-bit ripple-carry add — `addHlAdder`, a *fourth* dedicated
+  // `buildAlu` (16 bits, ADD mode, `cin` tied to `gnd`), `a` wired to
+  // `HL`'s own current value (`rL.q` bits 0-7, `rH.q` bits 8-15 — the same
+  // low-byte/high-byte convention every 16-bit-wide value in this file
+  // uses). `b` is a 4-way one-hot select among `BC`/`DE`/`HL`/`SP`'s own
+  // bits, the identical shape `r8Select` already uses for INC r/DEC r's
+  // own register choice, just 16 lanes wide instead of 8. `SP` (this
+  // simulator's own address-space-only register, `addrBits` wide rather
+  // than a genuine 16 bits) zero-extends past `addrBits` — an unsigned
+  // address, not a signed offset, so zero-extension is the correct
+  // choice here, unlike `jrOffsetAdder`'s own sign-extension for a
+  // genuinely signed displacement. Real Z80 leaves S/Z/P/V untouched for
+  // this opcode and only updates the carry flag (H too, not tracked
+  // anywhere in this project's own F register) — `cout` feeds F's own
+  // C-bit mux (gated by `ADDHL_NOW`) exactly the way every other
+  // C-affecting operation already does, and nothing here touches S/Z/P.
+  const addHlAdder = buildAlu(parent, library, 16, { x: pos.x - 700, y: pos.y - 5300 });
+  wire(parent, gnd, addHlAdder.op0);
+  wire(parent, gnd, addHlAdder.op1);
+  wire(parent, gnd, addHlAdder.cin);
+  const addHlPairs: { y: Pin; lowQ: Pin[]; highQ: Pin[] | null }[] = [
+    { y: dec.y[1]!, lowQ: rC.q, highQ: rB.q },
+    { y: dec.y[3]!, lowQ: rE.q, highQ: rD.q },
+    { y: dec.y[5]!, lowQ: rL.q, highQ: rH.q },
+    { y: dec.y[7]!, lowQ: sp.q, highQ: null }, // SP: zero-extended past addrBits, no real high byte in this simulator
+  ];
+  for (let i = 0; i < 16; i++) {
+    if (i < 8) wire(parent, rL.q[i]!, addHlAdder.a[i]!);
+    else wire(parent, rH.q[i - 8]!, addHlAdder.a[i]!);
+    let term: Pin | null = null;
+    addHlPairs.forEach(({ y, lowQ, highQ }) => {
+      const bit = i < 8 ? (i < lowQ.length ? lowQ[i]! : gnd) : highQ === null ? gnd : i - 8 < highQ.length ? highQ[i - 8]! : gnd;
+      const and = buildAnd(parent, vcc3, gnd3, { x: pos.x - 600, y: pos.y - 5300 + i * 60 });
+      wire(parent, y, and.a);
+      wire(parent, bit, and.b);
+      if (term === null) term = and.out;
+      else {
+        const or = buildOr(parent, vcc3, gnd3, { x: pos.x - 550, y: pos.y - 5300 + i * 60 });
+        wire(parent, term, or.a);
+        wire(parent, and.out, or.b);
+        term = or.out;
+      }
+    });
+    wire(parent, term!, addHlAdder.b[i]!);
+    tieToLabel(i < 8 ? `ADDHLLO${i}` : `ADDHLHI${i - 8}`, addHlAdder.out[i]!, { x: pos.x - 500, y: pos.y - 5300 + i * 60 }); // anchor — H's/L's own fifth write-back layer (far) reads this
+  }
+  tieToLabel('ADDHL_C', addHlAdder.cout, { x: pos.x - 400, y: pos.y - 5300 }); // anchor — F's own C-bit mux (far) reads this
+
+  // x=00, z=2: indirect loads through (BC)/(DE)/(nn) — see the doc comment
+  // above ("x=00: indirect loads through (BC)/(DE)/(nn)") for the full
+  // derivation. All 8 `y` values are real, valid opcodes here (no gap to
+  // exclude) — `y=0..3` are single-byte, register-indirect through `BC`/
+  // `DE`; `y=4..7` are 3-byte, through a freshly-read absolute `nn`.
+  const isX0Z2 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 5400 });
+  wire(parent, isX0Group, isX0Z2.a);
+  wire(parent, dec.z[2]!, isX0Z2.b);
+
+  // y=0..3: LD (BC),A / LD A,(BC) / LD (DE),A / LD A,(DE) — single-byte,
+  // committing at PHASE2, the same commit phase INC r/DEC r's own
+  // incDecR8Now already uses for a 1-byte opcode.
+  const isLdBcA = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5450 });
+  wire(parent, isX0Z2.out, isLdBcA.a);
+  wire(parent, dec.y[0]!, isLdBcA.b);
+  const ldBcANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5450 });
+  wire(parent, isLdBcA.out, ldBcANow.a);
+  tieToLabel('PHASE2', ldBcANow.b, { x: pos.x + 9150, y: pos.y - 5420 });
+  const isLdABc = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5400 });
+  wire(parent, isX0Z2.out, isLdABc.a);
+  wire(parent, dec.y[1]!, isLdABc.b);
+  const ldABcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5400 });
+  wire(parent, isLdABc.out, ldABcNow.a);
+  tieToLabel('PHASE2', ldABcNow.b, { x: pos.x + 9150, y: pos.y - 5370 });
+  const isLdDeA = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5350 });
+  wire(parent, isX0Z2.out, isLdDeA.a);
+  wire(parent, dec.y[2]!, isLdDeA.b);
+  const ldDeANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5350 });
+  wire(parent, isLdDeA.out, ldDeANow.a);
+  tieToLabel('PHASE2', ldDeANow.b, { x: pos.x + 9150, y: pos.y - 5320 });
+  const isLdADe = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5300 });
+  wire(parent, isX0Z2.out, isLdADe.a);
+  wire(parent, dec.y[3]!, isLdADe.b);
+  const ldADeNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5300 });
+  wire(parent, isLdADe.out, ldADeNow.a);
+  tieToLabel('PHASE2', ldADeNow.b, { x: pos.x + 9150, y: pos.y - 5270 });
+  tieToLabel('LDBCA_NOW', ldBcANow.out, { x: pos.x + 9250, y: pos.y - 5450 }); // anchor — RAM's own we/address mux and A-onto-bus bank (far) read this
+  tieToLabel('LDABC_NOW', ldABcNow.out, { x: pos.x + 9250, y: pos.y - 5400 }); // anchor — RAM's own oe/address mux (far) and isBusToA's own widening (far) read this
+  tieToLabel('LDDEA_NOW', ldDeANow.out, { x: pos.x + 9250, y: pos.y - 5350 }); // anchor — RAM's own we/address mux and A-onto-bus bank (far) read this
+  tieToLabel('LDADE_NOW', ldADeNow.out, { x: pos.x + 9250, y: pos.y - 5300 }); // anchor — RAM's own oe/address mux (far) and isBusToA's own widening (far) read this
+
+  // y=4..7: LD (nn),HL / LD HL,(nn) / LD (nn),A / LD A,(nn) — 3 bytes,
+  // reusing `LD dd,nn`'s exact 4-phase read-low/advance/read-high/advance
+  // shape (PHASE2-5) to land a fresh absolute address in `nnAddr`, then
+  // committing at PHASE6 (single-byte data: `A`) or PHASE6+PHASE7
+  // (2-byte data: `HL`, low byte first) — the full 8-phase budget, no FSM
+  // widening needed.
+  const isNnGroupStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5500 });
+  wire(parent, dec.y[4]!, isNnGroupStage.a);
+  wire(parent, dec.y[5]!, isNnGroupStage.b);
+  const isNnGroupStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5530 });
+  wire(parent, isNnGroupStage.out, isNnGroupStage2.a);
+  wire(parent, dec.y[6]!, isNnGroupStage2.b);
+  const isNnGroup = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5560 });
+  wire(parent, isNnGroupStage2.out, isNnGroup.a);
+  wire(parent, dec.y[7]!, isNnGroup.b);
+  const isNnZ2 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5500 });
+  wire(parent, isX0Z2.out, isNnZ2.a);
+  wire(parent, isNnGroup.out, isNnZ2.b);
+
+  const nnReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5500 });
+  wire(parent, isNnZ2.out, nnReadLowNow.a);
+  tieToLabel('PHASE2', nnReadLowNow.b, { x: pos.x + 9200, y: pos.y - 5470 });
+  const nnAdvanceLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5550 });
+  wire(parent, isNnZ2.out, nnAdvanceLowNow.a);
+  tieToLabel('PHASE3', nnAdvanceLowNow.b, { x: pos.x + 9200, y: pos.y - 5520 });
+  const nnReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5600 });
+  wire(parent, isNnZ2.out, nnReadHighNow.a);
+  tieToLabel('PHASE4', nnReadHighNow.b, { x: pos.x + 9200, y: pos.y - 5570 });
+  const nnAdvanceHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5650 });
+  wire(parent, isNnZ2.out, nnAdvanceHighNow.a);
+  tieToLabel('PHASE5', nnAdvanceHighNow.b, { x: pos.x + 9200, y: pos.y - 5620 });
+  tieToLabel('NN_READ_LOW_NOW', nnReadLowNow.out, { x: pos.x + 9350, y: pos.y - 5500 }); // anchor — ramOeStage and nnAddr's own write-back (far) read this
+  tieToLabel('NN_ADVANCE_LOW_NOW', nnAdvanceLowNow.out, { x: pos.x + 9350, y: pos.y - 5550 }); // anchor — pcHold (far) reads this
+  tieToLabel('NN_READ_HIGH_NOW', nnReadHighNow.out, { x: pos.x + 9350, y: pos.y - 5600 }); // anchor — ramOeStage and nnAddr's own write-back (far) read this
+  tieToLabel('NN_ADVANCE_HIGH_NOW', nnAdvanceHighNow.out, { x: pos.x + 9350, y: pos.y - 5650 }); // anchor — pcHold (far) reads this
+
+  // `nnAddr`: identical "hold vs fresh" per-bit mux shape `jpTarget`/
+  // `callTarget`/etc already use — a *fifth* dedicated `addrBits`-wide
+  // holding register in this family, needed for the same reason every
+  // earlier one was: `PC` is busy being the read address for `nn`'s own
+  // two bytes, so the freshly-read address has to live somewhere else
+  // until the data phase actually needs it.
+  const nnAddr = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 5500 });
+  const nnAddrWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5800 });
+  tieToLabel('NN_READ_LOW_NOW', nnAddrWe.a, { x: pos.x - 800, y: pos.y - 5800 });
+  tieToLabel('NN_READ_HIGH_NOW', nnAddrWe.b, { x: pos.x - 800, y: pos.y - 5770 });
+  wire(parent, nnAddrWe.out, nnAddr.we);
+  nnAddr.q.forEach((q, i) => {
+    const freshMux = makeChipInstance(parent, muxDef, { x: pos.x - 700, y: pos.y - 5600 - i * 100 });
+    if (i < 8) {
+      tieToLabel('NN_READ_HIGH_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 5600 - i * 100 }); // sel=1 (high phase): hold
+      tieToLabel(`BUS${i}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 5580 - i * 100 }); // in0 (low phase): the fresh low byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (high phase): hold — self-loop
+    } else {
+      tieToLabel('NN_READ_LOW_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 5600 - i * 100 }); // sel=1 (low phase): hold
+      tieToLabel(`BUS${i - 8}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 5580 - i * 100 }); // in0 (high phase): the fresh high byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (low phase): hold — self-loop
+    }
+    wire(parent, freshMux.pins[muxDef.ports[3]!]!, nnAddr.d[i]!);
+  });
+  tieToLabel('CLK', nnAddr.clk, { x: pos.x - 700, y: pos.y - 5820 }); // learned from jpTarget's own missing-CLK bug, several features back — checked off explicitly, every time, no exceptions
+
+  // `nnAddrPlusOne`: a *fifth* dedicated `buildAlu` (`addrBits` wide,
+  // `spAdder`'s own "b=all-0s, cin=vcc" +1 encoding — the mirror image of
+  // `djnzAdder`'s own -1), computed unconditionally off `nnAddr.q` —
+  // `LD (nn),HL`/`LD HL,(nn)` need the address one past `nn` for `HL`'s
+  // own high byte, real Z80's own low-byte-first-at-nn convention.
+  const nnAddrPlusOne = buildAlu(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 6000 });
+  wire(parent, gnd, nnAddrPlusOne.op0);
+  wire(parent, gnd, nnAddrPlusOne.op1);
+  wire(parent, vcc, nnAddrPlusOne.cin);
+  nnAddr.q.forEach((q, i) => {
+    wire(parent, q, nnAddrPlusOne.a[i]!);
+    wire(parent, gnd, nnAddrPlusOne.b[i]!);
+  });
+
+  const isLdNnHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5700 });
+  wire(parent, isNnZ2.out, isLdNnHl.a);
+  wire(parent, dec.y[4]!, isLdNnHl.b);
+  const ldNnHlLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5700 });
+  wire(parent, isLdNnHl.out, ldNnHlLowNow.a);
+  tieToLabel('PHASE6', ldNnHlLowNow.b, { x: pos.x + 9200, y: pos.y - 5670 });
+  // `ldNnHlHighNow` explicitly excludes `ldNnHlLowNow` (not bare PHASE7) —
+  // found live, via a temporary debug build (standalone script, `X_DEBUG_*`
+  // labels, since removed): PHASE6/PHASE7 are adjacent ring positions, so
+  // the ring counter's own transient rotation artifact (both bits briefly
+  // reading 1 in the same relaxation pass — the identical phenomenon
+  // `pushLowNow`'s own exclusion of `pushHighNow` already documents)
+  // let L-onto-bus and H-onto-bus (two DIFFERENT drivers on the SAME
+  // shared bus, the first time this file has ever put two on adjacent
+  // phases) both assert during that transient — a real bus fight that
+  // cascaded into contention severe enough to corrupt completely
+  // unrelated nets, including ones with no RAM/HL involvement at all
+  // (exactly the failure mode this file's own `ramOe`/`hlNow` doc comment
+  // already warned about). The fix mirrors `pushLowNow`'s own shape
+  // exactly: the *later*-executing signal excludes the *earlier* one.
+  const notLdNnHlLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9280, y: pos.y - 5730 });
+  wire(parent, ldNnHlLowNow.out, notLdNnHlLowNow.in);
+  const ldNnHlHighStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5750 });
+  wire(parent, isLdNnHl.out, ldNnHlHighStage.a);
+  tieToLabel('PHASE7', ldNnHlHighStage.b, { x: pos.x + 9200, y: pos.y - 5720 });
+  const ldNnHlHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5750 });
+  wire(parent, ldNnHlHighStage.out, ldNnHlHighNow.a);
+  wire(parent, notLdNnHlLowNow.out, ldNnHlHighNow.b);
+
+  const isLdHlNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5800 });
+  wire(parent, isNnZ2.out, isLdHlNn.a);
+  wire(parent, dec.y[5]!, isLdHlNn.b);
+  const ldHlNnLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5800 });
+  wire(parent, isLdHlNn.out, ldHlNnLowNow.a);
+  tieToLabel('PHASE6', ldHlNnLowNow.b, { x: pos.x + 9200, y: pos.y - 5770 });
+  const ldHlNnHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5850 });
+  wire(parent, isLdHlNn.out, ldHlNnHighNow.a);
+  tieToLabel('PHASE7', ldHlNnHighNow.b, { x: pos.x + 9200, y: pos.y - 5820 });
+
+  const isLdNnA = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5900 });
+  wire(parent, isNnZ2.out, isLdNnA.a);
+  wire(parent, dec.y[6]!, isLdNnA.b);
+  const ldNnANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5900 });
+  wire(parent, isLdNnA.out, ldNnANow.a);
+  tieToLabel('PHASE6', ldNnANow.b, { x: pos.x + 9200, y: pos.y - 5870 });
+
+  const isLdANn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5950 });
+  wire(parent, isNnZ2.out, isLdANn.a);
+  wire(parent, dec.y[7]!, isLdANn.b);
+  const ldANnNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5950 });
+  wire(parent, isLdANn.out, ldANnNow.a);
+  tieToLabel('PHASE6', ldANnNow.b, { x: pos.x + 9200, y: pos.y - 5920 });
+
+  tieToLabel('LDNNHL_LOW_NOW', ldNnHlLowNow.out, { x: pos.x + 9350, y: pos.y - 5700 }); // anchor — RAM's own we/address mux and L-onto-bus bank (far) read this
+  tieToLabel('LDNNHL_HIGH_NOW', ldNnHlHighNow.out, { x: pos.x + 9350, y: pos.y - 5750 }); // anchor — RAM's own we/address mux and H-onto-bus bank (far) read this
+  tieToLabel('LDHLNN_LOW_NOW', ldHlNnLowNow.out, { x: pos.x + 9350, y: pos.y - 5800 }); // anchor — RAM's own oe/address mux and L's own write-back (far) read this
+  tieToLabel('LDHLNN_HIGH_NOW', ldHlNnHighNow.out, { x: pos.x + 9350, y: pos.y - 5850 }); // anchor — RAM's own oe/address mux and H's own write-back (far) read this
+  tieToLabel('LDNNA_NOW', ldNnANow.out, { x: pos.x + 9350, y: pos.y - 5900 }); // anchor — RAM's own we/address mux and A-onto-bus bank (far) read this
+  tieToLabel('LDANN_NOW', ldANnNow.out, { x: pos.x + 9350, y: pos.y - 5950 }); // anchor — RAM's own oe/address mux (far) and isBusToA's own widening (far) read this
+
+  // RAM's own address-mux select signals for the indirect-load group (see
+  // "x=00: indirect loads through (BC)/(DE)/(nn)" above): each is an
+  // `OR`-fold over every phase that needs that particular address source,
+  // read by the far-away `bcMux`/`deMux`/`nnLowMux`/`nnHighMux` override
+  // layers via the label, not a ~9000-unit wire.
+  const isBcAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6050 });
+  wire(parent, ldBcANow.out, isBcAddrNow.a);
+  wire(parent, ldABcNow.out, isBcAddrNow.b);
+  tieToLabel('LDBC_ADDR_NOW', isBcAddrNow.out, { x: pos.x + 9400, y: pos.y - 6050 });
+  const isDeAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6100 });
+  wire(parent, ldDeANow.out, isDeAddrNow.a);
+  wire(parent, ldADeNow.out, isDeAddrNow.b);
+  tieToLabel('LDDE_ADDR_NOW', isDeAddrNow.out, { x: pos.x + 9400, y: pos.y - 6100 });
+  const isNnDataAddrStage1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6150 });
+  wire(parent, ldNnANow.out, isNnDataAddrStage1.a);
+  wire(parent, ldANnNow.out, isNnDataAddrStage1.b);
+  const isNnDataAddrStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6200 });
+  wire(parent, isNnDataAddrStage1.out, isNnDataAddrStage2.a);
+  wire(parent, ldNnHlLowNow.out, isNnDataAddrStage2.b);
+  const isNnDataAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6250 });
+  wire(parent, isNnDataAddrStage2.out, isNnDataAddrNow.a);
+  wire(parent, ldHlNnLowNow.out, isNnDataAddrNow.b);
+  tieToLabel('NN_DATA_ADDR_NOW', isNnDataAddrNow.out, { x: pos.x + 9400, y: pos.y - 6250 });
+  const isNnDataAddrPlusOneNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6300 });
+  wire(parent, ldNnHlHighNow.out, isNnDataAddrPlusOneNow.a);
+  wire(parent, ldHlNnHighNow.out, isNnDataAddrPlusOneNow.b);
+  tieToLabel('NN_DATA_ADDR_PLUS_ONE_NOW', isNnDataAddrPlusOneNow.out, { x: pos.x + 9400, y: pos.y - 6300 });
+
+  // x=11: PUSH rp / POP rp / RET / RST n — see the doc comment above
+  // ("x=11: SP, PUSH/POP, RET, RST n") for the full derivation.
+  const isStackGroup = dec.x[3]!;
+  const execPhaseActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 500 });
+  tieToLabel('PHASE2', execPhaseActive.a, { x: pos.x + 9600, y: pos.y + 500 });
+  tieToLabel('PHASE3', execPhaseActive.b, { x: pos.x + 9600, y: pos.y + 530 });
+
+  // PUSH rp: z=101, valid only for y=000,010,100,110 (BC/DE/HL/AF) — the
+  // rest of this z-column is CALL nn and the CB/ED/DD/FD prefix bytes,
+  // none implemented; excluding them keeps those opcodes inert instead of
+  // silently corrupting RAM/SP if one is ever fetched.
+  const pushValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 650 });
+  wire(parent, dec.y[0]!, pushValid1.a);
+  wire(parent, dec.y[2]!, pushValid1.b);
+  const pushValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 700 });
+  wire(parent, pushValid1.out, pushValid2.a);
+  wire(parent, dec.y[4]!, pushValid2.b);
+  const isPushValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 750 });
+  wire(parent, pushValid2.out, isPushValid.a);
+  wire(parent, dec.y[6]!, isPushValid.b);
+  const isPushZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y + 650 });
+  wire(parent, isStackGroup, isPushZ.a);
+  wire(parent, dec.z[5]!, isPushZ.b);
+  const isPush = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y + 650 });
+  wire(parent, isPushZ.out, isPush.a);
+  wire(parent, isPushValid.out, isPush.b);
+
+  // POP rp / RET share z=001 — y=000,010,100,110 is POP, y=001 is RET,
+  // y=011,101,111 (EXX, JP (HL), LD SP,HL) aren't implemented and stay
+  // inert the same way.
+  const readValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 850 });
+  wire(parent, dec.y[0]!, readValid1.a);
+  wire(parent, dec.y[1]!, readValid1.b);
+  const readValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 900 });
+  wire(parent, readValid1.out, readValid2.a);
+  wire(parent, dec.y[2]!, readValid2.b);
+  const readValid3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 950 });
+  wire(parent, readValid2.out, readValid3.a);
+  wire(parent, dec.y[4]!, readValid3.b);
+  const isStackReadValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 1000 });
+  wire(parent, readValid3.out, isStackReadValid.a);
+  wire(parent, dec.y[6]!, isStackReadValid.b);
+  const isStackReadZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y + 850 });
+  wire(parent, isStackGroup, isStackReadZ.a);
+  wire(parent, dec.z[1]!, isStackReadZ.b);
+  const isStackRead = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y + 850 });
+  wire(parent, isStackReadZ.out, isStackRead.a);
+  wire(parent, isStackReadValid.out, isStackRead.b);
+
+  const isRet = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 850 });
+  wire(parent, isStackRead.out, isRet.a);
+  wire(parent, dec.y[1]!, isRet.b);
+  const notIsRet = buildNot(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 900 });
+  wire(parent, isRet.out, notIsRet.in);
+  const isPop = buildAnd(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y + 850 });
+  wire(parent, isStackRead.out, isPop.a);
+  wire(parent, notIsRet.out, isPop.b);
+
+  // RST n: z=111, every y is a real (fixed) target — no reserved slot.
+  const isRst = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y + 1100 });
+  wire(parent, isStackGroup, isRst.a);
+  wire(parent, dec.z[7]!, isRst.b);
+
+  // x=11, z=6: ALU op A,n (real 0xC6/0xCE/0xD6/0xDE/0xE6/0xEE/0xF6/0xFE —
+  // see "x=11: ALU op A,n" below) — the identical `PHASE2`-read/`PHASE3`-
+  // advance shape `LD r,n`'s own `isLdImm8`/`ldImm8ReadNow`/
+  // `ldImm8AdvanceNow` above already established, just gated by `x=11`
+  // instead of `x=00`.
+  const isAluImm8 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y + 1300 });
+  wire(parent, isStackGroup, isAluImm8.a);
+  wire(parent, dec.z[6]!, isAluImm8.b);
+  const aluImm8ReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y + 1300 });
+  wire(parent, isAluImm8.out, aluImm8ReadNow.a);
+  tieToLabel('PHASE2', aluImm8ReadNow.b, { x: pos.x + 9200, y: pos.y + 1330 });
+  tieToLabel('ALUIMM8_READ_NOW', aluImm8ReadNow.out, { x: pos.x + 9400, y: pos.y + 1300 }); // anchor — ramOeStage (far) reads this via the label; the ALU group's own commit-gate widening (aluAnyGroupNow, right below) reads aluImm8ReadNow directly, same scope, no label needed
+  const aluImm8AdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y + 1350 });
+  wire(parent, isAluImm8.out, aluImm8AdvanceNow.a);
+  tieToLabel('PHASE3', aluImm8AdvanceNow.b, { x: pos.x + 9200, y: pos.y + 1380 });
+  tieToLabel('ALUIMM8_ADVANCE_NOW', aluImm8AdvanceNow.out, { x: pos.x + 9400, y: pos.y + 1350 }); // anchor — pcHold (far) reads this
+
+  // `A`/`F`'s own commit for ALU op A,n (see "x=11: ALU op A,n" above)
+  // reuses `x=10`'s entire ALU-group machinery unchanged: `alu.op0`/`op1`/
+  // `cin`/`bInv` are keyed on `dec.y` alone, never `dec.x` (see the doc
+  // comment above, "x=10: ADC/SBC") — z=6's own y values encode the exact
+  // same eight operations x=10's own y does — so `alu.out`/`alu.cout` are
+  // *already* correct the instant `aluImm8ReadNow` puts the immediate byte
+  // on the bus for `bInv` to read, with zero new op-select wiring. Only
+  // the *commit* gate (`aWe`/`fWe`/`F`'s own `baseMux` sel) needs widening
+  // — `aluGroupNow` alone would leave this opcode decoded but silently
+  // inert, same shape ADC/SBC needed before a carry flag existed to route.
+  // `groupActive` (the *register*-operand bus enable) deliberately stays
+  // narrow — there is no register operand here, the bus is already
+  // correctly driven by RAM instead.
+  const aluAnyGroupNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y + 1250 });
+  wire(parent, aluGroupNow.out, aluAnyGroupNow.a);
+  wire(parent, aluImm8ReadNow.out, aluAnyGroupNow.b);
+
+  const pushNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 650 });
+  wire(parent, isPush.out, pushNow.a);
+  wire(parent, execPhaseActive.out, pushNow.b);
+  // POP's own 2 register bytes need both EXEC1 and EXEC2, same as PUSH —
+  // but RET, despite sharing isStackRead/z=1 with POP, is single-cycle for
+  // the identical reason RST is (PC fits in one stack byte here): without
+  // this split, RET's own PC-capture and SP-increment would fire a SECOND,
+  // spurious time during EXEC2, off a since-incremented (wrong) address.
+  const popReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y + 800 });
+  wire(parent, isPop.out, popReadNow.a);
+  wire(parent, execPhaseActive.out, popReadNow.b);
+  const retNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y + 900 });
+  wire(parent, isRet.out, retNow.a);
+  tieToLabel('PHASE2', retNow.b, { x: pos.x + 9950, y: pos.y + 900 });
+  // popReadNow OR retNow — widened further below (see "x=11: RET cc") once
+  // `RET cc`'s own conditional pop signal exists; that widening needs
+  // `conditionTrue`, itself only built later inside "x=11: JP cc,nn", so
+  // the *final* `readNow` const lives down there, not here.
+  const readNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 850 });
+  wire(parent, popReadNow.out, readNowStage.a);
+  wire(parent, retNow.out, readNowStage.b);
+  // RST pushes PC on EXEC1, then jumps to its fixed target on EXEC2 — NOT
+  // both on the same edge. First version did both on EXEC1: the push-data
+  // driver (below) reads `pc.q` combinationally, and RAM's write (like any
+  // write in this design, per the addressing doc comment above) samples
+  // it fully settled — by which point PC had *already* jumped, on that
+  // same edge, to the RST target. RAM ended up with the *target* address
+  // pushed, not the return address; a subsequent RET landed back at the
+  // RST target instead of resuming after it. Splitting the push (EXEC1,
+  // `rstNow`) from the jump (EXEC2, `rstJumpNow`) gives PC's own capture a
+  // clean edge that nothing else is racing.
+  const rstNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 1100 });
+  wire(parent, isRst.out, rstNow.a);
+  tieToLabel('PHASE2', rstNow.b, { x: pos.x + 9800, y: pos.y + 1100 });
+  const rstJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 1200 });
+  wire(parent, isRst.out, rstJumpNow.a);
+  tieToLabel('PHASE3', rstJumpNow.b, { x: pos.x + 9800, y: pos.y + 1200 });
+
+  // JP nn: z=3, y=0 (real 0xC3) — see the doc comment above ("x=11: JP nn")
+  // for the full derivation. z=3's other y values (EX (SP),HL, EX DE,HL,
+  // DI, EI, the CB prefix, OUT (n),A, IN A,(n)) aren't implemented, stay
+  // correctly inert since nothing below reads those lines. Reuses `LD
+  // dd,nn`'s exact read-low/advance/read-high phase shape (PHASE2-4) —
+  // the difference is entirely in PHASE5: `LD dd,nn` advances `PC` a
+  // third time there, `JP nn` *overwrites* it with the freshly-read
+  // target instead, so PHASE5 is deliberately left OUT of `pcHold`'s own
+  // OR-chain for this instruction (unlike `LDDDNN_HIGH_ADVANCE_NOW`,
+  // which *is* PHASE5-gated, but only fires for `LD dd,nn`'s own opcode —
+  // one-hot `dec.z` keeps the two from ever overlapping).
+  const isX11Z3 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 2900 });
+  wire(parent, isStackGroup, isX11Z3.a);
+  wire(parent, dec.z[3]!, isX11Z3.b);
+  const isJpNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2900 });
+  wire(parent, isX11Z3.out, isJpNn.a);
+  wire(parent, dec.y[0]!, isJpNn.b);
+  const jpReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 2900 });
+  wire(parent, isJpNn.out, jpReadLowNow.a);
+  tieToLabel('PHASE2', jpReadLowNow.b, { x: pos.x + 9350, y: pos.y - 2870 });
+  const jpAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 2850 });
+  wire(parent, isJpNn.out, jpAdvanceNow.a);
+  tieToLabel('PHASE3', jpAdvanceNow.b, { x: pos.x + 9350, y: pos.y - 2820 });
+  const jpReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 2800 });
+  wire(parent, isJpNn.out, jpReadHighNow.a);
+  tieToLabel('PHASE4', jpReadHighNow.b, { x: pos.x + 9350, y: pos.y - 2770 });
+  const jpJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 2750 });
+  wire(parent, isJpNn.out, jpJumpNow.a);
+  tieToLabel('PHASE5', jpJumpNow.b, { x: pos.x + 9350, y: pos.y - 2720 });
+  tieToLabel('JP_READ_LOW_NOW', jpReadLowNow.out, { x: pos.x + 9500, y: pos.y - 2900 }); // anchor — ramOeStage (far) and jpTarget's own write-back (far) read this
+  tieToLabel('JP_ADVANCE_NOW', jpAdvanceNow.out, { x: pos.x + 9500, y: pos.y - 2850 }); // anchor — pcHold (far) reads this
+  tieToLabel('JP_READ_HIGH_NOW', jpReadHighNow.out, { x: pos.x + 9500, y: pos.y - 2800 }); // anchor — ramOeStage (far) and jpTarget's own write-back (far) read this
+  tieToLabel('JP_JUMP_NOW', jpJumpNow.out, { x: pos.x + 9500, y: pos.y - 2750 }); // anchor — PC's own jpMux (far) reads this
+
+  // CALL nn: z=5, y=1 (real 0xCD) — the odd `y` at this `z`, `PUSH`'s own
+  // z=5 valid set (`isPushValid` above) only covers the even ones. See the
+  // doc comment above ("x=11: CALL nn") for the full derivation, including
+  // why this needs a *seventh* and *eighth* phase (`isPushZ` — `x=11`,
+  // `z=5` — is already built above; reused directly rather than
+  // recomputed).
+  const isCallNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3200 });
+  wire(parent, isPushZ.out, isCallNn.a);
+  wire(parent, dec.y[1]!, isCallNn.b);
+  const callReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3200 });
+  wire(parent, isCallNn.out, callReadLowNow.a);
+  tieToLabel('PHASE2', callReadLowNow.b, { x: pos.x + 9750, y: pos.y - 3170 });
+  const callAdvanceLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3150 });
+  wire(parent, isCallNn.out, callAdvanceLowNow.a);
+  tieToLabel('PHASE3', callAdvanceLowNow.b, { x: pos.x + 9750, y: pos.y - 3120 });
+  const callReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3100 });
+  wire(parent, isCallNn.out, callReadHighNow.a);
+  tieToLabel('PHASE4', callReadHighNow.b, { x: pos.x + 9750, y: pos.y - 3070 });
+  const callAdvanceHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3050 });
+  wire(parent, isCallNn.out, callAdvanceHighNow.a);
+  tieToLabel('PHASE5', callAdvanceHighNow.b, { x: pos.x + 9750, y: pos.y - 3020 });
+  const callPushNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3000 });
+  wire(parent, isCallNn.out, callPushNow.a);
+  tieToLabel('PHASE6', callPushNow.b, { x: pos.x + 9750, y: pos.y - 2970 });
+  const callJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 2950 });
+  wire(parent, isCallNn.out, callJumpNow.a);
+  tieToLabel('PHASE7', callJumpNow.b, { x: pos.x + 9750, y: pos.y - 2920 });
+  tieToLabel('CALL_READ_LOW_NOW', callReadLowNow.out, { x: pos.x + 9900, y: pos.y - 3200 }); // anchor — ramOeStage and callTarget's own write-back (far) read this
+  tieToLabel('CALL_ADVANCE_LOW_NOW', callAdvanceLowNow.out, { x: pos.x + 9900, y: pos.y - 3150 }); // anchor — pcHold (far) reads this
+  tieToLabel('CALL_READ_HIGH_NOW', callReadHighNow.out, { x: pos.x + 9900, y: pos.y - 3100 }); // anchor — ramOeStage and callTarget's own write-back (far) read this
+  tieToLabel('CALL_ADVANCE_HIGH_NOW', callAdvanceHighNow.out, { x: pos.x + 9900, y: pos.y - 3050 }); // anchor — pcHold (far) reads this
+  tieToLabel('CALL_PUSH_NOW', callPushNow.out, { x: pos.x + 9900, y: pos.y - 3000 }); // anchor — stackWriteNow (below) and the return-address push-driver bank (far) read this
+  tieToLabel('CALL_JUMP_NOW', callJumpNow.out, { x: pos.x + 9900, y: pos.y - 2950 }); // anchor — PC's own callMux (far) reads this
+
+  // JP cc,nn: z=2 (real 0xC2/0xCA/0xD2/0xDA/0xE2/0xEA/0xF2/0xFA) — see the
+  // doc comment above ("x=11: JP cc,nn") for the full derivation. Reuses
+  // `JP nn`'s exact PHASE2-PHASE5 read/advance shape, but PHASE5 branches
+  // on a flag test instead of always jumping: jump if the condition holds,
+  // otherwise just advance PC a third time (`LD dd,nn`'s own PHASE5
+  // shape) so execution falls through to whatever comes after this
+  // instruction's own 3 bytes. A *separate* decode/target register from
+  // `JP nn`'s own (`jpCcTarget`, not a widened, shared `jpTarget`) —
+  // `z=3` and `z=2` are mutually exclusive by construction, so sharing
+  // would have been electrically safe, but this keeps the addition from
+  // touching any already-proven `JP nn` wiring, the same "separate over
+  // shared-and-muxed" preference `CALL nn`'s own `callTarget` already
+  // established.
+  //
+  // `y` selects the condition the same one-hot way `INC r`/`DEC r`'s own
+  // `r8Select` above picks a register — real Z80's own condition/`y`
+  // mapping: NZ=0, Z=1, NC=2, C=3, PO=4, PE=5, P=6, M=7 (`P`/`M` test `F`'s
+  // `S` bit — "plus"/"minus" — not to be confused with `P/V`, `PO`/`PE`'s
+  // own "parity odd"/"parity even"). Computed unconditionally off `F`'s
+  // own live bits, same "always compute, gate only the commit" philosophy
+  // `alu`/`spAdder`/`r8Adder` already use — cheap, and correctness doesn't
+  // depend on gating it by `isJpCcZ` at all, only the commit does.
+  const notFZ = buildNot(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 3550 });
+  wire(parent, f.q[6]!, notFZ.in);
+  const notFC = buildNot(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 3500 });
+  wire(parent, f.q[0]!, notFC.in);
+  const notFP = buildNot(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 3450 });
+  wire(parent, f.q[2]!, notFP.in);
+  const notFS = buildNot(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 3400 });
+  wire(parent, f.q[7]!, notFS.in);
+  const ccSelect: [Pin, Pin][] = [
+    [dec.y[0]!, notFZ.out], // NZ
+    [dec.y[1]!, f.q[6]!], // Z
+    [dec.y[2]!, notFC.out], // NC
+    [dec.y[3]!, f.q[0]!], // C
+    [dec.y[4]!, notFP.out], // PO
+    [dec.y[5]!, f.q[2]!], // PE
+    [dec.y[6]!, notFS.out], // P
+    [dec.y[7]!, f.q[7]!], // M
+  ];
+  let conditionTrue: Pin | null = null;
+  ccSelect.forEach(([y, bit], k) => {
+    const and = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3550 + k * 50 });
+    wire(parent, y, and.a);
+    wire(parent, bit, and.b);
+    if (conditionTrue === null) {
+      conditionTrue = and.out;
+    } else {
+      const or = buildOr(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 3550 + k * 50 });
+      wire(parent, conditionTrue, or.a);
+      wire(parent, and.out, or.b);
+      conditionTrue = or.out;
+    }
+  });
+  const notConditionTrue = buildNot(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3550 });
+  wire(parent, conditionTrue!, notConditionTrue.in);
+
+  const isJpCcZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3700 });
+  wire(parent, isStackGroup, isJpCcZ.a);
+  wire(parent, dec.z[2]!, isJpCcZ.b);
+  const jpCcReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3700 });
+  wire(parent, isJpCcZ.out, jpCcReadLowNow.a);
+  tieToLabel('PHASE2', jpCcReadLowNow.b, { x: pos.x + 9750, y: pos.y - 3670 });
+  const jpCcAdvanceLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3650 });
+  wire(parent, isJpCcZ.out, jpCcAdvanceLowNow.a);
+  tieToLabel('PHASE3', jpCcAdvanceLowNow.b, { x: pos.x + 9750, y: pos.y - 3620 });
+  const jpCcReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3600 });
+  wire(parent, isJpCcZ.out, jpCcReadHighNow.a);
+  tieToLabel('PHASE4', jpCcReadHighNow.b, { x: pos.x + 9750, y: pos.y - 3570 });
+  const isJpCcPhase5 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3550 });
+  wire(parent, isJpCcZ.out, isJpCcPhase5.a);
+  tieToLabel('PHASE5', isJpCcPhase5.b, { x: pos.x + 9750, y: pos.y - 3520 });
+  const jpCcJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3550 });
+  wire(parent, isJpCcPhase5.out, jpCcJumpNow.a);
+  wire(parent, conditionTrue!, jpCcJumpNow.b);
+  const jpCcFallThroughNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3500 });
+  wire(parent, isJpCcPhase5.out, jpCcFallThroughNow.a);
+  wire(parent, notConditionTrue.out, jpCcFallThroughNow.b);
+  tieToLabel('JPCC_READ_LOW_NOW', jpCcReadLowNow.out, { x: pos.x + 10000, y: pos.y - 3700 }); // anchor — ramOeStage and jpCcTarget's own write-back (far) read this
+  tieToLabel('JPCC_ADVANCE_LOW_NOW', jpCcAdvanceLowNow.out, { x: pos.x + 10000, y: pos.y - 3650 }); // anchor — pcHold (far) reads this
+  tieToLabel('JPCC_READ_HIGH_NOW', jpCcReadHighNow.out, { x: pos.x + 10000, y: pos.y - 3600 }); // anchor — ramOeStage and jpCcTarget's own write-back (far) read this
+  tieToLabel('JPCC_JUMP_NOW', jpCcJumpNow.out, { x: pos.x + 10000, y: pos.y - 3550 }); // anchor — PC's own jpCcMux (far) reads this
+  tieToLabel('JPCC_FALLTHROUGH_NOW', jpCcFallThroughNow.out, { x: pos.x + 10000, y: pos.y - 3500 }); // anchor — pcHold (far) reads this
+
+  // CALL cc,nn: z=4 (real 0xC4/0xCC/0xD4/0xDC/0xE4/0xEC/0xF4/0xFC) — see
+  // the doc comment above ("x=11: CALL cc,nn") for the full derivation.
+  // Reuses `CALL nn`'s exact PHASE2-PHASE5 read/advance shape completely
+  // unchanged and UNCONDITIONALLY — both branches need PC to end up
+  // pointing past this instruction's own 3 bytes regardless of whether
+  // the call actually fires, since that address is either the
+  // fall-through target or the very return address about to be pushed.
+  // The only branch is in PHASE6 (push) and PHASE7 (jump): `conditionTrue`
+  // — reused directly from `JP cc,nn`'s own tree above, since `y`'s
+  // condition encoding is identical at this `z` and depends on nothing
+  // but `dec.y` and `F`'s live bits, not `dec.z` — gates both. Condition
+  // false means PHASE6 pushes nothing and PHASE7 leaves PC exactly where
+  // PHASE5's own unconditional advance already put it: no FALLTHROUGH
+  // signal needed here at all, unlike `JP cc,nn`'s own PHASE5, because the
+  // "do nothing extra" case needs no explicit gate of its own.
+  const isCallCcZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3850 });
+  wire(parent, isStackGroup, isCallCcZ.a);
+  wire(parent, dec.z[4]!, isCallCcZ.b);
+  const callCcReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3850 });
+  wire(parent, isCallCcZ.out, callCcReadLowNow.a);
+  tieToLabel('PHASE2', callCcReadLowNow.b, { x: pos.x + 9750, y: pos.y - 3820 });
+  const callCcAdvanceLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3800 });
+  wire(parent, isCallCcZ.out, callCcAdvanceLowNow.a);
+  tieToLabel('PHASE3', callCcAdvanceLowNow.b, { x: pos.x + 9750, y: pos.y - 3770 });
+  const callCcReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3750 });
+  wire(parent, isCallCcZ.out, callCcReadHighNow.a);
+  tieToLabel('PHASE4', callCcReadHighNow.b, { x: pos.x + 9750, y: pos.y - 3720 });
+  const callCcAdvanceHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3700 });
+  wire(parent, isCallCcZ.out, callCcAdvanceHighNow.a);
+  tieToLabel('PHASE5', callCcAdvanceHighNow.b, { x: pos.x + 9750, y: pos.y - 3670 });
+  const isCallCcPhase6 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3650 });
+  wire(parent, isCallCcZ.out, isCallCcPhase6.a);
+  tieToLabel('PHASE6', isCallCcPhase6.b, { x: pos.x + 9750, y: pos.y - 3620 });
+  const callCcPushNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3650 });
+  wire(parent, isCallCcPhase6.out, callCcPushNow.a);
+  wire(parent, conditionTrue!, callCcPushNow.b);
+  const isCallCcPhase7 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3600 });
+  wire(parent, isCallCcZ.out, isCallCcPhase7.a);
+  tieToLabel('PHASE7', isCallCcPhase7.b, { x: pos.x + 9750, y: pos.y - 3570 });
+  const callCcJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3600 });
+  wire(parent, isCallCcPhase7.out, callCcJumpNow.a);
+  wire(parent, conditionTrue!, callCcJumpNow.b);
+  tieToLabel('CALLCC_READ_LOW_NOW', callCcReadLowNow.out, { x: pos.x + 10000, y: pos.y - 3850 }); // anchor — ramOeStage and callCcTarget's own write-back (far) read this
+  tieToLabel('CALLCC_ADVANCE_LOW_NOW', callCcAdvanceLowNow.out, { x: pos.x + 10000, y: pos.y - 3800 }); // anchor — pcHold (far) reads this
+  tieToLabel('CALLCC_READ_HIGH_NOW', callCcReadHighNow.out, { x: pos.x + 10000, y: pos.y - 3750 }); // anchor — ramOeStage and callCcTarget's own write-back (far) read this
+  tieToLabel('CALLCC_ADVANCE_HIGH_NOW', callCcAdvanceHighNow.out, { x: pos.x + 10000, y: pos.y - 3700 }); // anchor — pcHold (far) reads this
+  tieToLabel('CALLCC_PUSH_NOW', callCcPushNow.out, { x: pos.x + 10000, y: pos.y - 3650 }); // anchor — stackWriteNow (below) and the return-address push-driver bank (far) read this
+  tieToLabel('CALLCC_JUMP_NOW', callCcJumpNow.out, { x: pos.x + 10000, y: pos.y - 3600 }); // anchor — PC's own callCcMux (far) reads this
+
+  // RET cc: z=0 (real 0xC0/0xC8/0xD0/0xD8/0xE0/0xE8/0xF0/0xF8) — see the
+  // doc comment above ("x=11: RET cc") for the full derivation. The
+  // simplest of the four flag-gated x=11 instructions built so far: a
+  // single-byte opcode, no operand bytes to read or advance past, so the
+  // not-taken branch needs nothing beyond PC's own default PHASE1
+  // increment — no FALLTHROUGH signal, no extra `pcHold` term, unlike
+  // every other conditional instruction in this file. Reuses `JP cc,nn`'s
+  // own `conditionTrue` directly (identical y-to-condition encoding,
+  // `dec.z`-independent) and the *existing* unconditional `RET`'s own
+  // single-byte pop shape — no dedicated target register either, since
+  // the popped byte already IS the full address, the same reason
+  // `retMux` itself never needed one.
+  const isRetCcZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3950 });
+  wire(parent, isStackGroup, isRetCcZ.a);
+  wire(parent, dec.z[0]!, isRetCcZ.b);
+  const isRetCcPhase2 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3950 });
+  wire(parent, isRetCcZ.out, isRetCcPhase2.a);
+  tieToLabel('PHASE2', isRetCcPhase2.b, { x: pos.x + 9750, y: pos.y - 3920 });
+  const retCcTakenNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3950 });
+  wire(parent, isRetCcPhase2.out, retCcTakenNow.a);
+  wire(parent, conditionTrue!, retCcTakenNow.b);
+  tieToLabel('RETCC_TAKEN_NOW', retCcTakenNow.out, { x: pos.x + 10000, y: pos.y - 3950 }); // anchor — readNow's own widening (below) and PC's own retCcMux (far) both read this
+
+  // `readNow`'s real, final definition — `readNowStage` (popReadNow OR
+  // retNow, built with unconditional RET/POP long before `RET cc` or
+  // `conditionTrue` existed) widens a third term here, exactly the same
+  // "gated already by `conditionTrue` inside the term itself, no extra
+  // check at the `OR` gate" shape `CALL cc,nn`'s own `stackWriteNow`
+  // widening used.
+  const readNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 10150, y: pos.y + 870 });
+  wire(parent, readNowStage.out, readNow.a);
+  tieToLabel('RETCC_TAKEN_NOW', readNow.b, { x: pos.x + 10050, y: pos.y + 870 });
+
+  // x=00, z=0, y=4..7: JR cc,e (real 0x20/0x28/0x30/0x38 — NZ/Z/NC/C only,
+  // a real Z80 hardware restriction: this z-column's other y values are
+  // NOP/EX AF,AF'/DJNZ/JR (unconditional), none implemented, so only
+  // y=4..7 get decoded here; PO/PE/P/M were never valid for this opcode on
+  // real silicon either, not a simplification this project chose. See the
+  // doc comment above ("x=00: JR cc,e") for the full derivation, including
+  // why this needs genuine PC-relative arithmetic instead of JP cc,nn's
+  // own "write the operand straight into PC" shape.
+  //
+  // Condition test: the *same* NZ/Z/NC/C signals `JP cc,nn`'s own tree
+  // already built (`notFZ`/`f.q[6]`/`notFC`/`f.q[0]`), paired with this
+  // opcode's own `y` lines instead — `y=4..7` here encode the identical
+  // four conditions `JP cc,nn`'s own `y=0..3` do, just at a different `y`
+  // value (real Z80's own encoding, not a choice made here), so the
+  // pairing can't reuse `conditionTrue` itself, only the `F`-bit taps
+  // feeding it.
+  const isX0Z0 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 4050 });
+  wire(parent, isX0Group, isX0Z0.a);
+  wire(parent, dec.z[0]!, isX0Z0.b);
+  const jrCcYValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 4000 });
+  wire(parent, dec.y[4]!, jrCcYValid1.a);
+  wire(parent, dec.y[5]!, jrCcYValid1.b);
+  const jrCcYValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3970 });
+  wire(parent, jrCcYValid1.out, jrCcYValid2.a);
+  wire(parent, dec.y[6]!, jrCcYValid2.b);
+  const isJrCcYValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3940 });
+  wire(parent, jrCcYValid2.out, isJrCcYValid.a);
+  wire(parent, dec.y[7]!, isJrCcYValid.b);
+  const isJrCc = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 4050 });
+  wire(parent, isX0Z0.out, isJrCc.a);
+  wire(parent, isJrCcYValid.out, isJrCc.b);
+
+  const jrCcSelect: [Pin, Pin][] = [
+    [dec.y[4]!, notFZ.out], // NZ
+    [dec.y[5]!, f.q[6]!], // Z
+    [dec.y[6]!, notFC.out], // NC
+    [dec.y[7]!, f.q[0]!], // C
+  ];
+  let jrCcConditionTrue: Pin | null = null;
+  jrCcSelect.forEach(([y, bit], k) => {
+    const and = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 4050 + k * 50 });
+    wire(parent, y, and.a);
+    wire(parent, bit, and.b);
+    if (jrCcConditionTrue === null) {
+      jrCcConditionTrue = and.out;
+    } else {
+      const or = buildOr(parent, vcc3, gnd3, { x: pos.x + 9850, y: pos.y - 4050 + k * 50 });
+      wire(parent, jrCcConditionTrue, or.a);
+      wire(parent, and.out, or.b);
+      jrCcConditionTrue = or.out;
+    }
+  });
+
+  const jrCcReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4050 });
+  wire(parent, isJrCc.out, jrCcReadNow.a);
+  tieToLabel('PHASE2', jrCcReadNow.b, { x: pos.x + 9850, y: pos.y - 4020 });
+  const jrCcAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4000 });
+  wire(parent, isJrCc.out, jrCcAdvanceNow.a);
+  tieToLabel('PHASE3', jrCcAdvanceNow.b, { x: pos.x + 9850, y: pos.y - 3970 });
+  const isJrCcPhase4 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3950 });
+  wire(parent, isJrCc.out, isJrCcPhase4.a);
+  tieToLabel('PHASE4', isJrCcPhase4.b, { x: pos.x + 9850, y: pos.y - 3920 });
+  const jrCcJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y - 3950 });
+  wire(parent, isJrCcPhase4.out, jrCcJumpNow.a);
+  wire(parent, jrCcConditionTrue!, jrCcJumpNow.b);
+
+  // x=00, z=0, y=3: JR e (real 0x18) — unconditional. Shares `isX0Z0`
+  // and every downstream piece of `JR cc,e`'s own machinery (`jrCcOffset`,
+  // `jrOffsetAdder`) — reading, advancing, and jumping are identical work
+  // to the conditional form, minus the condition test itself, so this is
+  // a single extra AND gate per phase, nothing more. Mutually exclusive
+  // with `JR cc,e`'s own `y=4..7` and `DJNZ`'s own `y=2` by construction
+  // (`dec.y` one-hot), so ORing this into the same final commit signals
+  // below is safe.
+  const isJr = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 4100 });
+  wire(parent, isX0Z0.out, isJr.a);
+  wire(parent, dec.y[3]!, isJr.b);
+  const jrReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4150 });
+  wire(parent, isJr.out, jrReadNow.a);
+  tieToLabel('PHASE2', jrReadNow.b, { x: pos.x + 9850, y: pos.y - 4120 });
+  const jrAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4100 });
+  wire(parent, isJr.out, jrAdvanceNow.a);
+  tieToLabel('PHASE3', jrAdvanceNow.b, { x: pos.x + 9850, y: pos.y - 4070 });
+  const jrJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4050 });
+  wire(parent, isJr.out, jrJumpNow.a);
+  tieToLabel('PHASE4', jrJumpNow.b, { x: pos.x + 9850, y: pos.y - 4020 });
+
+  // x=00, z=0, y=2: DJNZ e (real 0x10) — decrement B, jump only if the
+  // result is nonzero. `djnzAdder` is a *third* dedicated `buildAlu`
+  // instance (8 bits, the same "b=all-1s, cin=0" -1 encoding `spAdder`
+  // already established for a plain decrement), computed unconditionally
+  // off `rB.q`, feeding B's own fourth write-back layer (below) with the
+  // decremented value.
+  //
+  // The zero-test is deliberately built off `rB.q` directly, NOT off
+  // `djnzAdder.out` — found live: `djnzAdder` recomputes "B minus one"
+  // continuously, off whatever `rB.q` currently is; by `PHASE4` (when the
+  // jump-or-not decision fires), `PHASE2`'s own write has *already*
+  // committed the decrement into `rB.q`, so reading `djnzAdder.out` at
+  // that point silently computes "B minus one *again*" — a real, live
+  // off-by-one that only misfires on the SECOND loop pass onward (B=3->2
+  // tests "2-1=1, nonzero" and accidentally jumps correctly; B=2->1 tests
+  // "1-1=0, zero" and wrongly stops, one iteration early, exactly the bug
+  // this test file caught). `rB.q`'s own OR-fold (`bNotZeroChain`, the
+  // identical shape `r8ZChain`/the ALU group's own zChain already use,
+  // stopped one step short of the final `NOT`) reads the register's own
+  // already-decremented value instead of re-deriving a stale one.
+  const isDjnz = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 4150 });
+  wire(parent, isX0Z0.out, isDjnz.a);
+  wire(parent, dec.y[2]!, isDjnz.b);
+  const djnzAdder = buildAlu(parent, library, 8, { x: pos.x - 700, y: pos.y - 5100 });
+  wire(parent, gnd3, djnzAdder.op0);
+  wire(parent, gnd3, djnzAdder.op1);
+  wire(parent, gnd3, djnzAdder.cin);
+  rB.q.forEach((q, i) => {
+    wire(parent, q, djnzAdder.a[i]!);
+    wire(parent, vcc3, djnzAdder.b[i]!);
+    tieToLabel(`DJNZRESULT${i}`, djnzAdder.out[i]!, { x: pos.x - 600, y: pos.y - 5100 + i * 60 }); // anchor — B's own fourth write-back layer (far) reads this
+  });
+  let bNotZeroChain: Pin = rB.q[0]!;
+  for (let i = 1; i < 8; i++) {
+    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 5100 + i * 60 });
+    wire(parent, bNotZeroChain, orGate.a);
+    wire(parent, rB.q[i]!, orGate.b);
+    bNotZeroChain = orGate.out;
+  }
+  const djnzDecNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4200 });
+  wire(parent, isDjnz.out, djnzDecNow.a);
+  tieToLabel('PHASE2', djnzDecNow.b, { x: pos.x + 9850, y: pos.y - 4170 });
+  tieToLabel('DJNZ_DEC_NOW', djnzDecNow.out, { x: pos.x + 10000, y: pos.y - 4200 }); // anchor — B's own fourth write-back layer (far) and the shared JR_READ_NOW below both read this
+  const djnzAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4250 });
+  wire(parent, isDjnz.out, djnzAdvanceNow.a);
+  tieToLabel('PHASE3', djnzAdvanceNow.b, { x: pos.x + 9850, y: pos.y - 4220 });
+  const isDjnzPhase4 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4300 });
+  wire(parent, isDjnz.out, isDjnzPhase4.a);
+  tieToLabel('PHASE4', isDjnzPhase4.b, { x: pos.x + 9850, y: pos.y - 4270 });
+  const djnzJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y - 4300 });
+  wire(parent, isDjnzPhase4.out, djnzJumpNow.a);
+  wire(parent, bNotZeroChain, djnzJumpNow.b);
+
+  // `JR_READ_NOW`/`JR_ADVANCE_NOW`/`JR_JUMP_NOW` — the *real* final
+  // signals every JR-family opcode's own read/advance/jump funnels into.
+  // Renamed from the original `JRCC_*` names (`JR cc,e`'s own, before
+  // plain `JR`/`DJNZ` existed) since these three now cover all three
+  // variants — keeping the old, narrower name once it stopped being
+  // accurate would be exactly the kind of misleading label this project
+  // has never allowed elsewhere. Mutually exclusive by `dec.y` at every
+  // term, so a straight `OR`-fold is correct, not just convenient.
+  const jrReadNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y - 4100 });
+  wire(parent, jrCcReadNow.out, jrReadNowStage.a);
+  wire(parent, jrReadNow.out, jrReadNowStage.b);
+  const jrReadNowFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y - 4130 });
+  wire(parent, jrReadNowStage.out, jrReadNowFinal.a);
+  wire(parent, djnzDecNow.out, jrReadNowFinal.b);
+  tieToLabel('JR_READ_NOW', jrReadNowFinal.out, { x: pos.x + 10100, y: pos.y - 4130 }); // anchor — ramOeStage and jrCcOffset's own WE (far) both read this
+  const jrAdvanceNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y - 4150 });
+  wire(parent, jrCcAdvanceNow.out, jrAdvanceNowStage.a);
+  wire(parent, jrAdvanceNow.out, jrAdvanceNowStage.b);
+  const jrAdvanceNowFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y - 4180 });
+  wire(parent, jrAdvanceNowStage.out, jrAdvanceNowFinal.a);
+  wire(parent, djnzAdvanceNow.out, jrAdvanceNowFinal.b);
+  tieToLabel('JR_ADVANCE_NOW', jrAdvanceNowFinal.out, { x: pos.x + 10100, y: pos.y - 4180 }); // anchor — pcHold (far) reads this
+  const jrJumpNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y - 4200 });
+  wire(parent, jrCcJumpNow.out, jrJumpNowStage.a);
+  wire(parent, jrJumpNow.out, jrJumpNowStage.b);
+  const jrJumpNowFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y - 4230 });
+  wire(parent, jrJumpNowStage.out, jrJumpNowFinal.a);
+  wire(parent, djnzJumpNow.out, jrJumpNowFinal.b);
+  tieToLabel('JR_JUMP_NOW', jrJumpNowFinal.out, { x: pos.x + 10100, y: pos.y - 4230 }); // anchor — PC's own jrMux (far) reads this
+
+  // The displacement byte itself: a plain 8-bit register, not a "hold vs
+  // fresh" mux pair the way `jpTarget`/`callTarget`/etc need — those exist
+  // because a single register captures TWO different byte-halves across
+  // two separate WE pulses and has to preserve whichever half isn't being
+  // written that cycle; `jrCcOffset` is written exactly once, so a bare
+  // `we`-gated capture (the same shape `B`/`C`/`D`/... use for `LD r,n`'s
+  // own immediate byte) is all it needs.
+  const jrCcOffset = buildRegister(parent, library, 8, { x: pos.x - 700, y: pos.y - 4700 });
+  tieToLabel('JR_READ_NOW', jrCcOffset.we, { x: pos.x - 800, y: pos.y - 4700 });
+  jrCcOffset.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 4680 - i * 20 }));
+  tieToLabel('CLK', jrCcOffset.clk, { x: pos.x - 700, y: pos.y - 4720 }); // learned from jpTarget's own missing-CLK bug, several features back — checked off explicitly, every time, no exceptions
+
+  // PC-relative arithmetic: a *second* `buildAlu` instance (width
+  // `addrBits`, the same trick `spAdder` already established for a
+  // dedicated, non-shared adder), permanently in ADD mode (`op0`/`op1`
+  // tied to `gnd`, `cin` tied to `gnd` — a genuine two's-complement sum,
+  // not `spAdder`'s own "b=all-1s, cin=0" -1 encoding), computed
+  // UNCONDITIONALLY off `pc.q`'s own *current* value — by the time
+  // `PHASE4` arrives, `PHASE3`'s own advance has already committed on the
+  // prior edge, so `pc.q` already equals "the address right after this
+  // instruction's own 2 bytes," exactly the base a real relative jump
+  // needs, without this file building any special-cased "peek ahead"
+  // logic to get it. `jrCcOffset`'s own 8 bits sign-extend up to
+  // `addrBits` (bit 7 repeated into every bit above it) — this only
+  // produces a correct negative displacement when `addrBits >= 8`; for a
+  // narrower address space this project has never actually exercised
+  // that combination, an explicit, documented limitation rather than a
+  // silent one (see "x=00: JR cc,e" above).
+  const jrOffsetAdder = buildAlu(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 4900 });
+  wire(parent, gnd, jrOffsetAdder.op0);
+  wire(parent, gnd, jrOffsetAdder.op1);
+  wire(parent, gnd, jrOffsetAdder.cin);
+  for (let i = 0; i < addrBits; i++) {
+    wire(parent, pc.q[i]!, jrOffsetAdder.a[i]!);
+    if (i < 8) wire(parent, jrCcOffset.q[i]!, jrOffsetAdder.b[i]!);
+    else wire(parent, jrCcOffset.q[7]!, jrOffsetAdder.b[i]!); // sign-extend
+  }
+
+  const stackWriteNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y + 900 }); // pushNow OR rstNow — decrements SP, and is the RAM-write/address-select condition
+  wire(parent, pushNow.out, stackWriteNowStage.a);
+  wire(parent, rstNow.out, stackWriteNowStage.b);
+  // CALL nn's own return-address push (see "x=11: CALL nn" above) needs
+  // the identical decrement-SP/write-RAM-at-SP/address-select treatment —
+  // a third OR term, reusing every bit of that machinery rather than
+  // rebuilding any of it.
+  const stackWriteNowStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y + 950 });
+  wire(parent, stackWriteNowStage.out, stackWriteNowStage2.a);
+  tieToLabel('CALL_PUSH_NOW', stackWriteNowStage2.b, { x: pos.x + 9900, y: pos.y + 950 });
+  // CALL cc,nn's own conditional push (see "x=11: CALL cc,nn" above) needs
+  // the identical treatment — a fourth OR term. Already gated by
+  // `conditionTrue` inside `CALLCC_PUSH_NOW` itself, so this widening is
+  // correct for both the taken and not-taken branches without any extra
+  // condition check here.
+  const stackWriteNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y + 970 });
+  wire(parent, stackWriteNowStage2.out, stackWriteNow.a);
+  tieToLabel('CALLCC_PUSH_NOW', stackWriteNow.b, { x: pos.x + 9950, y: pos.y + 970 });
+  tieToLabel('STACK_WRITE_NOW', stackWriteNow.out, { x: pos.x + 10100, y: pos.y + 920 }); // anchor — the far address-mux writeMux.sel below reads this via the label, not a ~9000-unit wire
+  tieToLabel('READ_NOW', readNow.out, { x: pos.x + 10100, y: pos.y + 820 }); // same anchor idea for readMux.sel
+  const stackActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 10200, y: pos.y + 950 }); // anything in x=11 currently driving SP/RAM
+  wire(parent, stackWriteNow.out, stackActive.a);
+  wire(parent, readNow.out, stackActive.b);
+
+  // busActive: the WIDE union — anything that might be driving the shared
+  // bus right now, register-operand groups or the stack family alike.
+  // Deliberately kept SEPARATE from groupActive (narrow: x=10/x=01 only) —
+  // see the doc comment above ("A bus-fight this design deliberately
+  // avoids") for why widening groupActive itself would be the actual bug.
+  const busActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 10300, y: pos.y - 25 });
+  wire(parent, groupActive.out, busActive.a);
+  wire(parent, stackActive.out, busActive.b);
+
+  const hlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 200 }); // z=6, (HL): this instruction's source operand is a memory read
+  wire(parent, groupActive.out, hlNow.a);
+  wire(parent, dec.z[6]!, hlNow.b);
+
+  // LD (HL),r: destination is (HL) (y=6) — excluding z=6 leaves the 0x76
+  // HALT slot inert rather than treating it as LD (HL),(HL); see the doc
+  // comment above.
+  const notZ6 = buildNot(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y + 350 });
+  wire(parent, dec.z[6]!, notZ6.in);
+  const ldWritesHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y + 250 });
+  wire(parent, ldGroupNow.out, ldWritesHl.a);
+  wire(parent, dec.y[6]!, ldWritesHl.b);
+  const ramWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y + 250 });
+  wire(parent, ldWritesHl.out, ramWriteNow.a);
+  wire(parent, notZ6.out, ramWriteNow.b);
+  const ramWeStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 300 });
+  wire(parent, ramWriteNow.out, ramWeStage.a);
+  wire(parent, stackWriteNow.out, ramWeStage.b);
+  // Indirect loads' own writes (see "x=00: indirect loads through
+  // (BC)/(DE)/(nn)" above): `LD (BC),A`/`LD (DE),A`/`LD (nn),A`, and
+  // `LD (nn),HL`'s own low and high bytes — five more terms, one `OR`
+  // stage each, the identical widen-not-replace shape this file uses for
+  // every group of terms sharing one gate.
+  const ramWeStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 350 });
+  wire(parent, ramWeStage.out, ramWeStage2.a);
+  tieToLabel('LDBCA_NOW', ramWeStage2.b, { x: pos.x + 9500, y: pos.y + 350 });
+  const ramWeStage3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 400 });
+  wire(parent, ramWeStage2.out, ramWeStage3.a);
+  tieToLabel('LDDEA_NOW', ramWeStage3.b, { x: pos.x + 9500, y: pos.y + 400 });
+  const ramWeStage4 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 450 });
+  wire(parent, ramWeStage3.out, ramWeStage4.a);
+  tieToLabel('LDNNA_NOW', ramWeStage4.b, { x: pos.x + 9500, y: pos.y + 450 });
+  const ramWeStage5 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 500 });
+  wire(parent, ramWeStage4.out, ramWeStage5.a);
+  tieToLabel('LDNNHL_LOW_NOW', ramWeStage5.b, { x: pos.x + 9500, y: pos.y + 500 });
+  const ramWeStage6 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 550 });
+  wire(parent, ramWeStage5.out, ramWeStage6.a);
+  tieToLabel('LDNNHL_HIGH_NOW', ramWeStage6.b, { x: pos.x + 9500, y: pos.y + 550 });
+  // INC (HL)/DEC (HL)'s own write-back and LD (HL),n's own write (see
+  // "x=00: INC (HL)/DEC (HL)/LD (HL),n" above) — two more terms.
+  const ramWeStage7 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 600 });
+  wire(parent, ramWeStage6.out, ramWeStage7.a);
+  tieToLabel('INCDEC_HLMEM_NOW', ramWeStage7.b, { x: pos.x + 9500, y: pos.y + 600 });
+  const ramWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 650 });
+  wire(parent, ramWeStage7.out, ramWe.a);
+  tieToLabel('LDHLN_WRITE_NOW', ramWe.b, { x: pos.x + 9500, y: pos.y + 650 });
+  // EX (SP),HL's own two writes (see "x=11: EX (SP),HL" below) — two more
+  // terms.
+  const ramWeStage8 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 700 });
+  wire(parent, ramWe.out, ramWeStage8.a);
+  tieToLabel('EXSPHL_WRITE_LOW_NOW', ramWeStage8.b, { x: pos.x + 9600, y: pos.y + 700 });
+  const ramWeFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y + 750 });
+  wire(parent, ramWeStage8.out, ramWeFinal.a);
+  tieToLabel('EXSPHL_WRITE_HIGH_NOW', ramWeFinal.b, { x: pos.x + 9700, y: pos.y + 750 });
+  wire(parent, ramWeFinal.out, ram.pins.we!);
+
+  // ramOe's FETCH term is deliberately gated by NOT(groupActive), not bare
+  // phase0. A ring counter's rotation passes through a transient window
+  // where the old and new phase bits both read 1 (phase0 and phase2
+  // simultaneously, mid-relaxation — an expected artifact of this
+  // zero-delay solver, not a bug); a bare `OR(phase0, hlNow)` would let
+  // RAM start driving ir.d for the *next* fetch before the 7 operand-bus
+  // tri-buf banks (gated by groupActive, one hop behind phase2's own drop)
+  // have physically released it — a real, if transient, bus fight that
+  // cascades into contention on the shared VCC/GND rails and corrupts
+  // completely unrelated nets, phase included. Deriving the exclusion
+  // straight from groupActive (rather than trusting phase0 and phase2 to
+  // settle in lockstep) ties RAM's drive to the SAME signal — and thus the
+  // SAME settling latency — every bus driver this slice has releases on, so
+  // none of them can outrace it.
+  const notBusActive = buildNot(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 350 });
+  wire(parent, busActive.out, notBusActive.in);
+  const fetchRead = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y - 300 });
+  tieToLabel('PHASE0', fetchRead.a, { x: pos.x + 9450, y: pos.y - 300 });
+  wire(parent, notBusActive.out, fetchRead.b);
+  const ramOeStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 200 });
+  wire(parent, fetchRead.out, ramOeStage.a);
+  wire(parent, hlNow.out, ramOeStage.b);
+  // LD r,n's own read (see "x=00, z=6: LD r,n" above) needs the identical
+  // treatment hlNow already gets here: OR'd straight into ramOeStage, not
+  // routed through busActive — safe for the same structural reason hlNow
+  // is: `ldImm8ReadNow` requires `isX0Group`, `hlNow` requires
+  // `groupActive` (x=10/x=01 only) — mutually exclusive by `dec.x`'s own
+  // one-hot decode, so the two can never compete for this OR gate's input
+  // in the same cycle.
+  const ramOeStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 250 });
+  wire(parent, ramOeStage.out, ramOeStage2.a);
+  tieToLabel('LDIMM8_READ_NOW', ramOeStage2.b, { x: pos.x + 9500, y: pos.y - 250 });
+  // LD dd,nn's own two reads (see "x=00, z=1: LD dd,nn" above) get the
+  // identical treatment — same reasoning as LDIMM8_READ_NOW just above.
+  const ramOeStage3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 300 });
+  wire(parent, ramOeStage2.out, ramOeStage3.a);
+  tieToLabel('LDDDNN_LOW_NOW', ramOeStage3.b, { x: pos.x + 9500, y: pos.y - 300 });
+  const ramOeStage4 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 350 });
+  wire(parent, ramOeStage3.out, ramOeStage4.a);
+  tieToLabel('LDDDNN_HIGH_NOW', ramOeStage4.b, { x: pos.x + 9500, y: pos.y - 350 });
+  // JP nn's own two reads (see "x=11: JP nn" above) get the identical
+  // treatment.
+  const ramOeStage5 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 400 });
+  wire(parent, ramOeStage4.out, ramOeStage5.a);
+  tieToLabel('JP_READ_LOW_NOW', ramOeStage5.b, { x: pos.x + 9500, y: pos.y - 400 });
+  const ramOeStage6 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 450 });
+  wire(parent, ramOeStage5.out, ramOeStage6.a);
+  tieToLabel('JP_READ_HIGH_NOW', ramOeStage6.b, { x: pos.x + 9500, y: pos.y - 450 });
+  // CALL nn's own two reads (see "x=11: CALL nn" above) get the identical
+  // treatment.
+  const ramOeStage7 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 500 });
+  wire(parent, ramOeStage6.out, ramOeStage7.a);
+  tieToLabel('CALL_READ_LOW_NOW', ramOeStage7.b, { x: pos.x + 9500, y: pos.y - 500 });
+  const ramOeStage8 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 550 });
+  wire(parent, ramOeStage7.out, ramOeStage8.a);
+  tieToLabel('CALL_READ_HIGH_NOW', ramOeStage8.b, { x: pos.x + 9500, y: pos.y - 550 });
+  // JP cc,nn's own two reads (see "x=11: JP cc,nn" above) get the
+  // identical treatment.
+  const ramOeStage9 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 600 });
+  wire(parent, ramOeStage8.out, ramOeStage9.a);
+  tieToLabel('JPCC_READ_LOW_NOW', ramOeStage9.b, { x: pos.x + 9500, y: pos.y - 600 });
+  const ramOeStage10 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 650 });
+  wire(parent, ramOeStage9.out, ramOeStage10.a);
+  tieToLabel('JPCC_READ_HIGH_NOW', ramOeStage10.b, { x: pos.x + 9500, y: pos.y - 650 });
+  // CALL cc,nn's own two reads (see "x=11: CALL cc,nn" above) get the
+  // identical treatment.
+  const ramOeStage11 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 700 });
+  wire(parent, ramOeStage10.out, ramOeStage11.a);
+  tieToLabel('CALLCC_READ_LOW_NOW', ramOeStage11.b, { x: pos.x + 9500, y: pos.y - 700 });
+  const ramOeStage12 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 750 });
+  wire(parent, ramOeStage11.out, ramOeStage12.a);
+  tieToLabel('CALLCC_READ_HIGH_NOW', ramOeStage12.b, { x: pos.x + 9500, y: pos.y - 750 });
+  // JR cc's own single read (see "x=00: JR cc,e" above) gets the identical
+  // treatment.
+  const ramOeStage13 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 800 });
+  wire(parent, ramOeStage12.out, ramOeStage13.a);
+  tieToLabel('JR_READ_NOW', ramOeStage13.b, { x: pos.x + 9500, y: pos.y - 800 });
+  // Indirect loads' own reads (see "x=00: indirect loads through
+  // (BC)/(DE)/(nn)" above): `LD A,(BC)`/`LD A,(DE)`, `nn`'s own address
+  // bytes (off PC), and — through `nn` itself — `LD HL,(nn)`'s own low
+  // and high bytes plus `LD A,(nn)`. Every one of these needs RAM's own
+  // `oe` regardless of which specific address mux override (below)
+  // actually supplies the address that phase.
+  const ramOeStage14 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 850 });
+  wire(parent, ramOeStage13.out, ramOeStage14.a);
+  tieToLabel('LDABC_NOW', ramOeStage14.b, { x: pos.x + 9500, y: pos.y - 850 });
+  const ramOeStage15 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 900 });
+  wire(parent, ramOeStage14.out, ramOeStage15.a);
+  tieToLabel('LDADE_NOW', ramOeStage15.b, { x: pos.x + 9500, y: pos.y - 900 });
+  const ramOeStage16 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 950 });
+  wire(parent, ramOeStage15.out, ramOeStage16.a);
+  tieToLabel('NN_READ_LOW_NOW', ramOeStage16.b, { x: pos.x + 9500, y: pos.y - 950 });
+  const ramOeStage17 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1000 });
+  wire(parent, ramOeStage16.out, ramOeStage17.a);
+  tieToLabel('NN_READ_HIGH_NOW', ramOeStage17.b, { x: pos.x + 9500, y: pos.y - 1000 });
+  const ramOeStage18 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1050 });
+  wire(parent, ramOeStage17.out, ramOeStage18.a);
+  tieToLabel('LDHLNN_LOW_NOW', ramOeStage18.b, { x: pos.x + 9500, y: pos.y - 1050 });
+  const ramOeStage19 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1100 });
+  wire(parent, ramOeStage18.out, ramOeStage19.a);
+  tieToLabel('LDHLNN_HIGH_NOW', ramOeStage19.b, { x: pos.x + 9500, y: pos.y - 1100 });
+  const ramOeStage20 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1150 });
+  wire(parent, ramOeStage19.out, ramOeStage20.a);
+  tieToLabel('LDANN_NOW', ramOeStage20.b, { x: pos.x + 9500, y: pos.y - 1150 });
+  // INC (HL)/DEC (HL)'s own read (see "x=00: INC (HL)/DEC (HL)/LD (HL),n"
+  // above) gets the identical treatment. `LD (HL),n`'s own read needs
+  // none here — it's z=6, already covered by `LDIMM8_READ_NOW` above,
+  // same as every other `LD r,n`.
+  const ramOeStage21 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1200 });
+  wire(parent, ramOeStage20.out, ramOeStage21.a);
+  tieToLabel('HLMEM_READ_NOW', ramOeStage21.b, { x: pos.x + 9500, y: pos.y - 1200 });
+  const ramOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9650, y: pos.y - 150 });
+  wire(parent, ramOeStage21.out, ramOe.a);
+  wire(parent, readNow.out, ramOe.b);
+  // EX (SP),HL's own two reads (see "x=11: EX (SP),HL" below) — a
+  // twenty-third widening.
+  const ramOeStage22 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 100 });
+  wire(parent, ramOe.out, ramOeStage22.a);
+  tieToLabel('EXSPHL_READ_LOW_NOW', ramOeStage22.b, { x: pos.x + 9600, y: pos.y - 100 });
+  const ramOeStage23 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 50 });
+  wire(parent, ramOeStage22.out, ramOeStage23.a);
+  tieToLabel('EXSPHL_READ_HIGH_NOW', ramOeStage23.b, { x: pos.x + 9650, y: pos.y - 50 });
+  // ALU op A,n's own immediate-byte read (see "x=11: ALU op A,n" above) —
+  // a twenty-fourth widening, PC already the default read address, no new
+  // address-mux term needed.
+  const ramOeStage24 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 25 });
+  wire(parent, ramOeStage23.out, ramOeStage24.a);
+  tieToLabel('ALUIMM8_READ_NOW', ramOeStage24.b, { x: pos.x + 9700, y: pos.y - 25 });
+  // IN A,(n)/OUT (n),A's own immediate-byte read (see "x=11: IN A,(n) /
+  // OUT (n),A" above) — a twenty-fifth widening, same "PC already the
+  // default read address" reasoning.
+  const ramOeFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9850, y: pos.y + 0 });
+  wire(parent, ramOeStage24.out, ramOeFinal.a);
+  tieToLabel('IOIMM_READ_NOW', ramOeFinal.b, { x: pos.x + 9750, y: pos.y + 0 });
+  wire(parent, ramOeFinal.out, ram.pins.oe!);
+
+  // SP's own +-1 adder: a *second* buildAlu instance (width addrBits, not
+  // 8), permanently in ADD mode, b fanned from spWantDec to every bit —
+  // see the doc comment above ("x=11: SP, PUSH/POP, RET, RST n") for why
+  // b=0/cin=1 computes SP+1, while b=all-1s (already the full two's-
+  // complement encoding of -1, needing no extra +1 on top) pairs with
+  // cin=0 to compute SP-1 — cin=1 there would silently add 1 too many,
+  // wrapping straight back to SP unchanged (found live: spAdder.out read
+  // right back as sp.q, every single decrement, until this was cin=0).
+  //
+  // spWantDec widens the original STACK_WRITE_NOW-only direction (x=11's
+  // PUSH/RST) with DEC_SP_NOW (x=00 z=3 y=7's explicit DEC SP, see "x=00,
+  // z=3" above) — an OR, so with DEC_SP_NOW=0 (every x=11 case, and every
+  // x=00 case except DEC SP itself) this is exactly the original signal,
+  // unchanged. The two can never both be 1 at once regardless: `dec.x`
+  // one-hot decodes a single opcode's x value, so x=00 (DEC SP) and x=11
+  // (PUSH/RST) are mutually exclusive by construction, not by this OR
+  // happening to work out.
+  const spAdder = buildAlu(parent, library, addrBits, { x: pos.x + 8400, y: pos.y + 3000 });
+  const spWantDec = buildOr(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 2900 });
+  tieToLabel('STACK_WRITE_NOW', spWantDec.a, { x: pos.x + 8200, y: pos.y + 2900 });
+  tieToLabel('DEC_SP_NOW', spWantDec.b, { x: pos.x + 8200, y: pos.y + 2930 });
+  const notSpWantDec = buildNot(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 2950 });
+  wire(parent, spWantDec.out, notSpWantDec.in);
+  wire(parent, notSpWantDec.out, spAdder.cin);
+  wire(parent, gnd4, spAdder.op0);
+  wire(parent, gnd4, spAdder.op1);
+  sp.q.forEach((q, i) => {
+    wire(parent, q, spAdder.a[i]!);
+    tieToLabel(`SP_Q${i}`, q, { x: pos.x + 7900, y: pos.y + 3000 + i * 20 }); // anchor — the far address-mux write/readMux below read this via the label
+  });
+  spAdder.b.forEach((b, i) => wire(parent, spWantDec.out, b)); // local now — spWantDec sits right next to spAdder, no label needed for this hop
+
+  // RAM's address bus: PC, except when this instruction reads/writes (HL)
+  // (hlNow / ramWriteNow, x=10/x=01, unchanged) or the stack itself — and
+  // both the write side (stackWriteNow) and the read side (readNow)
+  // address with bare `sp.q`, no adder, deliberately.
+  //
+  // That's only correct because of a real, subtle asymmetry this solver
+  // has between its one behavioral component and everything built from
+  // real transistors. RAM (the deliberate non-transistor exception — see
+  // "Real RAM") commits its write "once per tick," using the address as it
+  // reads at full settlement — by which point `sp.q` *already* reflects
+  // its post-this-edge value (SP's own capture has nothing forcing it to
+  // wait), so bare `sp.q` at settle time already equals the write target.
+  // An ordinary register's capture (`buildRegisterBit`/`buildDFlipFlop`,
+  // real master-slave latches) works the opposite way: "the master closes
+  // first, freezing at the D value it *last saw*" while CLK was still low
+  // — i.e., whatever was stable *before* this edge started, not whatever
+  // the rest of the circuit eventually settles to *during* it. So when a
+  // register captures a byte read *through* `sp.q` (POP/RET, via RAM's
+  // read forcing `ir.d`), it sees `sp.q` as it stood right before this
+  // edge — the *old*, not-yet-incremented value, exactly what a read
+  // needs. Two structurally different components, asked for two different
+  // things (the new address for a write, the old one for a read), and
+  // bare `sp.q` happens to be correct for both — not a coincidence so much
+  // as the reason RAM is the one deliberate behavioral exception in this
+  // whole codebase (see "Real RAM"): a real transistor-level register
+  // literally cannot supply "the settled value from a still-in-progress
+  // edge" the way RAM's edge-triggered write can, because nothing about
+  // its own topology waits for anything else to finish.
+  //
+  // The debugging path here went through two wrong turns before this,
+  // worth recording since they're easy to reach for again: (1) a
+  // dedicated "sp.q - 1" adder for reads, reasoning from what a *settled*
+  // snapshot of the whole circuit showed after the edge — which is exactly
+  // the wrong reference point for what a real flip-flop actually captures;
+  // (2) suspecting insufficient relaxation depth (retried at 2000
+  // iterations, no change) — ruled out because the actual mechanism is
+  // structural (which value a master latch freezes on), not a matter of
+  // giving the solver more passes to converge.
+  const addrIsHlStage = buildOr(parent, vcc, gnd, { x: pos.x + 550, y: pos.y - 400 });
+  wire(parent, hlNow.out, addrIsHlStage.a);
+  wire(parent, ramWriteNow.out, addrIsHlStage.b);
+  // INC (HL)/DEC (HL) (see "x=00: INC (HL)/DEC (HL)/LD (HL),n" above):
+  // `HLMEM_READ_NOW` (`PHASE2`) and `INCDEC_HLMEM_NOW` (`PHASE3`)
+  // specifically — NOT the unconditional `IS_INCDEC_HLMEM` this used to
+  // read. Found live: `IS_INCDEC_HLMEM` stays high for the whole
+  // instruction, `dec.y`/`dec.z` included, which are themselves derived
+  // from `ir.q` — and `ir.q` doesn't actually update to the *next*
+  // opcode until the very same tick `FETCH`'s own read commits. During
+  // that shared tick, this instruction's own decode (still reading the
+  // *old*, pre-update `ir.q`) was still asserting `IS_INCDEC_HLMEM`,
+  // forcing RAM's address to stay `HL` at the exact moment `FETCH`
+  // needed it to be `PC` — the fetch silently read `RAM[HL]` instead of
+  // the real next opcode, corrupting `ir` itself. `hlNow`'s own existing
+  // x=10/x=01 case never had this problem because it was already
+  // `PHASE2`-scoped from the start (folded into `groupActive`, itself
+  // `PHASE2`-gated) — this fix just gives `(HL)`'s own RMW the identical
+  // discipline: force the address only during the phases that actually
+  // touch RAM, not for the instruction's entire lifetime.
+  const addrIsHlStage2 = buildOr(parent, vcc, gnd, { x: pos.x + 600, y: pos.y - 420 });
+  wire(parent, addrIsHlStage.out, addrIsHlStage2.a);
+  tieToLabel('HLMEM_READ_NOW', addrIsHlStage2.b, { x: pos.x + 500, y: pos.y - 420 });
+  const addrIsHlStage3 = buildOr(parent, vcc, gnd, { x: pos.x + 620, y: pos.y - 430 });
+  wire(parent, addrIsHlStage2.out, addrIsHlStage3.a);
+  tieToLabel('INCDEC_HLMEM_NOW', addrIsHlStage3.b, { x: pos.x + 520, y: pos.y - 430 });
+  // `LD (HL),n`'s own write (see "x=00: INC (HL)/DEC (HL)/LD (HL),n"
+  // above) needs `HL` only while it's actually writing (`PHASE4`) — its
+  // own read phase (`PHASE2`) still needs `PC`, to read the immediate
+  // byte itself.
+  const addrIsHl = buildOr(parent, vcc, gnd, { x: pos.x + 650, y: pos.y - 440 });
+  wire(parent, addrIsHlStage3.out, addrIsHl.a);
+  tieToLabel('LDHLN_WRITE_NOW', addrIsHl.b, { x: pos.x + 550, y: pos.y - 440 });
+  ramAddrPins(ram).forEach((p, i) => {
+    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
+    wire(parent, addrIsHl.out, mux.pins[muxDef.ports[0]!]!);
+    wire(parent, pc.q[i]!, mux.pins[muxDef.ports[1]!]!);
+    wire(parent, rL.q[i]!, mux.pins[muxDef.ports[2]!]!);
+
+    const writeMux = makeChipInstance(parent, muxDef, { x: pos.x + 900, y: pos.y - 300 - i * 100 });
+    tieToLabel('STACK_WRITE_NOW', writeMux.pins[muxDef.ports[0]!]!, { x: pos.x + 800, y: pos.y - 320 - i * 100 });
+    wire(parent, mux.pins[muxDef.ports[3]!]!, writeMux.pins[muxDef.ports[1]!]!);
+    tieToLabel(`SP_Q${i}`, writeMux.pins[muxDef.ports[2]!]!, { x: pos.x + 800, y: pos.y - 280 - i * 100 });
+
+    const readMux = makeChipInstance(parent, muxDef, { x: pos.x + 1100, y: pos.y - 300 - i * 100 });
+    tieToLabel('READ_NOW', readMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1000, y: pos.y - 320 - i * 100 });
+    wire(parent, writeMux.pins[muxDef.ports[3]!]!, readMux.pins[muxDef.ports[1]!]!);
+    tieToLabel(`SP_Q${i}`, readMux.pins[muxDef.ports[2]!]!, { x: pos.x + 1000, y: pos.y - 280 - i * 100 });
+
+    // Indirect loads' own four address sources (see "x=00: indirect loads
+    // through (BC)/(DE)/(nn)" above) — four more override layers, the
+    // identical shape `writeMux`/`readMux` above already established:
+    // `BC`/`DE` for the register-indirect opcodes (`rC.q`/`rE.q` — this
+    // simulator's own "only the low byte matters" convention `HL`'s own
+    // addressing above already relies on), then `nnAddr` and
+    // `nnAddr + 1` for the absolute-indirect ones.
+    const bcMux = makeChipInstance(parent, muxDef, { x: pos.x + 1300, y: pos.y - 300 - i * 100 });
+    tieToLabel('LDBC_ADDR_NOW', bcMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1200, y: pos.y - 320 - i * 100 });
+    wire(parent, readMux.pins[muxDef.ports[3]!]!, bcMux.pins[muxDef.ports[1]!]!);
+    wire(parent, rC.q[i]!, bcMux.pins[muxDef.ports[2]!]!);
+
+    const deMux = makeChipInstance(parent, muxDef, { x: pos.x + 1500, y: pos.y - 300 - i * 100 });
+    tieToLabel('LDDE_ADDR_NOW', deMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1400, y: pos.y - 320 - i * 100 });
+    wire(parent, bcMux.pins[muxDef.ports[3]!]!, deMux.pins[muxDef.ports[1]!]!);
+    wire(parent, rE.q[i]!, deMux.pins[muxDef.ports[2]!]!);
+
+    const nnLowMux = makeChipInstance(parent, muxDef, { x: pos.x + 1700, y: pos.y - 300 - i * 100 });
+    tieToLabel('NN_DATA_ADDR_NOW', nnLowMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1600, y: pos.y - 320 - i * 100 });
+    wire(parent, deMux.pins[muxDef.ports[3]!]!, nnLowMux.pins[muxDef.ports[1]!]!);
+    wire(parent, nnAddr.q[i]!, nnLowMux.pins[muxDef.ports[2]!]!);
+
+    const nnHighMux = makeChipInstance(parent, muxDef, { x: pos.x + 1900, y: pos.y - 300 - i * 100 });
+    tieToLabel('NN_DATA_ADDR_PLUS_ONE_NOW', nnHighMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1800, y: pos.y - 320 - i * 100 });
+    wire(parent, nnLowMux.pins[muxDef.ports[3]!]!, nnHighMux.pins[muxDef.ports[1]!]!);
+    wire(parent, nnAddrPlusOne.out[i]!, nnHighMux.pins[muxDef.ports[2]!]!);
+
+    // EX (SP),HL (see "x=11: EX (SP),HL" below) — two more override layers,
+    // the identical shape every earlier address source above already
+    // established: `SP` itself during its own low-byte read/write phases
+    // (reusing the already-published `SP_Q{i}` label PUSH/POP's own
+    // `writeMux`/`readMux` above already read), `SP + 1` during its own
+    // high-byte phases (a *dedicated* adder, `exSpHlPlusOne` below — not
+    // `spAdder`, which this opcode never actually commits into `SP`
+    // itself, only taps for an address).
+    const exSpHlLowMux = makeChipInstance(parent, muxDef, { x: pos.x + 2100, y: pos.y - 300 - i * 100 });
+    tieToLabel('EXSPHL_LOW_ADDR_NOW', exSpHlLowMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2000, y: pos.y - 320 - i * 100 });
+    wire(parent, nnHighMux.pins[muxDef.ports[3]!]!, exSpHlLowMux.pins[muxDef.ports[1]!]!);
+    tieToLabel(`SP_Q${i}`, exSpHlLowMux.pins[muxDef.ports[2]!]!, { x: pos.x + 2000, y: pos.y - 280 - i * 100 });
+
+    const exSpHlHighMux = makeChipInstance(parent, muxDef, { x: pos.x + 2300, y: pos.y - 300 - i * 100 });
+    tieToLabel('EXSPHL_HIGH_ADDR_NOW', exSpHlHighMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2200, y: pos.y - 320 - i * 100 });
+    wire(parent, exSpHlLowMux.pins[muxDef.ports[3]!]!, exSpHlHighMux.pins[muxDef.ports[1]!]!);
+    tieToLabel(`SPPLUS1_${i}`, exSpHlHighMux.pins[muxDef.ports[2]!]!, { x: pos.x + 2200, y: pos.y - 280 - i * 100 });
+
+    wire(parent, exSpHlHighMux.pins[muxDef.ports[3]!]!, p);
+  });
+
+  // PC holds during FETCH/EXEC1/EXEC2 by default, advances only during
+  // INCREMENT, and gets overridden for RET (pop the return address off the
+  // stack) or RST (jump to a fixed target after pushing one) — see the doc
+  // comment above ("x=11: SP, PUSH/POP, RET, RST n"). `LD r,n`'s own
+  // LDIMM8_ADVANCE_NOW (see "x=00, z=6: LD r,n" above) widens *when* PC
+  // advances rather than overriding *what it loads* the way RET/RST do
+  // below — an OR into the hold condition, not a new mux input — since
+  // this is a second, later increment past the immediate byte, not a jump
+  // to a computed target. With LDIMM8_ADVANCE_NOW=0 (every instruction
+  // except `LD r,n`, always, since it's PHASE3-gated and no other group
+  // uses that phase for this purpose) this is exactly the original
+  // PHASE1-only condition, unchanged.
+  const pcHold = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 250 });
+  tieToLabel('PHASE1', pcHold.a, { x: pos.x - 400, y: pos.y - 250 });
+  tieToLabel('LDIMM8_ADVANCE_NOW', pcHold.b, { x: pos.x - 400, y: pos.y - 220 });
+  // LD dd,nn (see "x=00, z=1: LD dd,nn" above) needs PC to advance a
+  // *third* and *fourth* time in one instruction — past the low immediate
+  // byte, then past the high one — same OR-widening shape LDIMM8_ADVANCE_NOW
+  // just established, twice more.
+  const pcHoldStage2 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 300 });
+  wire(parent, pcHold.out, pcHoldStage2.a);
+  tieToLabel('LDDDNN_LOW_ADVANCE_NOW', pcHoldStage2.b, { x: pos.x - 400, y: pos.y - 300 });
+  const pcHoldStage3 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 350 });
+  wire(parent, pcHoldStage2.out, pcHoldStage3.a);
+  tieToLabel('LDDDNN_HIGH_ADVANCE_NOW', pcHoldStage3.b, { x: pos.x - 400, y: pos.y - 350 });
+  // JP nn's own PHASE3 advance (see "x=11: JP nn" above) — deliberately
+  // NOT joined by a PHASE5 term the way LD dd,nn's own high-byte advance
+  // is: JP nn's PHASE5 overwrites PC with the jump target (via `jpMux`
+  // below) instead of advancing it, so PHASE5 must stay OUT of `pcHold`
+  // for this instruction, unlike LD dd,nn's.
+  const pcHoldStage4 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 400 });
+  wire(parent, pcHoldStage3.out, pcHoldStage4.a);
+  tieToLabel('JP_ADVANCE_NOW', pcHoldStage4.b, { x: pos.x - 400, y: pos.y - 400 });
+  // CALL nn's own two advances (see "x=11: CALL nn" above) — PHASE6
+  // (`CALL_PUSH_NOW`) and PHASE7 (`CALL_JUMP_NOW`) deliberately stay OUT
+  // of this chain, the identical reasoning JP nn's own PHASE5 exclusion
+  // already established: PHASE7 overwrites PC via `callMux` instead of
+  // advancing it, and PHASE6 doesn't touch PC at all (it writes RAM at
+  // `SP`, not PC).
+  const pcHoldStage5 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 450 });
+  wire(parent, pcHoldStage4.out, pcHoldStage5.a);
+  tieToLabel('CALL_ADVANCE_LOW_NOW', pcHoldStage5.b, { x: pos.x - 400, y: pos.y - 450 });
+  const pcHoldStage6 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 500 });
+  wire(parent, pcHoldStage5.out, pcHoldStage6.a);
+  tieToLabel('CALL_ADVANCE_HIGH_NOW', pcHoldStage6.b, { x: pos.x - 400, y: pos.y - 500 });
+  // JP cc,nn's own PHASE3 advance (unconditional — both branches need it)
+  // and its own PHASE5 *fall-through* advance (see "x=11: JP cc,nn"
+  // above) — `JPCC_JUMP_NOW` (the condition-true branch, same PHASE5)
+  // deliberately stays OUT of this chain, identical to `JP nn`'s own
+  // PHASE5 exclusion: that branch overwrites `PC` via `jpCcMux` instead.
+  const pcHoldStage7 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 550 });
+  wire(parent, pcHoldStage6.out, pcHoldStage7.a);
+  tieToLabel('JPCC_ADVANCE_LOW_NOW', pcHoldStage7.b, { x: pos.x - 400, y: pos.y - 550 });
+  const pcHoldStage8 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 600 });
+  wire(parent, pcHoldStage7.out, pcHoldStage8.a);
+  tieToLabel('JPCC_FALLTHROUGH_NOW', pcHoldStage8.b, { x: pos.x - 400, y: pos.y - 600 });
+  // CALL cc,nn's own two advances (see "x=11: CALL cc,nn" above) — both
+  // unconditional, exactly like CALL nn's own PHASE3/PHASE5 advances:
+  // PC must end up past this instruction's own 3 bytes whether the call
+  // fires or not, since that address is either the fall-through target or
+  // the very return address about to be pushed. `CALLCC_PUSH_NOW`
+  // (PHASE6) and `CALLCC_JUMP_NOW` (PHASE7) stay OUT of this chain, the
+  // identical reasoning `CALL nn`'s own PHASE6/PHASE7 exclusion already
+  // established.
+  const pcHoldStage9 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 650 });
+  wire(parent, pcHoldStage8.out, pcHoldStage9.a);
+  tieToLabel('CALLCC_ADVANCE_LOW_NOW', pcHoldStage9.b, { x: pos.x - 400, y: pos.y - 650 });
+  const pcHoldStage10 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 700 });
+  wire(parent, pcHoldStage9.out, pcHoldStage10.a);
+  tieToLabel('CALLCC_ADVANCE_HIGH_NOW', pcHoldStage10.b, { x: pos.x - 400, y: pos.y - 700 });
+  // JR cc's own single advance (see "x=00: JR cc,e" above) — unconditional,
+  // the identical "both branches need PC past this instruction's own
+  // bytes" reasoning `CALL cc,nn`'s own advances used, just one term
+  // instead of two since this opcode only has one operand byte.
+  // `JR_JUMP_NOW` (`PHASE4`) stays out of this chain, the same exclusion
+  // every other conditional jump/call in this file already established.
+  const pcHoldStage11 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 750 });
+  wire(parent, pcHoldStage10.out, pcHoldStage11.a);
+  tieToLabel('JR_ADVANCE_NOW', pcHoldStage11.b, { x: pos.x - 400, y: pos.y - 750 });
+  // The indirect-load group's own two advances (see "x=00: indirect loads
+  // through (BC)/(DE)/(nn)" above) — both unconditional, `LD dd,nn`'s own
+  // 4-phase shape. `y=0..3`'s own single-byte opcodes need no widening at
+  // all here (PHASE1's own default increment already covers them);
+  // `PHASE6`/`PHASE7`'s own commits never touch PC either way, so neither
+  // needs excluding the way a jump's own commit phase would.
+  const pcHoldStage12 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 800 });
+  wire(parent, pcHoldStage11.out, pcHoldStage12.a);
+  tieToLabel('NN_ADVANCE_LOW_NOW', pcHoldStage12.b, { x: pos.x - 400, y: pos.y - 800 });
+  const pcHoldStage13 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 850 });
+  wire(parent, pcHoldStage12.out, pcHoldStage13.a);
+  tieToLabel('NN_ADVANCE_HIGH_NOW', pcHoldStage13.b, { x: pos.x - 400, y: pos.y - 850 });
+  // ALU op A,n's own second advance, past its own immediate byte (see
+  // "x=11: ALU op A,n" above) — the identical shape LDIMM8_ADVANCE_NOW
+  // already established for LD r,n's own immediate byte.
+  const pcHoldStage14 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 900 });
+  wire(parent, pcHoldStage13.out, pcHoldStage14.a);
+  tieToLabel('ALUIMM8_ADVANCE_NOW', pcHoldStage14.b, { x: pos.x - 400, y: pos.y - 900 });
+  // IN A,(n)/OUT (n),A's own second advance, past their own immediate byte
+  // (see "x=11: IN A,(n) / OUT (n),A" above).
+  const pcHoldStage15 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 950 });
+  wire(parent, pcHoldStage14.out, pcHoldStage15.a);
+  tieToLabel('IOIMM_ADVANCE_NOW', pcHoldStage15.b, { x: pos.x - 400, y: pos.y - 950 });
+  const notPhase1 = buildNot(parent, vcc, gnd, { x: pos.x - 200, y: pos.y - 200 });
+  wire(parent, pcHoldStage15.out, notPhase1.in);
+  wire(parent, notPhase1.out, pc.load);
+
+  // JP nn's own target: a dedicated `addrBits`-wide holding register, not
+  // a third write-back layer on `PC` itself the way `SP` got one for `LD
+  // SP,nn` — `PC` (unlike `SP`) is *also* the read address for both of
+  // JP nn's own operand-byte reads, so writing partial jump-target bits
+  // straight into it mid-instruction would corrupt the very address the
+  // *next* read needs. `jpTarget` uses the identical per-bit "hold vs
+  // fresh, self-loop the untouched half" mux shape `SP`'s own `LD SP,nn`
+  // write-back already established (see "x=00, z=1: LD dd,nn" above) —
+  // simpler here, since nothing else ever seeds `jpTarget`, so it needs
+  // no outer "external seed vs fresh" layer, just the low/high split.
+  const jpTarget = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 1800 });
+  const jpTargetWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 2100 });
+  tieToLabel('JP_READ_LOW_NOW', jpTargetWe.a, { x: pos.x - 800, y: pos.y - 2100 });
+  tieToLabel('JP_READ_HIGH_NOW', jpTargetWe.b, { x: pos.x - 800, y: pos.y - 2070 });
+  wire(parent, jpTargetWe.out, jpTarget.we);
+  jpTarget.q.forEach((q, i) => {
+    const freshMux = makeChipInstance(parent, muxDef, { x: pos.x - 700, y: pos.y - 1900 - i * 100 });
+    if (i < 8) {
+      tieToLabel('JP_READ_HIGH_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 1900 - i * 100 }); // sel=1 (high phase): hold
+      tieToLabel(`BUS${i}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 1880 - i * 100 }); // in0 (low phase): the fresh low byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (high phase): hold — self-loop
+    } else {
+      tieToLabel('JP_READ_LOW_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 1900 - i * 100 }); // sel=1 (low phase): hold
+      tieToLabel(`BUS${i - 8}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 1880 - i * 100 }); // in0 (high phase): the fresh high byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (low phase): hold — self-loop
+    }
+    wire(parent, freshMux.pins[muxDef.ports[3]!]!, jpTarget.d[i]!);
+  });
+
+  // CALL nn's own target (see "x=11: CALL nn" above): a *separate*
+  // dedicated register from `jpTarget`, not a widened, shared one — `JP
+  // nn` and `CALL nn` are mutually exclusive by `dec.z` (`z=3` vs `z=5`),
+  // so sharing would have been electrically safe, but building a second
+  // register instead means this addition touches zero already-proven `JP
+  // nn` wiring, consistent with this file's own established preference
+  // (separate `spAdder`-style adders over one shared, muxed one) wherever
+  // the two costs trade off. Identical per-bit "hold vs fresh" shape.
+  const callTarget = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 2700 });
+  const callTargetWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 3000 });
+  tieToLabel('CALL_READ_LOW_NOW', callTargetWe.a, { x: pos.x - 800, y: pos.y - 3000 });
+  tieToLabel('CALL_READ_HIGH_NOW', callTargetWe.b, { x: pos.x - 800, y: pos.y - 2970 });
+  wire(parent, callTargetWe.out, callTarget.we);
+  callTarget.q.forEach((q, i) => {
+    const freshMux = makeChipInstance(parent, muxDef, { x: pos.x - 700, y: pos.y - 2800 - i * 100 });
+    if (i < 8) {
+      tieToLabel('CALL_READ_HIGH_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 2800 - i * 100 }); // sel=1 (high phase): hold
+      tieToLabel(`BUS${i}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 2780 - i * 100 }); // in0 (low phase): the fresh low byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (high phase): hold — self-loop
+    } else {
+      tieToLabel('CALL_READ_LOW_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 2800 - i * 100 }); // sel=1 (low phase): hold
+      tieToLabel(`BUS${i - 8}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 2780 - i * 100 }); // in0 (high phase): the fresh high byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (low phase): hold — self-loop
+    }
+    wire(parent, freshMux.pins[muxDef.ports[3]!]!, callTarget.d[i]!);
+  });
+
+  // JP cc,nn's own target (see "x=11: JP cc,nn" above) — a *third*
+  // separate holding register, same shape as `jpTarget`/`callTarget`.
+  const jpCcTarget = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 3700 });
+  const jpCcTargetWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 4000 });
+  tieToLabel('JPCC_READ_LOW_NOW', jpCcTargetWe.a, { x: pos.x - 800, y: pos.y - 4000 });
+  tieToLabel('JPCC_READ_HIGH_NOW', jpCcTargetWe.b, { x: pos.x - 800, y: pos.y - 3970 });
+  wire(parent, jpCcTargetWe.out, jpCcTarget.we);
+  jpCcTarget.q.forEach((q, i) => {
+    const freshMux = makeChipInstance(parent, muxDef, { x: pos.x - 700, y: pos.y - 3800 - i * 100 });
+    if (i < 8) {
+      tieToLabel('JPCC_READ_HIGH_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 3800 - i * 100 }); // sel=1 (high phase): hold
+      tieToLabel(`BUS${i}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 3780 - i * 100 }); // in0 (low phase): the fresh low byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (high phase): hold — self-loop
+    } else {
+      tieToLabel('JPCC_READ_LOW_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 3800 - i * 100 }); // sel=1 (low phase): hold
+      tieToLabel(`BUS${i - 8}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 3780 - i * 100 }); // in0 (high phase): the fresh high byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (low phase): hold — self-loop
+    }
+    wire(parent, freshMux.pins[muxDef.ports[3]!]!, jpCcTarget.d[i]!);
+  });
+
+  // CALL cc,nn's own target (see "x=11: CALL cc,nn" above) — a *fourth*
+  // separate holding register, same shape as `jpTarget`/`callTarget`/
+  // `jpCcTarget`.
+  const callCcTarget = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 4600 });
+  const callCcTargetWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 4900 });
+  tieToLabel('CALLCC_READ_LOW_NOW', callCcTargetWe.a, { x: pos.x - 800, y: pos.y - 4900 });
+  tieToLabel('CALLCC_READ_HIGH_NOW', callCcTargetWe.b, { x: pos.x - 800, y: pos.y - 4870 });
+  wire(parent, callCcTargetWe.out, callCcTarget.we);
+  callCcTarget.q.forEach((q, i) => {
+    const freshMux = makeChipInstance(parent, muxDef, { x: pos.x - 700, y: pos.y - 4700 - i * 100 });
+    if (i < 8) {
+      tieToLabel('CALLCC_READ_HIGH_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 4700 - i * 100 }); // sel=1 (high phase): hold
+      tieToLabel(`BUS${i}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 4680 - i * 100 }); // in0 (low phase): the fresh low byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (high phase): hold — self-loop
+    } else {
+      tieToLabel('CALLCC_READ_LOW_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x - 800, y: pos.y - 4700 - i * 100 }); // sel=1 (low phase): hold
+      tieToLabel(`BUS${i - 8}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x - 800, y: pos.y - 4680 - i * 100 }); // in0 (high phase): the fresh high byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (low phase): hold — self-loop
+    }
+    wire(parent, freshMux.pins[muxDef.ports[3]!]!, callCcTarget.d[i]!);
+  });
+
+  pc.q.forEach((q, i) => {
+    const retMux = makeChipInstance(parent, muxDef, { x: pos.x - 400, y: pos.y - 300 - i * 100 });
+    wire(parent, retNow.out, retMux.pins[muxDef.ports[0]!]!); // phase-restricted (EXEC1 only) — see popReadNow/retNow above
+    wire(parent, q, retMux.pins[muxDef.ports[1]!]!); // in0: hold (default — self-loop)
+    tieToLabel(`BUS${i}`, retMux.pins[muxDef.ports[2]!]!, { x: pos.x - 500, y: pos.y - 300 - i * 100 }); // in1: RET's popped byte (the bus)
+
+    const rstMux = makeChipInstance(parent, muxDef, { x: pos.x - 200, y: pos.y - 300 - i * 100 });
+    wire(parent, rstJumpNow.out, rstMux.pins[muxDef.ports[0]!]!); // EXEC2, not EXEC1 — see rstNow/rstJumpNow above
+    wire(parent, retMux.pins[muxDef.ports[3]!]!, rstMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET, from above
+    // in1: RST's fixed target = y*8 — bits 0-2 are always 0, bits 3-5 are y's
+    // own 3 bits, anything past that is 0 too. `dec.y` is the WRONG source
+    // here despite the name — those are 8 one-hot "y==k" DECODE lines, not
+    // y's own binary bits; the real bits are the opcode byte's own bits
+    // 3-5 (`ir.q[3..5]`, y's field per the xxyyyzzz layout), read straight
+    // off IR. Found live: using dec.y[i-3] made RST silently target address
+    // 0 for every single RST n (since no bit of a one-hot "y==k" line ever
+    // reconstructs y's own value), overwriting PC with the wrong thing on
+    // every attempt and no other symptom until IR itself was traced next.
+    if (i < 3 || i >= 6) wire(parent, gnd, rstMux.pins[muxDef.ports[2]!]!);
+    else tieToLabel(`IRQ${i}`, rstMux.pins[muxDef.ports[2]!]!, { x: pos.x - 300, y: pos.y - 300 - i * 100 });
+
+    // JP nn's own jump: a third mux layer, taking the hold-or-RET-or-RST
+    // chain above as its own default — see "x=11: JP nn" above for why
+    // this fires on PHASE5 specifically, and why `pcHold` deliberately
+    // excludes that phase for this one instruction.
+    const jpMux = makeChipInstance(parent, muxDef, { x: pos.x - 100, y: pos.y - 300 - i * 100 });
+    tieToLabel('JP_JUMP_NOW', jpMux.pins[muxDef.ports[0]!]!, { x: pos.x - 150, y: pos.y - 300 - i * 100 });
+    wire(parent, rstMux.pins[muxDef.ports[3]!]!, jpMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST, from above
+    wire(parent, jpTarget.q[i]!, jpMux.pins[muxDef.ports[2]!]!); // in1: JP nn's own freshly-read target
+
+    // CALL nn's own jump: a fourth mux layer, taking hold-or-RET-or-RST-
+    // or-JP above as its own default — see "x=11: CALL nn" above for why
+    // this fires on PHASE7, after the return address has already been
+    // pushed on PHASE6.
+    const callMux = makeChipInstance(parent, muxDef, { x: pos.x + 0, y: pos.y - 300 - i * 100 });
+    tieToLabel('CALL_JUMP_NOW', callMux.pins[muxDef.ports[0]!]!, { x: pos.x - 50, y: pos.y - 300 - i * 100 });
+    wire(parent, jpMux.pins[muxDef.ports[3]!]!, callMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP, from above
+    wire(parent, callTarget.q[i]!, callMux.pins[muxDef.ports[2]!]!); // in1: CALL nn's own freshly-read target
+
+    // JP cc,nn's own jump: a fifth mux layer, taking everything above as
+    // its own default — see "x=11: JP cc,nn" above for why this only
+    // fires on PHASE5 when the tested condition actually holds.
+    const jpCcMux = makeChipInstance(parent, muxDef, { x: pos.x + 100, y: pos.y - 300 - i * 100 });
+    tieToLabel('JPCC_JUMP_NOW', jpCcMux.pins[muxDef.ports[0]!]!, { x: pos.x + 50, y: pos.y - 300 - i * 100 });
+    wire(parent, callMux.pins[muxDef.ports[3]!]!, jpCcMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP-or-CALL, from above
+    wire(parent, jpCcTarget.q[i]!, jpCcMux.pins[muxDef.ports[2]!]!); // in1: JP cc,nn's own freshly-read target
+
+    // CALL cc,nn's own jump: a sixth mux layer, taking everything above as
+    // its own default — see "x=11: CALL cc,nn" above for why this only
+    // fires on PHASE7 when the tested condition actually holds, mirroring
+    // JP cc,nn's own jpCcMux exactly.
+    const callCcMux = makeChipInstance(parent, muxDef, { x: pos.x + 200, y: pos.y - 300 - i * 100 });
+    tieToLabel('CALLCC_JUMP_NOW', callCcMux.pins[muxDef.ports[0]!]!, { x: pos.x + 150, y: pos.y - 300 - i * 100 });
+    wire(parent, jpCcMux.pins[muxDef.ports[3]!]!, callCcMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP-or-CALL-or-JPCC, from above
+    wire(parent, callCcTarget.q[i]!, callCcMux.pins[muxDef.ports[2]!]!); // in1: CALL cc,nn's own freshly-read target
+
+    // RET cc's own jump: a seventh mux layer, taking everything above as
+    // its own default — see "x=11: RET cc" above for why this fires on
+    // PHASE2 when the tested condition holds, and why its in1 is the raw
+    // BUS (the popped byte) rather than a dedicated target register, the
+    // same shape `retMux` itself already established above.
+    const retCcMux = makeChipInstance(parent, muxDef, { x: pos.x + 300, y: pos.y - 300 - i * 100 });
+    tieToLabel('RETCC_TAKEN_NOW', retCcMux.pins[muxDef.ports[0]!]!, { x: pos.x + 250, y: pos.y - 300 - i * 100 });
+    wire(parent, callCcMux.pins[muxDef.ports[3]!]!, retCcMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP-or-CALL-or-JPCC-or-CALLCC, from above
+    tieToLabel(`BUS${i}`, retCcMux.pins[muxDef.ports[2]!]!, { x: pos.x + 250, y: pos.y - 280 - i * 100 }); // in1: RET cc's own popped byte (the bus)
+
+    // Any JR-family opcode's own jump: an eighth mux layer, taking
+    // everything above as its own default — see "x=00: JR cc,e" above for
+    // why this fires on PHASE4 (not PHASE5, since this opcode has one
+    // fewer operand byte than JP cc,nn) and why its in1 is a live adder
+    // output, not a target register's own q. `JR_JUMP_NOW` covers `JR
+    // cc,e`, plain `JR`, and `DJNZ` alike (mutually exclusive by `dec.y`),
+    // so one mux layer serves all three.
+    const jrMux = makeChipInstance(parent, muxDef, { x: pos.x + 400, y: pos.y - 300 - i * 100 });
+    tieToLabel('JR_JUMP_NOW', jrMux.pins[muxDef.ports[0]!]!, { x: pos.x + 350, y: pos.y - 300 - i * 100 });
+    wire(parent, retCcMux.pins[muxDef.ports[3]!]!, jrMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP-or-CALL-or-JPCC-or-CALLCC-or-RETCC, from above
+    wire(parent, jrOffsetAdder.out[i]!, jrMux.pins[muxDef.ports[2]!]!); // in1: PC + sign-extended displacement, live off pc.q
+
+    // JP (HL) (x=11, z=1, y=5 — see "x=11: JP (HL)" above): a ninth mux
+    // layer, `in1` wired straight to `HL`'s own current bits — no RAM
+    // read, no dedicated target register, since the target is already
+    // sitting in a register this file already has. `addrBits` may be
+    // narrower than 16 (every test in this file uses 7): bits 0..7 come
+    // from `L`, any bit at 8 or above (real 16-bit hardware only) comes
+    // from `H`.
+    const jpHlMux = makeChipInstance(parent, muxDef, { x: pos.x + 450, y: pos.y - 300 - i * 100 });
+    tieToLabel('JPHL_NOW', jpHlMux.pins[muxDef.ports[0]!]!, { x: pos.x + 400, y: pos.y - 300 - i * 100 });
+    wire(parent, jrMux.pins[muxDef.ports[3]!]!, jpHlMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
+    wire(parent, i < 8 ? rL.q[i]! : (rH.q[i - 8] ?? gnd), jpHlMux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
+    wire(parent, jpHlMux.pins[muxDef.ports[3]!]!, pc.d[i]!);
+  });
+
+  // Operand bus: shares ir.d/ram.data with FETCH (mutually exclusive by
+  // phase). RAM already drives it for z=6 (wired above); every other
+  // source gets its own buildTriStateBuffer bank, enabled by
+  // AND(groupActive, that source's own z line) — a source read is a source
+  // read whether it's about to be ALU'd (x=10) or just moved (x=01).
+  // groupActive stays narrow here on purpose (x=10/x=01 only) — see the
+  // doc comment above ("A bus-fight this design deliberately avoids").
+  const sources: { name: string; z: Pin }[] = [
+    { name: 'REGB', z: dec.z[0]! },
+    { name: 'REGC', z: dec.z[1]! },
+    { name: 'REGD', z: dec.z[2]! },
+    { name: 'REGE', z: dec.z[3]! },
+    { name: 'REGH', z: dec.z[4]! },
+    { name: 'REGL', z: dec.z[5]! },
+    { name: 'REGA', z: dec.z[7]! },
+  ];
+  sources.forEach((src, si) => {
+    const enable = buildAnd(parent, vcc5, gnd5, { x: pos.x + 9900, y: pos.y - 500 + si * 150 });
+    wire(parent, groupActive.out, enable.a);
+    wire(parent, src.z, enable.b);
+    for (let i = 0; i < 8; i++) {
+      const buf = makeChipInstance(parent, bufDef, { x: pos.x + 10200, y: pos.y - 500 + si * 150 + i * 20 });
+      tieToLabel(`${src.name}${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 10100, y: pos.y - 500 + si * 150 + i * 20 });
+      wire(parent, enable.out, buf.pins[bufDef.ports[1]!]!);
+      tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 10300, y: pos.y - 500 + si * 150 + i * 20 });
+    }
+  });
+
+  // Stack push data: high byte first (B/D/H/A, EXEC1), low byte second
+  // (C/E/L/F, EXEC2) — real Z80 stack-push order. pushLowNow explicitly
+  // excludes pushHighNow (not bare phase3) for the identical ring-counter-
+  // transient reason "A real Z80 decoder"'s ramOe fix documents — see the
+  // doc comment above ("A bus-fight this design deliberately avoids").
+  const pushHighNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10500, y: pos.y + 650 });
+  wire(parent, isPush.out, pushHighNow.a);
+  tieToLabel('PHASE2', pushHighNow.b, { x: pos.x + 10400, y: pos.y + 650 });
+  const notPushHighNow = buildNot(parent, vcc5, gnd5, { x: pos.x + 10600, y: pos.y + 700 });
+  wire(parent, pushHighNow.out, notPushHighNow.in);
+  const pushLowStage = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10500, y: pos.y + 750 });
+  wire(parent, isPush.out, pushLowStage.a);
+  tieToLabel('PHASE3', pushLowStage.b, { x: pos.x + 10400, y: pos.y + 750 });
+  const pushLowNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10600, y: pos.y + 750 });
+  wire(parent, pushLowStage.out, pushLowNow.a);
+  wire(parent, notPushHighNow.out, pushLowNow.b);
+
+  const pushPairs: { highName: string; lowName: string; y: Pin }[] = [
+    { highName: 'REGB', lowName: 'REGC', y: dec.y[0]! },
+    { highName: 'REGD', lowName: 'REGE', y: dec.y[2]! },
+    { highName: 'REGH', lowName: 'REGL', y: dec.y[4]! },
+    { highName: 'REGA', lowName: 'REGF', y: dec.y[6]! },
+  ];
+  pushPairs.forEach((pair, pi) => {
+    const highEnable = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10800, y: pos.y + 600 + pi * 150 });
+    wire(parent, pushHighNow.out, highEnable.a);
+    wire(parent, pair.y, highEnable.b);
+    for (let i = 0; i < 8; i++) {
+      const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 600 + pi * 150 + i * 20 });
+      tieToLabel(`${pair.highName}${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 600 + pi * 150 + i * 20 });
+      wire(parent, highEnable.out, buf.pins[bufDef.ports[1]!]!);
+      tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 600 + pi * 150 + i * 20 });
+    }
+
+    const lowEnable = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10800, y: pos.y + 1250 + pi * 150 });
+    wire(parent, pushLowNow.out, lowEnable.a);
+    wire(parent, pair.y, lowEnable.b);
+    for (let i = 0; i < 8; i++) {
+      const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 1250 + pi * 150 + i * 20 });
+      tieToLabel(`${pair.lowName}${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 1250 + pi * 150 + i * 20 });
+      wire(parent, lowEnable.out, buf.pins[bufDef.ports[1]!]!);
+      tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 1250 + pi * 150 + i * 20 });
+    }
+  });
+
+  // RST's own push data: PC's current value (the return address, already
+  // past RST's own opcode — INCREMENT runs before EXEC1) drives the bus
+  // during rstNow, the same way a push pair's high/low byte does. Found
+  // live: this bank was missing entirely on the first pass — RST correctly
+  // decremented SP and picked the right RAM address (both gated only by
+  // stackWriteNow/rstNow, no data source needed), so nothing *looked*
+  // wrong until RET actually tried to read the pushed byte back and got
+  // whatever `ir.d` had last held (stale/garbage), not PC.
+  pc.q.forEach((_, i) => {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 1900 + i * 20 });
+    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 1900 + i * 20 });
+    wire(parent, rstNow.out, buf.pins[bufDef.ports[1]!]!);
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 1900 + i * 20 });
+  });
+
+  // CALL nn's own push data: the identical bank, gated by CALL_PUSH_NOW
+  // instead of rstNow — PC's current value at that point is already the
+  // return address (both operand-byte advances, PHASE3/PHASE5, already
+  // ran), the same "PC is already past its own opcode" fact RST's own
+  // bank above relies on.
+  pc.q.forEach((_, i) => {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 2400 + i * 20 });
+    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 2400 + i * 20 });
+    tieToLabel('CALL_PUSH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 2420 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 2400 + i * 20 });
+  });
+
+  // CALL cc,nn's own push data: the identical bank CALL nn's own uses,
+  // gated by CALLCC_PUSH_NOW instead — PC's current value at that point is
+  // already the return address, the same "PC is already past its own
+  // opcode" fact RST's and CALL nn's own banks above rely on.
+  pc.q.forEach((_, i) => {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 2900 + i * 20 });
+    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 2900 + i * 20 });
+    tieToLabel('CALLCC_PUSH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 2920 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 2900 + i * 20 });
+  });
+
+  // Indirect loads' own write data (see "x=00: indirect loads through
+  // (BC)/(DE)/(nn)" above): `A` onto the bus for `LD (BC),A`/`LD (DE),A`/
+  // `LD (nn),A` (one shared enable — real Z80 never has more than one of
+  // these decoding at once, `dec.y` one-hot), and `L`/`H` onto the bus,
+  // separately, for `LD (nn),HL`'s own low/high write phases — the
+  // identical tri-state-buffer-bank shape every other bus source in this
+  // file already uses, reading `REGA`/`REGL`/`REGH`'s own already-anchored
+  // labels rather than a ~11000-unit wire back to the registers themselves.
+  const isAToBusNowStage = buildOr(parent, vcc5, gnd5, { x: pos.x + 10900, y: pos.y + 3350 });
+  tieToLabel('LDBCA_NOW', isAToBusNowStage.a, { x: pos.x + 10800, y: pos.y + 3350 });
+  tieToLabel('LDDEA_NOW', isAToBusNowStage.b, { x: pos.x + 10800, y: pos.y + 3380 });
+  const isAToBusNow = buildOr(parent, vcc5, gnd5, { x: pos.x + 10950, y: pos.y + 3400 });
+  wire(parent, isAToBusNowStage.out, isAToBusNow.a);
+  tieToLabel('LDNNA_NOW', isAToBusNow.b, { x: pos.x + 10850, y: pos.y + 3400 });
+  for (let i = 0; i < 8; i++) {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 3400 + i * 20 });
+    tieToLabel(`REGA${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 3400 + i * 20 });
+    wire(parent, isAToBusNow.out, buf.pins[bufDef.ports[1]!]!);
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 3400 + i * 20 });
+  }
+  for (let i = 0; i < 8; i++) {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 3900 + i * 20 });
+    tieToLabel(`REGL${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 3900 + i * 20 });
+    tieToLabel('LDNNHL_LOW_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 3920 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 3900 + i * 20 });
+  }
+  for (let i = 0; i < 8; i++) {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 4400 + i * 20 });
+    tieToLabel(`REGH${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 4400 + i * 20 });
+    tieToLabel('LDNNHL_HIGH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 4420 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 4400 + i * 20 });
+  }
+
+  // INC (HL)/DEC (HL)'s own write-back data (see "x=00: INC (HL)/DEC
+  // (HL)/LD (HL),n" above): `R8RESULT0-7` — already anchored to
+  // `r8Adder.out` above, computed off `hlMemTemp` once `y=6` decodes —
+  // driven onto the bus for RAM's own write, gated by
+  // `INCDEC_HLMEM_NOW`. No new adder needed: the shared `r8Adder` this
+  // group already built for B/C/D/E/H/L/A computes `(HL)`'s own result
+  // too, the same "one shared adder, not eight" reasoning that shape was
+  // built for in the first place.
+  for (let i = 0; i < 8; i++) {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 4900 + i * 20 });
+    tieToLabel(`R8RESULT${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 4900 + i * 20 });
+    tieToLabel('INCDEC_HLMEM_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 4920 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 4900 + i * 20 });
+  }
+
+  // `LD (HL),n`'s own write-back data (see "x=00: INC (HL)/DEC (HL)/LD
+  // (HL),n" above): `ldHlNImm`'s own captured immediate byte, driven onto
+  // the bus for RAM's own write, gated by `LDHLN_WRITE_NOW`.
+  for (let i = 0; i < 8; i++) {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 5400 + i * 20 });
+    tieToLabel(`LDHLNIMM${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 5400 + i * 20 });
+    tieToLabel('LDHLN_WRITE_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 5420 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 5400 + i * 20 });
+  }
+
+  // Stack pop capture phases: low byte first (C/E/L/F, EXEC1), high byte
+  // second (B/D/H/A, EXEC2) — mirrors the push order above. These gate
+  // register WRITE-ENABLES, not bus drivers, so they don't need the
+  // sibling-exclusion trick pushLowNow needed: a mistimed WE during a
+  // purely-combinational phaseClk transient can't corrupt anything, since
+  // nothing commits until the (separately, non-overlapping) dataClk edge.
+  const popLowNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10500, y: pos.y + 900 });
+  wire(parent, isPop.out, popLowNow.a);
+  tieToLabel('PHASE2', popLowNow.b, { x: pos.x + 10400, y: pos.y + 900 });
+  const popHighNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10500, y: pos.y + 950 });
+  wire(parent, isPop.out, popHighNow.a);
+  tieToLabel('PHASE3', popHighNow.b, { x: pos.x + 10400, y: pos.y + 950 });
+
+  // ALU: op0/op1 read straight off which real operation decoded (ADD/ADC/
+  // AND/XOR/OR); SUB/SBC/CP are ADD with the operand inverted (`isSubtract`
+  // for SUB/CP, widened by `isSubtractLike` below to cover SBC too — CP is
+  // "subtract, discard the result, keep only the flags," needing the
+  // identical adder setup SUB uses; weRaw below stays SUB/SBC-inclusive but
+  // CP-exclusive, since CP must never write A). `ADC`/`SBC` (x=10, y=1/3 —
+  // see the doc comment above) reuse this exact adder too: `ADC` is a real
+  // add, just with a fresh `cin` (the old `C`) instead of a hardcoded 0;
+  // `SBC` is a real subtract the identical way SUB already is, just with
+  // `cin` fed from the old `C` inverted instead of forced to 1 — found live
+  // once a real carry flag existed, wiring them up turned out to be
+  // exactly the "route C into cin" lift the doc comment already predicted,
+  // no new adder or op-select needed.
+  const isSubtract = buildOr(parent, vcc2, gnd2, { x: pos.x + 2900, y: pos.y + 2100 });
+  tieToLabel('DECY2', isSubtract.a, { x: pos.x + 2800, y: pos.y + 2100 });
+  tieToLabel('DECY7', isSubtract.b, { x: pos.x + 2800, y: pos.y + 2130 });
+  // SBC needs SUB's own operand-invert too — this OR is that shared
+  // condition, reused below for `bInv` and again for `N` (SBC sets N=1,
+  // exactly like SUB/CP).
+  const isSubtractLike = buildOr(parent, vcc2, gnd2, { x: pos.x + 2950, y: pos.y + 2160 });
+  wire(parent, isSubtract.out, isSubtractLike.a);
+  tieToLabel('DECY3', isSubtractLike.b, { x: pos.x + 2850, y: pos.y + 2160 });
+  const aluOp0 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3000, y: pos.y + 2200 });
+  tieToLabel('DECY4', aluOp0.a, { x: pos.x + 2900, y: pos.y + 2200 });
+  tieToLabel('DECY5', aluOp0.b, { x: pos.x + 2900, y: pos.y + 2230 });
+  wire(parent, aluOp0.out, alu.op0);
+  const aluOp1 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3000, y: pos.y + 2400 });
+  tieToLabel('DECY6', aluOp1.a, { x: pos.x + 2900, y: pos.y + 2400 });
+  tieToLabel('DECY5', aluOp1.b, { x: pos.x + 2900, y: pos.y + 2430 });
+  wire(parent, aluOp1.out, alu.op1);
+  // cin: 0 for ADD/AND/XOR/OR (none of the three terms below fire), the
+  // old C for ADC, 1 for SUB/CP, the old C inverted for SBC.
+  const adcCin = buildAnd(parent, vcc2, gnd2, { x: pos.x + 2950, y: pos.y + 2250 });
+  tieToLabel('DECY1', adcCin.a, { x: pos.x + 2850, y: pos.y + 2250 });
+  wire(parent, f.q[0]!, adcCin.b);
+  const notOldCForSbc = buildNot(parent, vcc2, gnd2, { x: pos.x + 2950, y: pos.y + 2270 });
+  wire(parent, f.q[0]!, notOldCForSbc.in);
+  const sbcCin = buildAnd(parent, vcc2, gnd2, { x: pos.x + 3000, y: pos.y + 2280 });
+  tieToLabel('DECY3', sbcCin.a, { x: pos.x + 2900, y: pos.y + 2280 });
+  wire(parent, notOldCForSbc.out, sbcCin.b);
+  const cinStage = buildOr(parent, vcc2, gnd2, { x: pos.x + 3050, y: pos.y + 2260 });
+  wire(parent, adcCin.out, cinStage.a);
+  wire(parent, isSubtract.out, cinStage.b);
+  const cinFinal = buildOr(parent, vcc2, gnd2, { x: pos.x + 3100, y: pos.y + 2265 });
+  wire(parent, cinStage.out, cinFinal.a);
+  wire(parent, sbcCin.out, cinFinal.b);
+  wire(parent, cinFinal.out, alu.cin);
+  a.q.forEach((q, i) => wire(parent, q, alu.a[i]!));
+  for (let i = 0; i < 8; i++) {
+    const bInv = buildXor(parent, vcc2, gnd2, { x: pos.x + 3200, y: pos.y + 2600 + i * 150 });
+    tieToLabel(`BUS${i}`, bInv.a, { x: pos.x + 3100, y: pos.y + 2600 + i * 150 });
+    wire(parent, isSubtractLike.out, bInv.b);
+    wire(parent, bInv.out, alu.b[i]!);
+  }
+
+  // A writes for all 7 operations this slice now executes (ADD/ADC/SUB/
+  // SBC/AND/XOR/OR) — CP (y=7) is deliberately excluded here, unlike
+  // isSubtract/isSubtractLike above.
+  const weOr1 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3600, y: pos.y + 1900 });
+  tieToLabel('DECY0', weOr1.a, { x: pos.x + 3500, y: pos.y + 1900 });
+  tieToLabel('DECY2', weOr1.b, { x: pos.x + 3500, y: pos.y + 1930 });
+  const weOr2 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3600, y: pos.y + 2000 });
+  tieToLabel('DECY4', weOr2.a, { x: pos.x + 3500, y: pos.y + 2000 });
+  tieToLabel('DECY5', weOr2.b, { x: pos.x + 3500, y: pos.y + 2030 });
+  const weOr3 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3800, y: pos.y + 1950 });
+  wire(parent, weOr1.out, weOr3.a);
+  wire(parent, weOr2.out, weOr3.b);
+  // ADC/SBC (y=1/y=3) — a fourth OR term, the two new arithmetic ops this
+  // group actually executes now.
+  const weOr4 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3700, y: pos.y + 1970 });
+  tieToLabel('DECY1', weOr4.a, { x: pos.x + 3600, y: pos.y + 1970 });
+  tieToLabel('DECY3', weOr4.b, { x: pos.x + 3600, y: pos.y + 1990 });
+  const weOr5 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3900, y: pos.y + 1960 });
+  wire(parent, weOr3.out, weOr5.a);
+  wire(parent, weOr4.out, weOr5.b);
+  const weRaw = buildOr(parent, vcc2, gnd2, { x: pos.x + 4000, y: pos.y + 1950 });
+  wire(parent, weOr5.out, weRaw.a);
+  tieToLabel('DECY6', weRaw.b, { x: pos.x + 3900, y: pos.y + 1950 });
+  const aWe = buildAnd(parent, vcc2, gnd2, { x: pos.x + 4200, y: pos.y + 1950 });
+  wire(parent, aluAnyGroupNow.out, aWe.a); // x=10's own ALU-on-register, or x=11's own ALU op A,n — see "x=11: ALU op A,n" above
+  wire(parent, weRaw.out, aWe.b);
+
+  // Flags (F) — see the doc comment above for the derivation of every bit.
+  // Computed for the same 7 ops weRaw covers, plus CP (y=7).
+  const cRaw = buildXor(parent, vcc2, gnd2, { x: pos.x + 3400, y: pos.y + 3200 });
+  wire(parent, alu.cout, cRaw.a);
+  wire(parent, isSubtractLike.out, cRaw.b);
+  // C is meaningful for the 4 real arithmetic ops (ADD/ADC/SUB/SBC) plus
+  // CP (SUB's own flags-only twin) — AND/XOR/OR force it to 0 instead (real
+  // Z80 behavior), same as before ADC/SBC existed, just widened by one
+  // more OR term (`DECY1`, ADC) beyond what `isSubtractLike` already covers
+  // for SBC.
+  const cIsArithStage = buildOr(parent, vcc2, gnd2, { x: pos.x + 3400, y: pos.y + 3280 });
+  tieToLabel('DECY0', cIsArithStage.a, { x: pos.x + 3300, y: pos.y + 3280 });
+  tieToLabel('DECY1', cIsArithStage.b, { x: pos.x + 3300, y: pos.y + 3300 });
+  const cIsArith = buildOr(parent, vcc2, gnd2, { x: pos.x + 3400, y: pos.y + 3320 });
+  wire(parent, cIsArithStage.out, cIsArith.a);
+  wire(parent, isSubtractLike.out, cIsArith.b);
+  const cBit = buildAnd(parent, vcc2, gnd2, { x: pos.x + 3500, y: pos.y + 3250 });
+  wire(parent, cRaw.out, cBit.a);
+  wire(parent, cIsArith.out, cBit.b);
+
+  // H (half-carry, bit 4): the identical `XOR(carry, isSubtractLike)` idiom
+  // `cBit` above uses for C, just read off `alu.carries[3]` (the nibble
+  // boundary — carry INTO bit 4, not bit 8) instead of `alu.cout`
+  // (`carries[7]`) — the one-line difference between "this flag" and "that
+  // flag" real Z80 hardware itself boils down to. Gated by the identical
+  // `cIsArith` (ADD/ADC/SUB/SBC/CP, y=0/1/2/3/7) for the same reason C is:
+  // AND/XOR/OR's own adder-shaped `cout`/nibble-carry is real but
+  // electrically meaningless for those ops (`buildAluSlice`'s own doc
+  // comment again). AND/OR/XOR don't just leave H at 0 like they do C,
+  // though — real Z80 hardwires AND to H=1 unconditionally (a documented
+  // quirk, not a bug) and OR/XOR to H=0; `DECY4` (AND, y=4) ORed straight
+  // into the final bit covers the H=1 case with no extra gating needed —
+  // OR/XOR's own `hArithBit` term is already 0 (neither fires `cIsArith`),
+  // so the OR alone yields 0 for them, correctly, same as C.
+  const hRaw = buildXor(parent, vcc2, gnd2, { x: pos.x + 3450, y: pos.y + 3260 });
+  wire(parent, alu.carries[3]!, hRaw.a);
+  wire(parent, isSubtractLike.out, hRaw.b);
+  const hArithBit = buildAnd(parent, vcc2, gnd2, { x: pos.x + 3550, y: pos.y + 3260 });
+  wire(parent, hRaw.out, hArithBit.a);
+  wire(parent, cIsArith.out, hArithBit.b);
+  const hBit = buildOr(parent, vcc2, gnd2, { x: pos.x + 3600, y: pos.y + 3260 });
+  wire(parent, hArithBit.out, hBit.a);
+  tieToLabel('DECY4', hBit.b, { x: pos.x + 3500, y: pos.y + 3260 });
+
+  // X/Y (bits 3/5, undocumented): on real silicon these just mirror the
+  // result's own bits 3/5 for every one of this group's 8 ops, CP included
+  // — this project mirrors that for the 7 that actually reach here through
+  // `alu.out` (CP's own real-hardware quirk of sourcing X/Y from the
+  // *operand* instead of the discarded result is deliberately not modeled;
+  // see the doc comment above for the general "X/Y aren't chased to full
+  // silicon fidelity everywhere" stance).
+  const xBit = alu.out[3]!;
+  const yBit = alu.out[5]!;
+
+  let zChain: Pin = alu.out[0]!;
+  for (let i = 1; i < 8; i++) {
+    const orGate = buildOr(parent, vcc2, gnd2, { x: pos.x + 3600, y: pos.y + 3400 + i * 100 });
+    wire(parent, zChain, orGate.a);
+    wire(parent, alu.out[i]!, orGate.b);
+    zChain = orGate.out;
+  }
+  const zBit = buildNot(parent, vcc2, gnd2, { x: pos.x + 3700, y: pos.y + 4200 });
+  wire(parent, zChain, zBit.in);
+
+  let pChain: Pin = alu.out[0]!;
+  for (let i = 1; i < 8; i++) {
+    const xorGate = buildXor(parent, vcc2, gnd2, { x: pos.x + 3800, y: pos.y + 3400 + i * 100 });
+    wire(parent, pChain, xorGate.a);
+    wire(parent, alu.out[i]!, xorGate.b);
+    pChain = xorGate.out;
+  }
+  const pBit = buildNot(parent, vcc2, gnd2, { x: pos.x + 3900, y: pos.y + 4200 });
+  wire(parent, pChain, pBit.in);
+
+  // P/V is two different flags real Z80 crams into one bit, picked by
+  // which of the eight ops actually ran: parity of the result for the
+  // three logic ops (AND/XOR/OR — `pBit` above, unchanged), signed
+  // arithmetic overflow for the five arithmetic ones (ADD/ADC/SUB/SBC/
+  // CP — `cIsArith`, the identical gate `cBit`/`hBit` already reuse).
+  // Overflow itself is the classic two's-complement identity —
+  // `XOR(carry into the sign bit, carry out of the sign bit)` — now buildable
+  // at all only because `alu.carries` exposes an *interior* carry
+  // (`carries[6]`, the carry crossing into bit 7) alongside the final one
+  // (`carries[7]` === `alu.cout`), the same exposure `hBit` above needed
+  // for `carries[3]`. No sign-comparison logic needed — this one XOR
+  // already captures "same-signed operands producing a different-signed
+  // result," the textbook overflow condition, for both `ADD` and `SUB`
+  // alike (since `SUB`/`SBC`/`CP` are just `ADD` with the operand
+  // inverted and `cin=1` here, the identical adder, the identical
+  // formula holds unchanged).
+  const pvOverflow = buildXor(parent, vcc2, gnd2, { x: pos.x + 3950, y: pos.y + 4230 });
+  wire(parent, alu.carries[6]!, pvOverflow.a);
+  wire(parent, alu.carries[7]!, pvOverflow.b);
+  const pvMux = makeChipInstance(parent, muxDef, { x: pos.x + 4000, y: pos.y + 4240 });
+  wire(parent, cIsArith.out, pvMux.pins[muxDef.ports[0]!]!);
+  wire(parent, pBit.out, pvMux.pins[muxDef.ports[1]!]!); // in0: parity (AND/XOR/OR)
+  wire(parent, pvOverflow.out, pvMux.pins[muxDef.ports[2]!]!); // in1: overflow (ADD/ADC/SUB/SBC/CP)
+  const pvBit = pvMux.pins[muxDef.ports[3]!]!;
+
+  const sBit = alu.out[7]!;
+  // N: 1 for SUB/SBC/CP (isSubtractLike, SBC included), 0 for ADD/ADC/AND/
+  // XOR/OR — real Z80 behavior, unchanged from before ADC/SBC existed
+  // except for SBC itself now correctly setting it.
+  const nBit = isSubtractLike.out;
+
+  const fWeRaw = buildOr(parent, vcc2, gnd2, { x: pos.x + 4000, y: pos.y + 4300 });
+  wire(parent, weRaw.out, fWeRaw.a);
+  tieToLabel('DECY7', fWeRaw.b, { x: pos.x + 3900, y: pos.y + 4300 });
+  const fWe = buildAnd(parent, vcc2, gnd2, { x: pos.x + 4200, y: pos.y + 4300 });
+  wire(parent, aluAnyGroupNow.out, fWe.a); // x=10's own ALU-on-register, or x=11's own ALU op A,n — see "x=11: ALU op A,n" above
+  wire(parent, fWeRaw.out, fWe.b);
+
+  // LD A,z / POP AF's high byte / LD A,n: `isBusToA` picks the bus over
+  // the ALU's own result, ahead of the existing reset mux — see the doc
+  // comment above ("Writing a destination that isn't always A"). LD A,n
+  // (see "x=00, z=6: LD r,n" above) widens this the same way it widens
+  // `ldWe` below — a third OR term, not a new mux — since the bus already
+  // carries the right value (RAM, addressed by PC, driven by
+  // LDIMM8_READ_NOW) by the time this fires.
+  const isLdA = buildAnd(parent, vcc2, gnd2, { x: pos.x + 4450, y: pos.y + 1750 });
+  wire(parent, ldGroupNow.out, isLdA.a);
+  tieToLabel('DECY7', isLdA.b, { x: pos.x + 4350, y: pos.y + 1750 });
+  const isPopA = buildAnd(parent, vcc2, gnd2, { x: pos.x + 4450, y: pos.y + 1650 });
+  wire(parent, popHighNow.out, isPopA.a);
+  tieToLabel('DECY6', isPopA.b, { x: pos.x + 4350, y: pos.y + 1650 }); // AF pair
+  const isBusToAStage = buildOr(parent, vcc2, gnd2, { x: pos.x + 4460, y: pos.y + 1690 });
+  wire(parent, isLdA.out, isBusToAStage.a);
+  wire(parent, isPopA.out, isBusToAStage.b);
+  const isBusToAStage2 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4470, y: pos.y + 1700 });
+  wire(parent, isBusToAStage.out, isBusToAStage2.a);
+  tieToLabel('LDIMM8_A_NOW', isBusToAStage2.b, { x: pos.x + 4370, y: pos.y + 1700 });
+  // The indirect-load group's own three reads into A (see "x=00: indirect
+  // loads through (BC)/(DE)/(nn)" above) — a fourth OR term, the identical
+  // widen-not-replace shape every competing source for `A` in this file
+  // already gets.
+  const isBusToA = buildOr(parent, vcc2, gnd2, { x: pos.x + 4480, y: pos.y + 1710 });
+  wire(parent, isBusToAStage2.out, isBusToA.a);
+  const isLdABcOrDeOrNn1 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4380, y: pos.y + 1710 });
+  tieToLabel('LDABC_NOW', isLdABcOrDeOrNn1.a, { x: pos.x + 4280, y: pos.y + 1710 });
+  tieToLabel('LDADE_NOW', isLdABcOrDeOrNn1.b, { x: pos.x + 4280, y: pos.y + 1740 });
+  const isLdABcOrDeOrNn = buildOr(parent, vcc2, gnd2, { x: pos.x + 4390, y: pos.y + 1720 });
+  wire(parent, isLdABcOrDeOrNn1.out, isLdABcOrDeOrNn.a);
+  tieToLabel('LDANN_NOW', isLdABcOrDeOrNn.b, { x: pos.x + 4290, y: pos.y + 1720 });
+  wire(parent, isLdABcOrDeOrNn.out, isBusToA.b);
+
+  // A has no LDI-style instruction in the x=10 group — every one of its 5
+  // executed operations reads `alu.a = a.q`, so with no way to establish
+  // A's first real value, "ADD A,B" as literally the first instruction
+  // would compute an undefined A plus B, forever undefined. `aReset` is the
+  // same fix `buildProgramCounter` already uses for the identical problem:
+  // a mux ahead of `a.d` that a one-shot external reset can override to
+  // force 0, ORed into `a.we` so it can write regardless of whether a real
+  // instruction happens to be decoding at the same moment. A real Z80
+  // doesn't need this — `LD A,n` (in the `x=00` group this slice doesn't
+  // implement) sets A directly — but *some* way to establish a first value
+  // is unavoidable for any register nothing else in the design already
+  // default-initializes.
+  let aReset!: Pin; // established below, from the first per-bit reset mux's own sel pin
+  // IN A,(n) (see "x=11: IN A,(n) / OUT (n),A" below) needs this declared
+  // here, ahead of the loop that fills it — that decode block itself
+  // lives much further down, well past where `wrapWithPairCommit` and the
+  // rest of this composite's second half are defined.
+  const ioPortDataIn: Pin[] = [];
+  for (let i = 0; i < 8; i++) {
+    // INC A/DEC A (x=00, z=4/z=5, y=7): a layer ahead of srcMux's own in0,
+    // same "mux ahead of the existing mux's input" shape F's own R8 layer
+    // above uses — alu.out[i] (x=10's own result) stays the default,
+    // R8RESULT{i} (this group's own shared adder — see "x=00, z=4/z=5:
+    // INC r/DEC r" above) wins only when INCDEC_A_NOW fires.
+    const r8AMux = makeChipInstance(parent, muxDef, { x: pos.x + 4450, y: pos.y + 1750 + i * 100 });
+    tieToLabel('INCDEC_A_NOW', r8AMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4350, y: pos.y + 1750 + i * 100 });
+    wire(parent, alu.out[i]!, r8AMux.pins[muxDef.ports[1]!]!); // in0: normal ALU-group execution
+    tieToLabel(`R8RESULT${i}`, r8AMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4350, y: pos.y + 1770 + i * 100 }); // in1: this group's own INC/DEC result
+
+    // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) is a
+    // second layer ahead of srcMux's own in0, the same shape r8AMux just
+    // above uses: `DAARESULT{i}` (the corrected accumulator) wins only when
+    // `DAA_NOW` fires.
+    const daaAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4460, y: pos.y + 1765 + i * 100 });
+    tieToLabel('DAA_NOW', daaAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4360, y: pos.y + 1765 + i * 100 });
+    wire(parent, r8AMux.pins[muxDef.ports[3]!]!, daaAMux.pins[muxDef.ports[1]!]!); // in0: the layer above (ALU group, or INC/DEC A)
+    tieToLabel(`DAARESULT${i}`, daaAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4360, y: pos.y + 1785 + i * 100 }); // in1: DAA's own corrected result
+
+    // RLCA/RRCA/RLA/RRA/CPL (x=00, z=7 — see the doc comment above) are a
+    // third layer ahead of srcMux's own in0, identical shape to r8AMux
+    // just above: `ROTACCRESULT{i}` (this group's own freshly-rotated-or-
+    // complemented bit) wins only when `ROTACC_A_NOW` fires (SCF/CCF never
+    // assert it — neither one ever touches `A` at all).
+    const rotAccAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4470, y: pos.y + 1775 + i * 100 });
+    tieToLabel('ROTACC_A_NOW', rotAccAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4370, y: pos.y + 1775 + i * 100 });
+    wire(parent, daaAMux.pins[muxDef.ports[3]!]!, rotAccAMux.pins[muxDef.ports[1]!]!); // in0: the layer above (ALU group, INC/DEC A, or DAA)
+    tieToLabel(`ROTACCRESULT${i}`, rotAccAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4370, y: pos.y + 1795 + i * 100 }); // in1: RLCA/RRCA/RLA/RRA/CPL's own fresh result
+
+    // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) is a third
+    // layer ahead of srcMux's own in0: `APOLD{i}` (A''s own old value,
+    // published alongside `aP`'s own creation) wins only when
+    // `EX_AFAF_NOW` fires.
+    const exAfAfAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4485, y: pos.y + 1785 + i * 100 });
+    tieToLabel('EX_AFAF_NOW', exAfAfAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4385, y: pos.y + 1785 + i * 100 });
+    wire(parent, rotAccAMux.pins[muxDef.ports[3]!]!, exAfAfAMux.pins[muxDef.ports[1]!]!); // in0: the layer above (ALU group, INC/DEC A, DAA, or RLCA/RRCA/RLA/RRA/CPL)
+    tieToLabel(`APOLD${i}`, exAfAfAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4385, y: pos.y + 1805 + i * 100 }); // in1: A''s own old value
+
+    // IN A,(n) (x=11, z=3, y=3 — see "x=11: IN A,(n) / OUT (n),A" above) is
+    // a fourth layer ahead of srcMux's own in0: `in1` here *is*
+    // `ioPortDataIn[i]`, the raw external-sink pin itself, not a value
+    // read off of it — the same "this mux's own in1 port pin is the
+    // external contract" shape `Register.d` already establishes.
+    const inMux = makeChipInstance(parent, muxDef, { x: pos.x + 4492, y: pos.y + 1790 + i * 100 });
+    tieToLabel('IN_NOW', inMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4392, y: pos.y + 1790 + i * 100 });
+    wire(parent, exAfAfAMux.pins[muxDef.ports[3]!]!, inMux.pins[muxDef.ports[1]!]!); // in0: the layer above
+    ioPortDataIn.push(inMux.pins[muxDef.ports[2]!]!); // in1: the caller's own I/O device drives this
+
+    const srcMux = makeChipInstance(parent, muxDef, { x: pos.x + 4500, y: pos.y + 1800 + i * 100 });
+    wire(parent, isBusToA.out, srcMux.pins[muxDef.ports[0]!]!); // sel: LD A,z or POP AF's high byte, now?
+    wire(parent, inMux.pins[muxDef.ports[3]!]!, srcMux.pins[muxDef.ports[1]!]!); // in0: the layer above (ALU group, INC/DEC A, DAA, RLCA/RRCA/RLA/RRA/CPL, EX AF,AF', or IN A,(n))
+    tieToLabel(`BUS${i}`, srcMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4400, y: pos.y + 1800 + i * 100 }); // in1: the bus (LD's source, or POP's)
+
+    const resetMux = makeChipInstance(parent, muxDef, { x: pos.x + 4600, y: pos.y + 1800 + i * 100 });
+    const sel = resetMux.pins[muxDef.ports[0]!]!;
+    if (i === 0) aReset = sel;
+    else wire(parent, aReset, sel);
+    wire(parent, srcMux.pins[muxDef.ports[3]!]!, resetMux.pins[muxDef.ports[1]!]!); // in0: normal (ALU, LD, or INC/DEC A, per srcMux above)
+    wire(parent, gnd2, resetMux.pins[muxDef.ports[2]!]!); // in1: reset — force 0
+    wire(parent, resetMux.pins[muxDef.ports[3]!]!, a.d[i]!);
+  }
+  const aWeStage = buildOr(parent, vcc2, gnd2, { x: pos.x + 4300, y: pos.y + 1950 });
+  wire(parent, aWe.out, aWeStage.a);
+  wire(parent, isBusToA.out, aWeStage.b);
+  const aWeStage2 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4350, y: pos.y + 1950 });
+  wire(parent, aWeStage.out, aWeStage2.a);
+  tieToLabel('INCDEC_A_NOW', aWeStage2.b, { x: pos.x + 4250, y: pos.y + 1950 });
+  // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) needs
+  // `A`'s own `we` too — a fourth OR term, the identical shape every other
+  // competing writer of `A` in this file already gets.
+  const aWeStageDaa = buildOr(parent, vcc2, gnd2, { x: pos.x + 4370, y: pos.y + 1950 });
+  wire(parent, aWeStage2.out, aWeStageDaa.a);
+  tieToLabel('DAA_NOW', aWeStageDaa.b, { x: pos.x + 4270, y: pos.y + 1950 });
+  // RLCA/RRCA/RLA/RRA/CPL (x=00, z=7 — see the doc comment above) need
+  // `A`'s own `we` too, the same third-OR-term shape ADD HL,rr's own
+  // C-bit write uses on `F`'s `we` below — SCF/CCF never assert
+  // `ROTACC_A_NOW` (neither one ever writes `A`), so this term alone is
+  // enough for all five of the ops that do.
+  const aWeStage3 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4380, y: pos.y + 1950 });
+  wire(parent, aWeStageDaa.out, aWeStage3.a);
+  tieToLabel('ROTACC_A_NOW', aWeStage3.b, { x: pos.x + 4280, y: pos.y + 1950 });
+  // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) needs `A`'s
+  // own `we` too — a fifth OR term, the identical shape every earlier
+  // competing writer of `A` already gets.
+  const aWeStage4 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4390, y: pos.y + 1950 });
+  wire(parent, aWeStage3.out, aWeStage4.a);
+  tieToLabel('EX_AFAF_NOW', aWeStage4.b, { x: pos.x + 4290, y: pos.y + 1950 });
+  // IN A,(n) (x=11, z=3, y=3 — see "x=11: IN A,(n) / OUT (n),A" above)
+  // needs `A`'s own `we` too — a sixth OR term.
+  const aWeStage5 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4395, y: pos.y + 1950 });
+  wire(parent, aWeStage4.out, aWeStage5.a);
+  tieToLabel('IN_NOW', aWeStage5.b, { x: pos.x + 4295, y: pos.y + 1950 });
+  const aWeFinal = buildOr(parent, vcc2, gnd2, { x: pos.x + 4400, y: pos.y + 1950 });
+  wire(parent, aWeStage5.out, aWeFinal.a);
+  wire(parent, aReset, aWeFinal.b);
+  wire(parent, aWeFinal.out, a.we);
+
+  // LD r,r' destinations B/C/D/E/H/L: each gets the same "mux ahead of d,
+  // OR into we" treatment as A above, selecting the bus outright (never
+  // the ALU — this group never touches these registers) whenever
+  // AND(ldGroupNow, this register's own y line) fires — OR, now, whenever
+  // AND(popLowNow/popHighNow, that register pair's own y line) fires too
+  // (POP's low/high byte capture is the identical "bus into this
+  // register" action LD r,r' already does, just gated by a different
+  // condition — see the doc comment above). What a caller sees as this
+  // Register's `d`/`we` from here on are these *new* external-seed pins,
+  // not buildRegister's raw ones.
+  const ldDestSpecs: { reg: Register; ldY: Pin; popPhase: ReturnType<typeof buildAnd>; popY: Pin; ldImm8Label: string; ldDdNnLabel: string }[] = [
+    { reg: rB, ldY: dec.y[0]!, popPhase: popHighNow, popY: dec.y[0]!, ldImm8Label: 'LDIMM8_B_NOW', ldDdNnLabel: 'LDDDNN_HIGH_B_NOW' }, // B: high byte of BC
+    { reg: rC, ldY: dec.y[1]!, popPhase: popLowNow, popY: dec.y[0]!, ldImm8Label: 'LDIMM8_C_NOW', ldDdNnLabel: 'LDDDNN_LOW_C_NOW' }, // C: low byte of BC
+    { reg: rD, ldY: dec.y[2]!, popPhase: popHighNow, popY: dec.y[2]!, ldImm8Label: 'LDIMM8_D_NOW', ldDdNnLabel: 'LDDDNN_HIGH_D_NOW' }, // D: high byte of DE
+    { reg: rE, ldY: dec.y[3]!, popPhase: popLowNow, popY: dec.y[2]!, ldImm8Label: 'LDIMM8_E_NOW', ldDdNnLabel: 'LDDDNN_LOW_E_NOW' }, // E: low byte of DE
+    { reg: rH, ldY: dec.y[4]!, popPhase: popHighNow, popY: dec.y[4]!, ldImm8Label: 'LDIMM8_H_NOW', ldDdNnLabel: 'LDDDNN_HIGH_H_NOW' }, // H: high byte of HL
+    { reg: rL, ldY: dec.y[5]!, popPhase: popLowNow, popY: dec.y[4]!, ldImm8Label: 'LDIMM8_L_NOW', ldDdNnLabel: 'LDDDNN_LOW_L_NOW' }, // L: low byte of HL
+  ];
+  const ldExternal = ldDestSpecs.map(({ reg, ldY, popPhase, popY, ldImm8Label, ldDdNnLabel }, ri) => {
+    const ldWeRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11000, y: pos.y - 500 + ri * 300 });
+    wire(parent, ldGroupNow.out, ldWeRaw.a);
+    wire(parent, ldY, ldWeRaw.b);
+    const popWeRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11000, y: pos.y - 450 + ri * 300 });
+    wire(parent, popPhase.out, popWeRaw.a);
+    wire(parent, popY, popWeRaw.b);
+    // LD r,n (see "x=00, z=6: LD r,n" above) is this register's third
+    // competing source for the bus — same "widen the OR, not the mux"
+    // treatment `isBusToA` gets above, safe for the identical reason: LD
+    // r,r'/POP (x=01/x=11) and LD r,n (x=00) are mutually exclusive by
+    // `dec.x`'s own one-hot decode.
+    const ldWeStage = buildOr(parent, vcc5, gnd5, { x: pos.x + 11050, y: pos.y - 465 + ri * 300 });
+    wire(parent, ldWeRaw.out, ldWeStage.a);
+    wire(parent, popWeRaw.out, ldWeStage.b);
+    const ldWeStage2 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11080, y: pos.y - 470 + ri * 300 });
+    wire(parent, ldWeStage.out, ldWeStage2.a);
+    tieToLabel(ldImm8Label, ldWeStage2.b, { x: pos.x + 10950, y: pos.y - 470 + ri * 300 });
+    // LD dd,nn's own low-or-high half (see "x=00, z=1: LD dd,nn" above) —
+    // a fourth competing source for the identical reason the third is
+    // safe: `dec.z` is one-hot too, so `z=6` (LD r,n) and `z=1` (LD dd,nn)
+    // never both fire for the same opcode.
+    const ldWe = buildOr(parent, vcc5, gnd5, { x: pos.x + 11100, y: pos.y - 475 + ri * 300 });
+    wire(parent, ldWeStage2.out, ldWe.a);
+    tieToLabel(ldDdNnLabel, ldWe.b, { x: pos.x + 11000, y: pos.y - 475 + ri * 300 });
+
+    const extD: Pin[] = [];
+    for (let i = 0; i < 8; i++) {
+      const mux = makeChipInstance(parent, muxDef, { x: pos.x + 11300, y: pos.y - 500 + ri * 300 + i * 100 });
+      wire(parent, ldWe.out, mux.pins[muxDef.ports[0]!]!); // sel: LD, or POP's own byte, writing this register now?
+      extD.push(mux.pins[muxDef.ports[1]!]!); // in0: external seed — the caller's own sink pin
+      tieToLabel(`BUS${i}`, mux.pins[muxDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y - 500 + ri * 300 + i * 100 }); // in1: the bus (LD's source, or POP's)
+      wire(parent, mux.pins[muxDef.ports[3]!]!, reg.d[i]!);
+    }
+    const weOr = buildOr(parent, vcc5, gnd5, { x: pos.x + 11000, y: pos.y - 400 + ri * 300 });
+    wire(parent, ldWe.out, weOr.a);
+    wire(parent, weOr.out, reg.we);
+
+    const external: Register = { d: extD, we: weOr.b, clk: reg.clk, q: reg.q, qn: reg.qn };
+    return external;
+  });
+  const [rBExt, rCExt, rDExt, rEExt, rHExt, rLExt] = ldExternal as [Register, Register, Register, Register, Register, Register];
+
+  // INC BC/DE/HL and DEC BC/DE/HL's own write-back: a THIRD layer on top of
+  // the LD/POP wrapper above (ldExternal), same "mux ahead of d, OR into
+  // we" treatment used everywhere in this file — never simultaneously
+  // active with either of the other two competing for these bytes (LD r,r'
+  // / POP's own bus capture is x=01/x=11, this is x=00, `dec.x` one-hot
+  // decodes exactly one), so layering rather than choosing between them is
+  // safe. `inner.d`/`inner.we` here are the layer below's own *sink* pins
+  // (ldExternal's `extD`/`weOr.b`) — driving into them, not reading them.
+  const wrapWithPairCommit = (inner: Register, commitLabel: string, aluByteLabel: string, wrapPos: Point): Register => {
+    const extD: Pin[] = [];
+    const weOr = buildOr(parent, vcc5, gnd5, { x: wrapPos.x, y: wrapPos.y + 850 });
+    tieToLabel(commitLabel, weOr.a, { x: wrapPos.x - 100, y: wrapPos.y + 850 });
+    wire(parent, weOr.out, inner.we);
+    for (let i = 0; i < 8; i++) {
+      const mux = makeChipInstance(parent, muxDef, { x: wrapPos.x, y: wrapPos.y + i * 100 });
+      tieToLabel(commitLabel, mux.pins[muxDef.ports[0]!]!, { x: wrapPos.x - 100, y: wrapPos.y + i * 100 });
+      extD.push(mux.pins[muxDef.ports[1]!]!); // in0: passthrough to the caller's own seed (ldExternal's own `.d`, one layer further down)
+      tieToLabel(`${aluByteLabel}${i}`, mux.pins[muxDef.ports[2]!]!, { x: wrapPos.x - 200, y: wrapPos.y + i * 100 }); // in1: this pair's +-1
+      wire(parent, mux.pins[muxDef.ports[3]!]!, inner.d[i]!);
+    }
+    return { d: extD, we: weOr.b, clk: inner.clk, q: inner.q, qn: inner.qn };
+  };
+  const rBExt2 = wrapWithPairCommit(rBExt, 'INCDEC_BC_NOW', 'BCADDHI', { x: pos.x + 11400, y: pos.y - 500 });
+  const rCExt2 = wrapWithPairCommit(rCExt, 'INCDEC_BC_NOW', 'BCADDLO', { x: pos.x + 11400, y: pos.y - 200 });
+  const rDExt2 = wrapWithPairCommit(rDExt, 'INCDEC_DE_NOW', 'DEADDHI', { x: pos.x + 11400, y: pos.y + 100 });
+  const rEExt2 = wrapWithPairCommit(rEExt, 'INCDEC_DE_NOW', 'DEADDLO', { x: pos.x + 11400, y: pos.y + 400 });
+  const rHExt2 = wrapWithPairCommit(rHExt, 'INCDEC_HL_NOW', 'HLADDHI', { x: pos.x + 11400, y: pos.y + 700 });
+  const rLExt2 = wrapWithPairCommit(rLExt, 'INCDEC_HL_NOW', 'HLADDLO', { x: pos.x + 11400, y: pos.y + 1000 });
+
+  // x=00, z=0, y=1: EX AF,AF' (real 0x08) — a true swap, both directions
+  // committing on the same edge (see the doc comment by `aP`/`fP`'s own
+  // creation above for why that's safe). `wrapWithPairCommit` — built for
+  // INC BC/DE/HL's own "+1 into a paused pair" shape — turns out to be
+  // exactly the tool a swap needs too: it doesn't care that the "value"
+  // being committed is another register's old contents rather than an
+  // adder's fresh output, and `aP`/`fP` are already plain `Register`s, no
+  // wrapping needed to hand them in directly.
+  const isExAfAf = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 700 });
+  wire(parent, isX0Z0.out, isExAfAf.a);
+  tieToLabel('DECY1', isExAfAf.b, { x: pos.x + 11400, y: pos.y - 700 });
+  const exAfAfNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 690 });
+  wire(parent, isExAfAf.out, exAfAfNow.a);
+  tieToLabel('PHASE2', exAfAfNow.b, { x: pos.x + 11450, y: pos.y - 690 });
+  tieToLabel('EX_AFAF_NOW', exAfAfNow.out, { x: pos.x + 11600, y: pos.y - 690 }); // anchor — A's own write mux and F's own write mux (both far) read this
+  const aPExt = wrapWithPairCommit(aP, 'EX_AFAF_NOW', 'AOLD', { x: pos.x + 11700, y: pos.y - 700 });
+  const fPExt = wrapWithPairCommit(fP, 'EX_AFAF_NOW', 'FOLD', { x: pos.x + 11700, y: pos.y - 300 });
+  aP.q.forEach((q, i) => tieToLabel(`APOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 700 + i * 20 })); // anchor — A's own write mux (far) reads this
+  fP.q.forEach((q, i) => tieToLabel(`FPOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 300 + i * 20 })); // anchor — F's own write mux (far) reads this
+
+  // INC r/DEC r (x=00, z=4/z=5 — see the doc comment above) needs a
+  // *fourth* layer on top: `wrapWithPairCommit` is generic enough to reuse
+  // as-is (it doesn't know or care that this call's "pair" is really six
+  // independent single-register cases sharing one label prefix,
+  // `R8RESULT0`-`R8RESULT7` — the shared adder above computes into that
+  // label once, and only one of these six `INCDEC_x_NOW` conditions is
+  // ever 1 at a time, so all six reading the identical `R8RESULT` label is
+  // safe, not a collision).
+  const rBExt3 = wrapWithPairCommit(rBExt2, 'INCDEC_B_NOW', 'R8RESULT', { x: pos.x + 11700, y: pos.y - 500 });
+  const rCExt3 = wrapWithPairCommit(rCExt2, 'INCDEC_C_NOW', 'R8RESULT', { x: pos.x + 11700, y: pos.y - 200 });
+  const rDExt3 = wrapWithPairCommit(rDExt2, 'INCDEC_D_NOW', 'R8RESULT', { x: pos.x + 11700, y: pos.y + 100 });
+  const rEExt3 = wrapWithPairCommit(rEExt2, 'INCDEC_E_NOW', 'R8RESULT', { x: pos.x + 11700, y: pos.y + 400 });
+  const rHExt3 = wrapWithPairCommit(rHExt2, 'INCDEC_H_NOW', 'R8RESULT', { x: pos.x + 11700, y: pos.y + 700 });
+  const rLExt3 = wrapWithPairCommit(rLExt2, 'INCDEC_L_NOW', 'R8RESULT', { x: pos.x + 11700, y: pos.y + 1000 });
+
+  // DJNZ's own decrement (see "x=00: JR cc,e" above — DJNZ shares that
+  // section) needs a *fourth* write-back layer on B alone — none of
+  // C/D/E/H/L ever compete for this one, since DJNZ hardcodes B as its
+  // only register, not a `y`-selected one. `djnzAdder`'s own result,
+  // already computed unconditionally, only ever commits when
+  // `DJNZ_DEC_NOW` actually fires.
+  const rBExt4 = wrapWithPairCommit(rBExt3, 'DJNZ_DEC_NOW', 'DJNZRESULT', { x: pos.x + 12000, y: pos.y - 500 });
+
+  // ADD HL,rr's own 16-bit result (see "x=00: ADD HL,rr" above) needs a
+  // *fifth* write-back layer on H and L specifically — the same shared-
+  // commit-label shape `INCDEC_HL_NOW` already established for `H`/`L`
+  // moving together as one pair, just one layer further out.
+  const rHExt4 = wrapWithPairCommit(rHExt3, 'ADDHL_NOW', 'ADDHLHI', { x: pos.x + 12000, y: pos.y + 700 });
+  const rLExt4 = wrapWithPairCommit(rLExt3, 'ADDHL_NOW', 'ADDHLLO', { x: pos.x + 12000, y: pos.y + 1000 });
+
+  // LD HL,(nn)'s own read (see "x=00: indirect loads through
+  // (BC)/(DE)/(nn)" above) needs a *sixth* write-back layer each — `BUS`
+  // itself as the value label, since the data comes straight off the bus
+  // (RAM, addressed through `nnAddr`/`nnAddr + 1`), not a computed adder
+  // result the way every earlier layer's own value was.
+  const rHExt5 = wrapWithPairCommit(rHExt4, 'LDHLNN_HIGH_NOW', 'BUS', { x: pos.x + 12300, y: pos.y + 700 });
+  const rLExt5 = wrapWithPairCommit(rLExt4, 'LDHLNN_LOW_NOW', 'BUS', { x: pos.x + 12300, y: pos.y + 1000 });
+
+  // x=11, z=1, y=3: EXX (real 0xD9) — the identical swap `EX AF,AF'` above
+  // does, three pairs at once instead of one. `isStackReadZ` (`x=11, z=1`,
+  // already shared by `RET`/`POP` above) plus `y=3` is the whole decode;
+  // `wrapWithPairCommit` makes the write-back side almost free this time —
+  // `rB`..`rL` already sit under several of these layers each (LD/POP,
+  // INC/DEC pair, INC/DEC single, and — B specifically — DJNZ), so EXX is
+  // just one more layer stacked on the *current outermost* wrapper for
+  // each, no bespoke per-bit mux surgery the way `A`/`F` needed (those two
+  // were never wrapped in `wrapWithPairCommit` in the first place, having
+  // no external-seed contract of their own until `EX AF,AF'` gave `A` one
+  // indirectly through `A'`).
+  const isExx = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 900 });
+  wire(parent, isStackReadZ.out, isExx.a);
+  tieToLabel('DECY3', isExx.b, { x: pos.x + 11400, y: pos.y - 900 });
+  const exxNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 890 });
+  wire(parent, isExx.out, exxNow.a);
+  tieToLabel('PHASE2', exxNow.b, { x: pos.x + 11450, y: pos.y - 890 });
+  tieToLabel('EXX_NOW', exxNow.out, { x: pos.x + 11600, y: pos.y - 890 }); // anchor — B/C/D/E/H/L's own outermost write-back layer (far) and B'/C'/D'/E'/H'/L' themselves all read this
+  const bPExt = wrapWithPairCommit(bP, 'EXX_NOW', 'BOLD', { x: pos.x + 11700, y: pos.y - 900 });
+  const cPExt = wrapWithPairCommit(cP, 'EXX_NOW', 'COLD', { x: pos.x + 11700, y: pos.y - 600 });
+  const dPExt = wrapWithPairCommit(dP, 'EXX_NOW', 'DOLD', { x: pos.x + 11700, y: pos.y - 300 });
+  const ePExt = wrapWithPairCommit(eP, 'EXX_NOW', 'EOLD', { x: pos.x + 11700, y: pos.y });
+  const hPExt = wrapWithPairCommit(hP, 'EXX_NOW', 'HOLD', { x: pos.x + 11700, y: pos.y + 300 });
+  const lPExt = wrapWithPairCommit(lP, 'EXX_NOW', 'LOLD', { x: pos.x + 11700, y: pos.y + 600 });
+  bP.q.forEach((q, i) => tieToLabel(`BPOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 900 + i * 20 })); // anchor — B's own outermost write-back layer (far) reads this
+  cP.q.forEach((q, i) => tieToLabel(`CPOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 600 + i * 20 }));
+  dP.q.forEach((q, i) => tieToLabel(`DPOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 300 + i * 20 }));
+  eP.q.forEach((q, i) => tieToLabel(`EPOLD${i}`, q, { x: pos.x + 11800, y: pos.y + i * 20 }));
+  hP.q.forEach((q, i) => tieToLabel(`HPOLD${i}`, q, { x: pos.x + 11800, y: pos.y + 300 + i * 20 }));
+  lP.q.forEach((q, i) => tieToLabel(`LPOLD${i}`, q, { x: pos.x + 11800, y: pos.y + 600 + i * 20 }));
+  const rBExt5 = wrapWithPairCommit(rBExt4, 'EXX_NOW', 'BPOLD', { x: pos.x + 12300, y: pos.y - 500 });
+  const rCExt4 = wrapWithPairCommit(rCExt3, 'EXX_NOW', 'CPOLD', { x: pos.x + 12300, y: pos.y - 200 });
+  const rDExt4 = wrapWithPairCommit(rDExt3, 'EXX_NOW', 'DPOLD', { x: pos.x + 12300, y: pos.y + 100 });
+  const rEExt4 = wrapWithPairCommit(rEExt3, 'EXX_NOW', 'EPOLD', { x: pos.x + 12300, y: pos.y + 400 });
+  const rHExt6 = wrapWithPairCommit(rHExt5, 'EXX_NOW', 'HPOLD', { x: pos.x + 12600, y: pos.y + 700 });
+  const rLExt6 = wrapWithPairCommit(rLExt5, 'EXX_NOW', 'LPOLD', { x: pos.x + 12600, y: pos.y + 1000 });
+
+  // x=11, z=1, y=5: JP (HL) (real 0xE9) — PC <- HL, single byte, no RAM
+  // read at all: `PHASE2`'s own commit already has everything it needs
+  // sitting in a register. y=7: LD SP,HL (real 0xF9) — SP <- HL, the
+  // identical shape. Both share `isStackReadZ` a third way; the actual
+  // write-back for each lives with its own destination register (`PC`'s
+  // own `jpHlMux` above, `SP`'s own third layer below).
+  const isJpHl = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 1100 });
+  wire(parent, isStackReadZ.out, isJpHl.a);
+  tieToLabel('DECY5', isJpHl.b, { x: pos.x + 11400, y: pos.y - 1100 });
+  const jpHlNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1090 });
+  wire(parent, isJpHl.out, jpHlNow.a);
+  tieToLabel('PHASE2', jpHlNow.b, { x: pos.x + 11450, y: pos.y - 1090 });
+  tieToLabel('JPHL_NOW', jpHlNow.out, { x: pos.x + 11600, y: pos.y - 1090 }); // anchor — PC's own write mux (far) reads this
+
+  const isLdSpHl = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 1300 });
+  wire(parent, isStackReadZ.out, isLdSpHl.a);
+  tieToLabel('DECY7', isLdSpHl.b, { x: pos.x + 11400, y: pos.y - 1300 });
+  const ldSpHlNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1290 });
+  wire(parent, isLdSpHl.out, ldSpHlNow.a);
+  tieToLabel('PHASE2', ldSpHlNow.b, { x: pos.x + 11450, y: pos.y - 1290 });
+  tieToLabel('LDSPHL_NOW', ldSpHlNow.out, { x: pos.x + 11600, y: pos.y - 1290 }); // anchor — SP's own write mux (far) reads this
+
+  // x=11, z=1: EX DE,HL (real 0xEB) — D<->H, E<->L, both real, already-
+  // live register pairs (unlike EX AF,AF'/EXX, no shadow registers
+  // needed). `HOLD`/`DOLD`/`EOLD`/`LOLD` (published earlier for EXX's own
+  // swap) already carry exactly the values this needs — `D`'s own new
+  // value is `H`'s old one, and vice versa — so no new per-bit labels at
+  // all, just one more `wrapWithPairCommit` layer per register, reading
+  // labels that already exist.
+  const isExDeHl = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 1500 });
+  wire(parent, isX11Z3.out, isExDeHl.a);
+  tieToLabel('DECY5', isExDeHl.b, { x: pos.x + 11400, y: pos.y - 1500 });
+  const exDeHlNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1490 });
+  wire(parent, isExDeHl.out, exDeHlNow.a);
+  tieToLabel('PHASE2', exDeHlNow.b, { x: pos.x + 11450, y: pos.y - 1490 });
+  tieToLabel('EXDEHL_NOW', exDeHlNow.out, { x: pos.x + 11600, y: pos.y - 1490 }); // anchor — D/E/H/L's own outermost write-back layer (far) reads this
+  const rDExt5 = wrapWithPairCommit(rDExt4, 'EXDEHL_NOW', 'HOLD', { x: pos.x + 12900, y: pos.y - 200 });
+  const rEExt5 = wrapWithPairCommit(rEExt4, 'EXDEHL_NOW', 'LOLD', { x: pos.x + 12900, y: pos.y + 100 });
+  const rHExt7 = wrapWithPairCommit(rHExt6, 'EXDEHL_NOW', 'DOLD', { x: pos.x + 12900, y: pos.y + 700 });
+  const rLExt7 = wrapWithPairCommit(rLExt6, 'EXDEHL_NOW', 'EOLD', { x: pos.x + 12900, y: pos.y + 1000 });
+
+  // x=11, z=3, y=4: EX (SP),HL (real 0xE3) — see "x=11: EX (SP),HL" below
+  // for the full derivation. Real RAM read-modify-write, four phases
+  // (PHASE2-PHASE5, fits the existing 8-phase budget with room to spare):
+  // read [SP] into a holding register, read [SP+1] into a second one,
+  // then write A''s... no, `L`'s own old value to [SP] while `L` itself
+  // takes the first holding register's value, same for `H`/[SP+1]/the
+  // second holding register — a register-to-RAM swap, the identical
+  // "swap on one edge" master-slave guarantee `EX AF,AF'`/`EXX`/
+  // `EX DE,HL` above already rely on, just with RAM standing in for one
+  // side of it.
+  // x=11, z=3, y=3: IN A,(n), y=2: OUT (n),A (real 0xDB/0xD3 — see "x=11:
+  // IN A,(n) / OUT (n),A" below). This simulator invents its own I/O-port
+  // concept from scratch here — nothing in this file has ever needed one
+  // before — so the interface is deliberately minimal: `ioPortAddr` (a
+  // live tap of the bus, valid only while `ioRead`/`ioWrite` fires),
+  // `ioPortDataOut` (a live tap of `A`, valid only while `ioWrite` fires),
+  // `ioPortDataIn` (a genuinely external input pin — whatever device a
+  // caller wires up there is expected to respond to `ioRead` combination-
+  // ally), and the two strobes themselves. Real Z80 hardware also puts `A`
+  // on the *upper* half of a 16-bit port address (`A:n`); this slice only
+  // ever exposes `n` — a real, documented simplification, not an oversight.
+  const isOutImm = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 2100 });
+  wire(parent, isX11Z3.out, isOutImm.a);
+  tieToLabel('DECY2', isOutImm.b, { x: pos.x + 11400, y: pos.y - 2100 });
+  const isInImm = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 2200 });
+  wire(parent, isX11Z3.out, isInImm.a);
+  tieToLabel('DECY3', isInImm.b, { x: pos.x + 11400, y: pos.y - 2200 });
+  const isIoImmStage = buildOr(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 2150 });
+  wire(parent, isOutImm.out, isIoImmStage.a);
+  wire(parent, isInImm.out, isIoImmStage.b);
+  const ioImmReadNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 2140 });
+  wire(parent, isIoImmStage.out, ioImmReadNow.a);
+  tieToLabel('PHASE2', ioImmReadNow.b, { x: pos.x + 11500, y: pos.y - 2140 });
+  tieToLabel('IOIMM_READ_NOW', ioImmReadNow.out, { x: pos.x + 11700, y: pos.y - 2140 }); // anchor — ramOeStage (far) reads this
+  const ioImmAdvanceNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 2180 });
+  wire(parent, isIoImmStage.out, ioImmAdvanceNow.a);
+  tieToLabel('PHASE3', ioImmAdvanceNow.b, { x: pos.x + 11500, y: pos.y - 2180 });
+  tieToLabel('IOIMM_ADVANCE_NOW', ioImmAdvanceNow.out, { x: pos.x + 11700, y: pos.y - 2180 }); // anchor — pcHold (far) reads this
+
+  // `OUT (n),A` writes at `PHASE2` itself — `n` (the address) and `A` (the
+  // data) are both already stable the instant `n` lands on the bus, no
+  // holding register needed (`A` isn't also changing this same tick for
+  // this opcode, unlike the register-to-RAM swap `EX (SP),HL` above needed
+  // one for). `IN A,(n)` reads at `PHASE2` too — `A`'s own write mux (far
+  // below) picks `ioPortDataIn` straight up, the same "always compute,
+  // gate only the commit" shape every other `A`-write layer already uses.
+  const outNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 2100 });
+  wire(parent, isOutImm.out, outNow.a);
+  tieToLabel('PHASE2', outNow.b, { x: pos.x + 11550, y: pos.y - 2100 });
+  // `outNow.out` feeds `ioWrite` in the return object below by direct JS
+  // reference, not a label — that's the same local scope, no genuinely far
+  // consumer exists for this one the way `IN_NOW` (below) has.
+  const inNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 2200 });
+  wire(parent, isInImm.out, inNow.a);
+  tieToLabel('PHASE2', inNow.b, { x: pos.x + 11550, y: pos.y - 2200 });
+  tieToLabel('IN_NOW', inNow.out, { x: pos.x + 11750, y: pos.y - 2200 }); // anchor — A's own write mux (far) reads this via the label; `ioRead` in the return object reads `inNow.out` directly, same local scope
+
+  const ioPortAddr: Pin[] = [];
+  for (let i = 0; i < 8; i++) {
+    const label = makeLabel(parent, `BUS${i}`, { x: pos.x + 11850, y: pos.y - 2200 + i * 20 });
+    ioPortAddr.push(label.pins.net);
+  }
+  const ioPortDataOut: Pin[] = [];
+  for (let i = 0; i < 8; i++) {
+    const label = makeLabel(parent, `AOLD${i}`, { x: pos.x + 11850, y: pos.y - 2000 + i * 20 });
+    ioPortDataOut.push(label.pins.net);
+  }
+  // `ioPortDataIn` itself is declared much earlier (right before `A`'s own
+  // per-bit write loop, far above) since that loop pushes this opcode's
+  // own mux `in1` port pin into it directly — a raw external-sink pin, the
+  // identical contract `Register.d`/`Register.we` already use (a caller's
+  // own device wires *into* this, this file never drives it itself), not
+  // something created here and driven internally.
+
+  const isExSpHl = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 1700 });
+  wire(parent, isX11Z3.out, isExSpHl.a);
+  tieToLabel('DECY4', isExSpHl.b, { x: pos.x + 11400, y: pos.y - 1700 });
+
+  const exSpHlReadLowNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1690 });
+  wire(parent, isExSpHl.out, exSpHlReadLowNow.a);
+  tieToLabel('PHASE2', exSpHlReadLowNow.b, { x: pos.x + 11450, y: pos.y - 1690 });
+  tieToLabel('EXSPHL_READ_LOW_NOW', exSpHlReadLowNow.out, { x: pos.x + 11600, y: pos.y - 1690 });
+
+  // Every later phase in this same instruction explicitly excludes the one
+  // right before it — the identical adjacent-ring-position bus-fight fix
+  // `LD (nn),HL`'s own live bug first taught this file (see "x=00, z=2"
+  // above), applied pre-emptively here across all three adjacent
+  // boundaries this 4-phase sequence has, rather than found live a fourth
+  // (and fifth, and sixth) time.
+  const exSpHlReadHighRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1650 });
+  wire(parent, isExSpHl.out, exSpHlReadHighRaw.a);
+  tieToLabel('PHASE3', exSpHlReadHighRaw.b, { x: pos.x + 11450, y: pos.y - 1650 });
+  const notExSpHlReadLowNow = buildNot(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 1670 });
+  wire(parent, exSpHlReadLowNow.out, notExSpHlReadLowNow.in);
+  const exSpHlReadHighNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 1660 });
+  wire(parent, exSpHlReadHighRaw.out, exSpHlReadHighNow.a);
+  wire(parent, notExSpHlReadLowNow.out, exSpHlReadHighNow.b);
+  tieToLabel('EXSPHL_READ_HIGH_NOW', exSpHlReadHighNow.out, { x: pos.x + 11700, y: pos.y - 1660 });
+
+  const exSpHlWriteLowRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1600 });
+  wire(parent, isExSpHl.out, exSpHlWriteLowRaw.a);
+  tieToLabel('PHASE4', exSpHlWriteLowRaw.b, { x: pos.x + 11450, y: pos.y - 1600 });
+  const notExSpHlReadHighNow = buildNot(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 1630 });
+  wire(parent, exSpHlReadHighNow.out, notExSpHlReadHighNow.in);
+  const exSpHlWriteLowNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 1610 });
+  wire(parent, exSpHlWriteLowRaw.out, exSpHlWriteLowNow.a);
+  wire(parent, notExSpHlReadHighNow.out, exSpHlWriteLowNow.b);
+  tieToLabel('EXSPHL_WRITE_LOW_NOW', exSpHlWriteLowNow.out, { x: pos.x + 11700, y: pos.y - 1610 });
+
+  const exSpHlWriteHighRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1550 });
+  wire(parent, isExSpHl.out, exSpHlWriteHighRaw.a);
+  tieToLabel('PHASE5', exSpHlWriteHighRaw.b, { x: pos.x + 11450, y: pos.y - 1550 });
+  const notExSpHlWriteLowNow = buildNot(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 1580 });
+  wire(parent, exSpHlWriteLowNow.out, notExSpHlWriteLowNow.in);
+  const exSpHlWriteHighNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 1560 });
+  wire(parent, exSpHlWriteHighRaw.out, exSpHlWriteHighNow.a);
+  wire(parent, notExSpHlWriteLowNow.out, exSpHlWriteHighNow.b);
+  tieToLabel('EXSPHL_WRITE_HIGH_NOW', exSpHlWriteHighNow.out, { x: pos.x + 11700, y: pos.y - 1560 });
+
+  const exSpHlLowAddrNow = buildOr(parent, vcc5, gnd5, { x: pos.x + 11750, y: pos.y - 1670 });
+  wire(parent, exSpHlReadLowNow.out, exSpHlLowAddrNow.a);
+  wire(parent, exSpHlWriteLowNow.out, exSpHlLowAddrNow.b);
+  tieToLabel('EXSPHL_LOW_ADDR_NOW', exSpHlLowAddrNow.out, { x: pos.x + 11850, y: pos.y - 1670 }); // anchor — RAM's own address mux (far) reads this
+  const exSpHlHighAddrNow = buildOr(parent, vcc5, gnd5, { x: pos.x + 11750, y: pos.y - 1580 });
+  wire(parent, exSpHlReadHighNow.out, exSpHlHighAddrNow.a);
+  wire(parent, exSpHlWriteHighNow.out, exSpHlHighAddrNow.b);
+  tieToLabel('EXSPHL_HIGH_ADDR_NOW', exSpHlHighAddrNow.out, { x: pos.x + 11850, y: pos.y - 1580 }); // anchor — RAM's own address mux (far) reads this
+
+  // `exSpHlPlusOne`: a dedicated `buildAlu` (`addrBits` wide, `spAdder`'s
+  // own "b=all-0s, cin=vcc" +1 encoding, `nnAddrPlusOne`'s exact shape) —
+  // deliberately its own adder, not a tap on `spAdder` itself, since this
+  // opcode never commits anything into `SP` at all, only ever *addresses*
+  // one past it.
+  const exSpHlPlusOne = buildAlu(parent, library, addrBits, { x: pos.x + 11750, y: pos.y - 1900 });
+  wire(parent, gnd, exSpHlPlusOne.op0);
+  wire(parent, gnd, exSpHlPlusOne.op1);
+  wire(parent, vcc, exSpHlPlusOne.cin);
+  sp.q.forEach((q, i) => {
+    wire(parent, q, exSpHlPlusOne.a[i]!);
+    wire(parent, gnd, exSpHlPlusOne.b[i]!);
+  });
+  exSpHlPlusOne.out.forEach((o, i) => tieToLabel(`SPPLUS1_${i}`, o, { x: pos.x + 11900, y: pos.y - 1900 + i * 20 })); // anchor — RAM's own address mux (far) reads this
+
+  // Two holding registers — `hlMemTemp`'s own reasoning: each byte read
+  // has to survive from its own read phase to the *other* byte's write
+  // phase, well after the bus has moved on.
+  const spLoTemp = buildRegister(parent, library, 8, { x: pos.x + 12000, y: pos.y - 1700 });
+  wire(parent, exSpHlReadLowNow.out, spLoTemp.we);
+  spLoTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x + 11950, y: pos.y - 1700 + i * 20 }));
+  spLoTemp.q.forEach((q, i) => tieToLabel(`SPLOTEMP${i}`, q, { x: pos.x + 12050, y: pos.y - 1680 + i * 20 })); // anchor — L's own write-back layer (far) reads this
+  tieToLabel('CLK', spLoTemp.clk, { x: pos.x + 12000, y: pos.y - 1720 });
+
+  const spHiTemp = buildRegister(parent, library, 8, { x: pos.x + 12000, y: pos.y - 1400 });
+  wire(parent, exSpHlReadHighNow.out, spHiTemp.we);
+  spHiTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x + 11950, y: pos.y - 1400 + i * 20 }));
+  spHiTemp.q.forEach((q, i) => tieToLabel(`SPHITEMP${i}`, q, { x: pos.x + 12050, y: pos.y - 1380 + i * 20 })); // anchor — H's own write-back layer (far) reads this
+  tieToLabel('CLK', spHiTemp.clk, { x: pos.x + 12000, y: pos.y - 1420 });
+
+  // Found live: `L`/`H`'s own *old* value can't come from `REGL`/`REGH`
+  // (=`rL.q`/`rH.q` directly) the way every other bus source in this file
+  // reads a register — those are anchored straight to the register's own
+  // `q`, and `L`/`H` are *also* committing a brand-new value on this exact
+  // same edge (`rLExt8`/`rHExt8`, below). A register reading another
+  // register's old value is safe (the reader's own master latch freezes at
+  // whatever it saw *before* the edge — see the `sp.q`-during-a-read doc
+  // comment, "x=00: INC (HL)/DEC (HL)/LD (HL),n" above) — but a bare
+  // tri-state buffer has no master latch of its own to freeze anything; it
+  // just reflects whatever `rL.q`/`rH.q` settle to *within this same
+  // tick*, which is the fresh value the moment the slave releases it, not
+  // the pre-edge one. `oldLTemp`/`oldHTemp` — two more holding registers,
+  // capturing `L`/`H` during `PHASE2` (well before either one's own
+  // same-instruction write at `PHASE4`/`PHASE5`) — sidestep this the same
+  // way every other "value must survive past its own bus's next user" case
+  // in this file already does: a real flip-flop's own master-slave
+  // discipline, not a live combinational tap.
+  const oldLTemp = buildRegister(parent, library, 8, { x: pos.x + 12100, y: pos.y - 1750 });
+  wire(parent, exSpHlReadLowNow.out, oldLTemp.we);
+  rL.q.forEach((q, i) => wire(parent, q, oldLTemp.d[i]!));
+  tieToLabel('CLK', oldLTemp.clk, { x: pos.x + 12100, y: pos.y - 1770 });
+  const oldHTemp = buildRegister(parent, library, 8, { x: pos.x + 12100, y: pos.y - 1450 });
+  wire(parent, exSpHlReadLowNow.out, oldHTemp.we);
+  rH.q.forEach((q, i) => wire(parent, q, oldHTemp.d[i]!));
+  tieToLabel('CLK', oldHTemp.clk, { x: pos.x + 12100, y: pos.y - 1470 });
+
+  for (let i = 0; i < 8; i++) {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 12200, y: pos.y - 1700 + i * 20 });
+    wire(parent, oldLTemp.q[i]!, buf.pins[bufDef.ports[0]!]!);
+    tieToLabel('EXSPHL_WRITE_LOW_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 12100, y: pos.y - 1680 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 12300, y: pos.y - 1700 + i * 20 });
+  }
+  for (let i = 0; i < 8; i++) {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 12200, y: pos.y - 1400 + i * 20 });
+    wire(parent, oldHTemp.q[i]!, buf.pins[bufDef.ports[0]!]!);
+    tieToLabel('EXSPHL_WRITE_HIGH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 12100, y: pos.y - 1380 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 12300, y: pos.y - 1400 + i * 20 });
+  }
+
+  const rLExt8 = wrapWithPairCommit(rLExt7, 'EXSPHL_WRITE_LOW_NOW', 'SPLOTEMP', { x: pos.x + 13200, y: pos.y + 1000 });
+  const rHExt8 = wrapWithPairCommit(rHExt7, 'EXSPHL_WRITE_HIGH_NOW', 'SPHITEMP', { x: pos.x + 13200, y: pos.y + 700 });
+
+  // x=00, z=7: RLCA/RRCA/RLA/RRA/CPL/SCF/CCF — the seven single-byte
+  // accumulator/flag opcodes real Z80 puts in this column, all committing
+  // at PHASE2 like every other 1-byte x=00 opcode in this file. No RAM
+  // access at all for any of the seven — the FSM's own generic single-byte
+  // timing (already proven by INC r/DEC r and ADD HL,rr) is all this needs.
+  //
+  // `DAA` (y=4, the eighth slot in this column) is now real, decoded and
+  // wired below (`isDaaNow`) alongside the other seven — see "Closing the
+  // half-carry gap: H, the two undocumented bits, and DAA" further down for
+  // the full derivation of its correction logic and the `H`/`X`/`Y` bits it
+  // reads and writes.
+  const isX0Z7 = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13000, y: pos.y + 1500 });
+  wire(parent, isX0Group, isX0Z7.a);
+  wire(parent, dec.z[7]!, isX0Z7.b);
+  const rlcaRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1550 });
+  wire(parent, isX0Z7.out, rlcaRaw.a);
+  wire(parent, dec.y[0]!, rlcaRaw.b);
+  const rrcaRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1600 });
+  wire(parent, isX0Z7.out, rrcaRaw.a);
+  wire(parent, dec.y[1]!, rrcaRaw.b);
+  const rlaRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1650 });
+  wire(parent, isX0Z7.out, rlaRaw.a);
+  wire(parent, dec.y[2]!, rlaRaw.b);
+  const rraRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1700 });
+  wire(parent, isX0Z7.out, rraRaw.a);
+  wire(parent, dec.y[3]!, rraRaw.b);
+  const daaRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1725 });
+  wire(parent, isX0Z7.out, daaRaw.a);
+  wire(parent, dec.y[4]!, daaRaw.b);
+  const daaNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1725 });
+  wire(parent, daaRaw.out, daaNow.a);
+  tieToLabel('PHASE2', daaNow.b, { x: pos.x + 13000, y: pos.y + 1725 });
+  tieToLabel('DAA_NOW', daaNow.out, { x: pos.x + 13200, y: pos.y + 1725 }); // anchor — A's own write mux and F's own per-bit layer (both far) read this
+  const cplRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1750 });
+  wire(parent, isX0Z7.out, cplRaw.a);
+  wire(parent, dec.y[5]!, cplRaw.b);
+  const scfRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1800 });
+  wire(parent, isX0Z7.out, scfRaw.a);
+  wire(parent, dec.y[6]!, scfRaw.b);
+  const ccfRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1850 });
+  wire(parent, isX0Z7.out, ccfRaw.a);
+  wire(parent, dec.y[7]!, ccfRaw.b);
+
+  const rlcaNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1550 });
+  wire(parent, rlcaRaw.out, rlcaNow.a);
+  tieToLabel('PHASE2', rlcaNow.b, { x: pos.x + 13000, y: pos.y + 1550 });
+  const rrcaNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1600 });
+  wire(parent, rrcaRaw.out, rrcaNow.a);
+  tieToLabel('PHASE2', rrcaNow.b, { x: pos.x + 13000, y: pos.y + 1600 });
+  const rlaNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1650 });
+  wire(parent, rlaRaw.out, rlaNow.a);
+  tieToLabel('PHASE2', rlaNow.b, { x: pos.x + 13000, y: pos.y + 1650 });
+  const rraNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1700 });
+  wire(parent, rraRaw.out, rraNow.a);
+  tieToLabel('PHASE2', rraNow.b, { x: pos.x + 13000, y: pos.y + 1700 });
+  const cplNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1750 });
+  wire(parent, cplRaw.out, cplNow.a);
+  tieToLabel('PHASE2', cplNow.b, { x: pos.x + 13000, y: pos.y + 1750 });
+  const scfNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1800 });
+  wire(parent, scfRaw.out, scfNow.a);
+  tieToLabel('PHASE2', scfNow.b, { x: pos.x + 13000, y: pos.y + 1800 });
+  const ccfNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1850 });
+  wire(parent, ccfRaw.out, ccfNow.a);
+  tieToLabel('PHASE2', ccfNow.b, { x: pos.x + 13000, y: pos.y + 1850 });
+  tieToLabel('CPL_NOW', cplNow.out, { x: pos.x + 13200, y: pos.y + 1750 }); // anchor — F's own N-bit layer (far) reads this; A's own write mux reads `ROTACC_A_NOW`/`ROTACCRESULT{i}` instead, CPL already folded into both of those below
+
+  // RLCA/RRCA/RLA/RRA/CPL are the only five of these seven that actually
+  // touch `A` — SCF/CCF are flags-only, real Z80 never reads or writes `A`
+  // for either.
+  const rotOrCplStage = buildOr(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 1600 });
+  wire(parent, rlcaNow.out, rotOrCplStage.a);
+  wire(parent, rrcaNow.out, rotOrCplStage.b);
+  const rotOrCplStage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 1650 });
+  wire(parent, rlaNow.out, rotOrCplStage2.a);
+  wire(parent, rraNow.out, rotOrCplStage2.b);
+  const rotOrCplStage3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13200, y: pos.y + 1625 });
+  wire(parent, rotOrCplStage.out, rotOrCplStage3.a);
+  wire(parent, rotOrCplStage2.out, rotOrCplStage3.b);
+  const rotOrCplNow = buildOr(parent, vcc4, gnd4, { x: pos.x + 13250, y: pos.y + 1700 });
+  wire(parent, rotOrCplStage3.out, rotOrCplNow.a);
+  wire(parent, cplNow.out, rotOrCplNow.b);
+  tieToLabel('ROTACC_A_NOW', rotOrCplNow.out, { x: pos.x + 13300, y: pos.y + 1700 }); // anchor — A's own write mux (far) reads this
+
+  // Every one of RLCA/RRCA/RLA/RRA touches C; CPL doesn't. New C, per op:
+  // RLCA/RLA both take the OLD bit 7 of A; RRCA/RRA both take the OLD bit
+  // 0. SCF forces C to 1 outright; CCF inverts the OLD C.
+  const isRotLeft = buildOr(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1900 });
+  wire(parent, rlcaNow.out, isRotLeft.a);
+  wire(parent, rlaNow.out, isRotLeft.b);
+  const isRotRight = buildOr(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1950 });
+  wire(parent, rrcaNow.out, isRotRight.a);
+  wire(parent, rraNow.out, isRotRight.b);
+  const rotLeftC = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 1900 });
+  wire(parent, isRotLeft.out, rotLeftC.a);
+  wire(parent, a.q[7]!, rotLeftC.b);
+  const rotRightC = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 1950 });
+  wire(parent, isRotRight.out, rotRightC.a);
+  wire(parent, a.q[0]!, rotRightC.b);
+  const notOldC = buildNot(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 2000 });
+  wire(parent, f.q[0]!, notOldC.in);
+  const ccfC = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 2000 });
+  wire(parent, ccfNow.out, ccfC.a);
+  wire(parent, notOldC.out, ccfC.b);
+  const rotAccCStage = buildOr(parent, vcc4, gnd4, { x: pos.x + 13200, y: pos.y + 1925 });
+  wire(parent, rotLeftC.out, rotAccCStage.a);
+  wire(parent, rotRightC.out, rotAccCStage.b);
+  const rotAccCStage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13200, y: pos.y + 1975 });
+  wire(parent, scfNow.out, rotAccCStage2.a);
+  wire(parent, ccfC.out, rotAccCStage2.b);
+  const rotAccC = buildOr(parent, vcc4, gnd4, { x: pos.x + 13250, y: pos.y + 1950 });
+  wire(parent, rotAccCStage.out, rotAccC.a);
+  wire(parent, rotAccCStage2.out, rotAccC.b);
+  tieToLabel('ROTACC_C', rotAccC.out, { x: pos.x + 13300, y: pos.y + 1950 }); // anchor — F's own C-bit layer (far) reads this
+
+  // Bit 0 (C) is touched by six of these seven ops (every one but CPL);
+  // bit 1 (N) is touched by all seven (0 for six of them, 1 for CPL only —
+  // `cplNow` itself, already published above as `CPL_NOW`, is exactly that
+  // value, so no separate "N value" label is needed); bits 2/6/7 (P/Z/S)
+  // are touched by NONE of them — real Z80 leaves S/Z/P/V alone for every
+  // opcode in this column, so no layer is built for those bits at all, the
+  // same "hold, don't even wire a mux" treatment ADD HL,rr's own doc
+  // comment above establishes for the bits it doesn't touch.
+  // Found live: this used to OR in `rotAccCStage` itself (the *value*
+  // `AND(isRotLeft, a.q[7]) OR AND(isRotRight, a.q[0])`) rather than a pure
+  // "is one of these four active" condition — which silently zeroed this
+  // select (and, through `ROTACC_N_NOW`, `F`'s entire `we`) every time the
+  // *old* bit this rotate reads from happened to be 0, since `rotAccCStage`
+  // is only "on" when BOTH the op is active AND that old bit is 1. `A=0x55`
+  // (bit 7 = 0) into `RLCA` reproduced it directly: `F` silently kept
+  // whatever `C` it already had instead of committing the fresh 0 —
+  // invisible whenever the stale value happened to already look right (a
+  // fresh `C=0` right after `XOR A,A` already left `C=0`), and only
+  // surfaced once a *different* stale value (`SCF`/`CCF` leaving `C=1`)
+  // was sitting there to be wrongly held onto. `isRotAny`, below, is the
+  // condition this needed all along — activity alone, no data mixed in.
+  const isRotAny = buildOr(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 2050 });
+  wire(parent, isRotLeft.out, isRotAny.a);
+  wire(parent, isRotRight.out, isRotAny.b);
+  const rotAccCNowStage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13200, y: pos.y + 2075 });
+  wire(parent, scfNow.out, rotAccCNowStage2.a);
+  wire(parent, ccfNow.out, rotAccCNowStage2.b);
+  const rotAccCNowFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 13250, y: pos.y + 2060 });
+  wire(parent, isRotAny.out, rotAccCNowFinal.a); // rlca/rrca/rla/rra
+  wire(parent, rotAccCNowStage2.out, rotAccCNowFinal.b); // scf/ccf
+  tieToLabel('ROTACC_C_NOW', rotAccCNowFinal.out, { x: pos.x + 13300, y: pos.y + 2060 }); // anchor — F's own C-bit layer (far) reads this
+  const rotAccNNow = buildOr(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 2125 });
+  wire(parent, rotAccCNowFinal.out, rotAccNNow.a); // the same six, N=0 for all of them
+  wire(parent, cplNow.out, rotAccNNow.b); // CPL, N=1
+  tieToLabel('ROTACC_N_NOW', rotAccNNow.out, { x: pos.x + 13300, y: pos.y + 2125 }); // anchor — F's own N-bit layer (far) reads this
+
+  // Closing the half-carry gap: H, the two undocumented bits, and DAA.
+  //
+  // `H`/`X`/`Y` are now real for the x=10/x=11 ALU group (`hBit`/`xBit`/
+  // `yBit`, built next to `cBit` above) and for INC r/DEC r (`R8_H`/`R8_X`/
+  // `R8_Y`, built next to `R8_N`/`R8_P`/`R8_Z`/`R8_S` above) — everywhere
+  // else that writes `F` (`ADD HL,rr`, this file's own RLCA/RRCA/RLA/RRA/
+  // CPL/SCF/CCF) still leaves bits 3/4/5 exactly where the base hold puts
+  // them, the identical "stale, not fresh" treatment this project already
+  // documents for `ADD HL,rr`'s own `H` and this group's own `S`/`Z`/`P` —
+  // not a new gap, the same one, just now visible on three more bits.
+  //
+  // `DAA` reads `H`/`C`/`N` and `A`'s own nibbles to correct `A` back into
+  // valid packed BCD after an 8-bit add or subtract. The logic below
+  // mirrors the well-known, zexall-verified formulation (the same one
+  // MAME's own `z80.cpp` uses), built here at gate level instead of typed
+  // as an `if`:
+  //
+  //   loCorrect = OR(H, A&0xF > 9)     — low-nibble needs +0x06/-0x06
+  //   hiCorrect = OR(C, A > 0x99)      — high-nibble needs +0x60/-0x60
+  //   diff      = (loCorrect ? 0x06:0) | (hiCorrect ? 0x60:0)
+  //   newA      = N ? A-diff : A+diff  — same direction the last op ran
+  //   newC      = hiCorrect            — matches real silicon for BOTH
+  //               directions: for N=0 it's "C or overflowed 0x99"; for N=1,
+  //               `A > 0x99` is already false for any A a genuine subtract
+  //               could have produced, so `hiCorrect` collapses to exactly
+  //               "hold C" — one formula, no extra N-gating needed.
+  //   newH      = XOR(A_before[4], A_after[4]) — did bit 4 flip during the
+  //               correction? The same "real hardware defines H is defined
+  //               by *a* bit-4 boundary crossing" idea `hBit` above already
+  //               uses, just read off the correction's own effect instead
+  //               of an adder's internal carry.
+  //   newS/Z/P/X/Y — fresh off the corrected `newA`, the same derivation
+  //               every other flag-writing group in this file already uses.
+  //   N is unchanged (DAA never flips it — real Z80 behavior).
+  //
+  // `A&0xF > 9` (4-bit "nibble >= 10"): `AND(bit3, OR(bit2, bit1))` — every
+  // value with bit3 set AND at least one of bit2/bit1 set is >= 0b1010.
+  const nibbleGt9 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13350, y: pos.y + 2200 });
+  wire(parent, a.q[2]!, nibbleGt9.a);
+  wire(parent, a.q[1]!, nibbleGt9.b);
+  const nibbleGt9Bit = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13400, y: pos.y + 2200 });
+  wire(parent, a.q[3]!, nibbleGt9Bit.a);
+  wire(parent, nibbleGt9.out, nibbleGt9Bit.b);
+  // `A > 0x99` (a full 8-bit comparison, real hardware doesn't get to
+  // assume `A` is valid BCD): computed the same way `C`/`H` read a carry
+  // out of a subtraction elsewhere in this file — `A - 0x9A` via
+  // add-the-inverse-plus-one (`~0x9A = 0x65`, `cin=1`), examining only the
+  // final `cout` ("no borrow" = `A >= 0x9A` = `A > 0x99`). A scratch
+  // `buildAlu` instance whose 8 sum outputs are never read — only its
+  // `cout` — the same "harmless, this file always computes and only gates
+  // the commit" discipline `r8Adder` established.
+  const notNinetyNine = 0x65; // ~0x9A & 0xFF
+  const gt99Cmp = buildAlu(parent, library, 8, { x: pos.x + 13450, y: pos.y + 2300 });
+  wire(parent, gnd4, gt99Cmp.op0);
+  wire(parent, gnd4, gt99Cmp.op1);
+  wire(parent, vcc4, gt99Cmp.cin);
+  for (let i = 0; i < 8; i++) {
+    wire(parent, a.q[i]!, gt99Cmp.a[i]!);
+    wire(parent, (notNinetyNine >> i) & 1 ? vcc4 : gnd4, gt99Cmp.b[i]!);
+  }
+  const aGt99 = gt99Cmp.cout;
+  const loCorrect = buildOr(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 2350 });
+  wire(parent, f.q[4]!, loCorrect.a); // old H
+  wire(parent, nibbleGt9Bit.out, loCorrect.b);
+  const hiCorrect = buildOr(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 2400 });
+  wire(parent, f.q[0]!, hiCorrect.a); // old C
+  wire(parent, aGt99, hiCorrect.b);
+  tieToLabel('DAA_NEWC', hiCorrect.out, { x: pos.x + 13550, y: pos.y + 2400 }); // anchor — F's own C-bit layer (far) reads this
+
+  // `daaAdder`: one more scratch `buildAlu`, ADD mode always — subtraction
+  // is "add the inverted operand plus 1," the identical `bInv`/`cin`-from-
+  // `isSubtractLike` shape the main ALU group's own adder above uses, just
+  // with old `N` (`f.q[1]`) standing in for `isSubtractLike` (DAA reverses
+  // whichever direction the *previous* op actually ran).
+  const daaAdder = buildAlu(parent, library, 8, { x: pos.x + 13450, y: pos.y + 2500 });
+  wire(parent, gnd4, daaAdder.op0);
+  wire(parent, gnd4, daaAdder.op1);
+  wire(parent, f.q[1]!, daaAdder.cin); // old N
+  const daaDiffBit: Record<number, Pin> = { 1: loCorrect.out, 2: loCorrect.out, 5: hiCorrect.out, 6: hiCorrect.out };
+  for (let i = 0; i < 8; i++) {
+    wire(parent, a.q[i]!, daaAdder.a[i]!);
+    const diffBit = daaDiffBit[i] ?? gnd4;
+    const diffInv = buildXor(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 2550 + i * 40 });
+    wire(parent, diffBit, diffInv.a);
+    wire(parent, f.q[1]!, diffInv.b); // old N — same operand-invert `bInv` uses for SUB/SBC/CP
+    wire(parent, diffInv.out, daaAdder.b[i]!);
+  }
+  const daaNewH = buildXor(parent, vcc4, gnd4, { x: pos.x + 13600, y: pos.y + 2900 });
+  wire(parent, a.q[4]!, daaNewH.a);
+  wire(parent, daaAdder.out[4]!, daaNewH.b);
+  tieToLabel('DAA_NEWH', daaNewH.out, { x: pos.x + 13650, y: pos.y + 2900 }); // anchor — F's own H-bit layer (far) reads this
+  let daaZChain: Pin = daaAdder.out[0]!;
+  for (let i = 1; i < 8; i++) {
+    const orGate = buildOr(parent, vcc4, gnd4, { x: pos.x + 13600, y: pos.y + 2950 + i * 40 });
+    wire(parent, daaZChain, orGate.a);
+    wire(parent, daaAdder.out[i]!, orGate.b);
+    daaZChain = orGate.out;
+  }
+  const daaZBit = buildNot(parent, vcc4, gnd4, { x: pos.x + 13650, y: pos.y + 3300 });
+  wire(parent, daaZChain, daaZBit.in);
+  let daaPChain: Pin = daaAdder.out[0]!;
+  for (let i = 1; i < 8; i++) {
+    const xorGate = buildXor(parent, vcc4, gnd4, { x: pos.x + 13650, y: pos.y + 3350 + i * 40 });
+    wire(parent, daaPChain, xorGate.a);
+    wire(parent, daaAdder.out[i]!, xorGate.b);
+    daaPChain = xorGate.out;
+  }
+  const daaPBit = buildNot(parent, vcc4, gnd4, { x: pos.x + 13700, y: pos.y + 3650 });
+  wire(parent, daaPChain, daaPBit.in);
+  tieToLabel('DAA_NEWZ', daaZBit.out, { x: pos.x + 13700, y: pos.y + 3300 }); // anchor — F's own Z-bit layer (far) reads this
+  tieToLabel('DAA_NEWP', daaPBit.out, { x: pos.x + 13750, y: pos.y + 3650 }); // anchor — F's own P-bit layer (far) reads this
+  tieToLabel('DAA_NEWS', daaAdder.out[7]!, { x: pos.x + 13700, y: pos.y + 3700 }); // anchor — F's own S-bit layer (far) reads this
+  tieToLabel('DAA_NEWX', daaAdder.out[3]!, { x: pos.x + 13700, y: pos.y + 3720 }); // anchor — F's own X-bit layer (far) reads this
+  tieToLabel('DAA_NEWY', daaAdder.out[5]!, { x: pos.x + 13700, y: pos.y + 3740 }); // anchor — F's own Y-bit layer (far) reads this
+  for (let i = 0; i < 8; i++) {
+    tieToLabel(`DAARESULT${i}`, daaAdder.out[i]!, { x: pos.x + 13750, y: pos.y + 3760 + i * 20 }); // anchor — A's own write mux (far) reads this
+  }
+
+  // RLCA/RRCA/RLA/RRA/CPL's own fresh per-bit result — the shift/wrap
+  // arithmetic for the four rotates, plain bitwise NOT for CPL. `A`'s own
+  // write mux (far) picks whichever of these actually fires; SCF/CCF never
+  // touch any of these (`ROTACC_A_NOW` stays 0 for both), so this loop
+  // computing eight bits' worth of rotate/complement logic even while
+  // SCF/CCF are executing is harmless — the "always compute, gate only the
+  // commit" discipline this file has followed since `r8Adder`, not a
+  // ninth exception to it.
+  for (let i = 0; i < 8; i++) {
+    const prevIdx = (i + 7) % 8;
+    const nextIdx = (i + 1) % 8;
+    const rlcaTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13350, y: pos.y + 1500 + i * 120 });
+    wire(parent, rlcaNow.out, rlcaTerm.a);
+    wire(parent, a.q[prevIdx]!, rlcaTerm.b);
+    const rlaTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13400, y: pos.y + 1500 + i * 120 });
+    wire(parent, rlaNow.out, rlaTerm.a);
+    wire(parent, i === 0 ? f.q[0]! : a.q[prevIdx]!, rlaTerm.b); // bit 0 comes from the OLD carry, not a wrapped A bit
+    const rrcaTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13450, y: pos.y + 1500 + i * 120 });
+    wire(parent, rrcaNow.out, rrcaTerm.a);
+    wire(parent, a.q[nextIdx]!, rrcaTerm.b);
+    const rraTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 1500 + i * 120 });
+    wire(parent, rraNow.out, rraTerm.a);
+    wire(parent, i === 7 ? f.q[0]! : a.q[nextIdx]!, rraTerm.b); // bit 7 comes from the OLD carry, not a wrapped A bit
+    const notOldABit = buildNot(parent, vcc4, gnd4, { x: pos.x + 13550, y: pos.y + 1500 + i * 120 });
+    wire(parent, a.q[i]!, notOldABit.in);
+    const cplTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13600, y: pos.y + 1500 + i * 120 });
+    wire(parent, cplNow.out, cplTerm.a);
+    wire(parent, notOldABit.out, cplTerm.b);
+    const stage1 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13650, y: pos.y + 1490 + i * 120 });
+    wire(parent, rlcaTerm.out, stage1.a);
+    wire(parent, rlaTerm.out, stage1.b);
+    const stage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13650, y: pos.y + 1510 + i * 120 });
+    wire(parent, rrcaTerm.out, stage2.a);
+    wire(parent, rraTerm.out, stage2.b);
+    const stage3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13700, y: pos.y + 1500 + i * 120 });
+    wire(parent, stage1.out, stage3.a);
+    wire(parent, stage2.out, stage3.b);
+    const final = buildOr(parent, vcc4, gnd4, { x: pos.x + 13750, y: pos.y + 1495 + i * 120 });
+    wire(parent, stage3.out, final.a);
+    wire(parent, cplTerm.out, final.b);
+    tieToLabel(`ROTACCRESULT${i}`, final.out, { x: pos.x + 13800, y: pos.y + 1495 + i * 120 }); // anchor — A's own write mux (far) reads this
+  }
+
+  // F: every bit (0/C through 7/S, H and the two undocumented bits
+  // included now — see "Closing the half-carry gap" above) comes from a
+  // base hold-or-ALU-group layer (`baseMux`, below — `f.q[i]` unless
+  // `aluGroupNow` is genuinely 1), then `x=00`'s own INC/DEC r computation
+  // (a second layer ahead of that), then whichever further per-bit
+  // overrides a given later feature needs (ADD HL,rr's own C; this file's
+  // own RLCA/RRCA/RLA/RRA/CPL/SCF/CCF's C and N; DAA's own near-total
+  // rewrite of everything but N — see "x=00, z=7" above for all three), or,
+  // for AF's low byte, POP's own bus capture as the outermost layer of
+  // all. `ADD HL,rr` and the six-op rotate/flag group still leave H/X/Y
+  // exactly where the base layer put them — no new layer for those bits in
+  // either group, the identical "stale, not fresh" treatment this file
+  // already documents for that group's own S/Z/P.
+  //
+  // The INC/DEC r layer is deliberately NOT uniform across all eight bits:
+  // real Z80 preserves C untouched for this instruction family (see the
+  // doc comment above, "x=00, z=4/z=5"), so bit 0's own "x=00-computed"
+  // value is F's *own* q[0] fed back (a hold, not a fresh computation) —
+  // every other bit gets its own R8_* label (`R8_N`/`R8_P`/`R8_Z`/`R8_S`/
+  // `R8_H`/`R8_X`/`R8_Y`), the fresh values `incDecR8Now`'s own doc comment
+  // above derives.
+  const isBusToF = buildAnd(parent, vcc4, gnd4, { x: pos.x + 8200, y: pos.y + 2150 });
+  wire(parent, popLowNow.out, isBusToF.a);
+  wire(parent, dec.y[6]!, isBusToF.b); // AF pair
+  const computedFlagBit: Record<number, Pin> = { 0: cBit.out, 1: nBit, 2: pvBit, 3: xBit, 4: hBit.out, 5: yBit, 6: zBit.out, 7: sBit };
+  const r8FlagLabel: Record<number, string> = { 1: 'R8_N', 2: 'R8_P', 3: 'R8_X', 4: 'R8_H', 5: 'R8_Y', 6: 'R8_Z', 7: 'R8_S' };
+  for (let i = 0; i < 8; i++) {
+    // Found live, chasing this new group's own test: `computedFlagBit[i]`
+    // is the ALU group's own *unconditional* fresh computation, correct
+    // only while `aluGroupNow` is genuinely 1 — every later instruction
+    // that ALSO asserts `F`'s own `we` for a completely different reason
+    // (ADD HL,rr, or this new group's own RLCA/RRCA/RLA/RRA/CPL/SCF/CCF —
+    // see "x=00, z=7" above) used to inherit that raw ALU-group garbage on
+    // every bit it doesn't otherwise override — no genuine hold path
+    // existed below the ALU group's own layer at all. `baseMux`, gated by
+    // `aluGroupNow` itself, is that missing hold: `f.q[i]` unless the ALU
+    // group is truly the one executing right now. Surfaced by `SCF`
+    // clobbering `Z` — `SCF` touches only `C`, so `Z`'s own base value had
+    // nowhere to fall but this raw, meaningless ALU computation.
+    const baseMux = makeChipInstance(parent, muxDef, { x: pos.x + 8280, y: pos.y + 2050 + i * 100 });
+    wire(parent, aluAnyGroupNow.out, baseMux.pins[muxDef.ports[0]!]!); // x=10's own ALU-on-register, or x=11's own ALU op A,n — see "x=11: ALU op A,n" above
+    wire(parent, f.q[i]!, baseMux.pins[muxDef.ports[1]!]!); // in0: hold — no ALU-group op executing right now
+    wire(parent, computedFlagBit[i]!, baseMux.pins[muxDef.ports[2]!]!); // in1: x=10's own fresh computation
+
+    const r8Mux = makeChipInstance(parent, muxDef, { x: pos.x + 8300, y: pos.y + 2050 + i * 100 });
+    tieToLabel('INCDEC_R8_NOW', r8Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 8200, y: pos.y + 2050 + i * 100 });
+    wire(parent, baseMux.pins[muxDef.ports[3]!]!, r8Mux.pins[muxDef.ports[1]!]!); // in0: the ALU group's own result, or hold
+    if (i === 0) {
+      wire(parent, f.q[0]!, r8Mux.pins[muxDef.ports[2]!]!); // in1: hold — INC/DEC r never touches C
+    } else {
+      tieToLabel(r8FlagLabel[i]!, r8Mux.pins[muxDef.ports[2]!]!, { x: pos.x + 8200, y: pos.y + 2070 + i * 100 });
+    }
+
+    // ADD HL,rr (see "x=00: ADD HL,rr" above) only ever touches bit 0 (C)
+    // — a fourth layer, inserted ONLY for that bit, ahead of the POP-vs-
+    // everything-else mux below. Real Z80 leaves every other flag bit
+    // alone for this opcode, so bits 1/2/6/7 never see this layer at all.
+    let cLayerIn = r8Mux.pins[muxDef.ports[3]!]!;
+    if (i === 0) {
+      const addHlCMux = makeChipInstance(parent, muxDef, { x: pos.x + 8350, y: pos.y + 2075 });
+      tieToLabel('ADDHL_NOW', addHlCMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8250, y: pos.y + 2075 });
+      wire(parent, r8Mux.pins[muxDef.ports[3]!]!, addHlCMux.pins[muxDef.ports[1]!]!); // in0: hold-or-x10's-own-C, from above
+      tieToLabel('ADDHL_C', addHlCMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 }); // in1: ADD HL,rr's own fresh carry
+      cLayerIn = addHlCMux.pins[muxDef.ports[3]!]!;
+
+      // RLCA/RRCA/RLA/RRA/SCF/CCF (x=00, z=7 — see the doc comment above)
+      // are a sixth layer, bit 0 only, same shape as ADD HL,rr's own layer
+      // just above.
+      const rotAccCMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2085 });
+      tieToLabel('ROTACC_C_NOW', rotAccCMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8260, y: pos.y + 2085 });
+      wire(parent, cLayerIn, rotAccCMux.pins[muxDef.ports[1]!]!); // in0: the layer above (hold, x=10's own C, or ADD HL,rr's own carry)
+      tieToLabel('ROTACC_C', rotAccCMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2105 }); // in1: RLCA/RRCA/RLA/RRA/SCF/CCF's own fresh carry
+      cLayerIn = rotAccCMux.pins[muxDef.ports[3]!]!;
+    }
+    if (i === 1) {
+      // CPL (x=00, z=7 — see the doc comment above) is the only one of the
+      // seven that touches N — the other six leave bit 1 wherever the
+      // layer below already has it, same "hold via the layer below, don't
+      // build a whole separate hold path" shape bit 0's own `hold — INC/DEC
+      // r never touches C` case just above already establishes.
+      const rotAccNMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2185 });
+      tieToLabel('ROTACC_N_NOW', rotAccNMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8260, y: pos.y + 2185 });
+      wire(parent, cLayerIn, rotAccNMux.pins[muxDef.ports[1]!]!); // in0: the layer below (hold, or x=10's own N)
+      tieToLabel('CPL_NOW', rotAccNMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2205 }); // in1: 1 only for CPL, the only op in this group that sets N
+      cLayerIn = rotAccNMux.pins[muxDef.ports[3]!]!;
+    }
+    // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) is a
+    // seventh layer, every bit but N (bit 1 — DAA never touches it, so it
+    // just skips this layer entirely and keeps whatever the layer below
+    // already computed, the identical "no layer at all for a bit this op
+    // doesn't touch" shape bits 2/6/7 already use for the six-op rotate/
+    // flag group above).
+    if (i !== 1) {
+      const daaFlagLabel: Record<number, string> = { 0: 'DAA_NEWC', 2: 'DAA_NEWP', 3: 'DAA_NEWX', 4: 'DAA_NEWH', 5: 'DAA_NEWY', 6: 'DAA_NEWZ', 7: 'DAA_NEWS' };
+      const daaFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8365, y: pos.y + 2210 + i * 100 });
+      tieToLabel('DAA_NOW', daaFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8265, y: pos.y + 2210 + i * 100 });
+      wire(parent, cLayerIn, daaFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
+      tieToLabel(daaFlagLabel[i]!, daaFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8265, y: pos.y + 2215 + i * 100 }); // in1: DAA's own fresh value for this bit
+      cLayerIn = daaFMux.pins[muxDef.ports[3]!]!;
+    }
+    // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) swaps the
+    // *whole* byte, not just one or two bits — this layer runs for every
+    // `i` that reaches this point (all eight, now that H and the two
+    // undocumented bits are real too).
+    const exAfAfFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8380, y: pos.y + 2225 + i * 100 });
+    tieToLabel('EX_AFAF_NOW', exAfAfFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8280, y: pos.y + 2225 + i * 100 });
+    wire(parent, cLayerIn, exAfAfFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
+    tieToLabel(`FPOLD${i}`, exAfAfFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8280, y: pos.y + 2245 + i * 100 }); // in1: F''s own old value
+    cLayerIn = exAfAfFMux.pins[muxDef.ports[3]!]!;
+    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 8400, y: pos.y + 2100 + i * 100 });
+    wire(parent, isBusToF.out, mux.pins[muxDef.ports[0]!]!);
+    wire(parent, cLayerIn, mux.pins[muxDef.ports[1]!]!); // in0: the layer above (x=10, x=00's own INC/DEC r, or — bit 0 only — ADD HL,rr's own carry)
+    tieToLabel(`BUS${i}`, mux.pins[muxDef.ports[2]!]!, { x: pos.x + 8300, y: pos.y + 2100 + i * 100 }); // in1: POP AF's low byte (the bus)
+    wire(parent, mux.pins[muxDef.ports[3]!]!, f.d[i]!);
+  }
+  const fWeStage = buildOr(parent, vcc4, gnd4, { x: pos.x + 8500, y: pos.y + 2180 });
+  wire(parent, fWe.out, fWeStage.a);
+  tieToLabel('INCDEC_R8_NOW', fWeStage.b, { x: pos.x + 8400, y: pos.y + 2180 });
+  const fWeStage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8600, y: pos.y + 2200 });
+  wire(parent, fWeStage.out, fWeStage2.a);
+  wire(parent, isBusToF.out, fWeStage2.b);
+  // ADD HL,rr's own C-bit write (see "x=00: ADD HL,rr" above) needs F's
+  // own `we` to fire too — a third OR term, otherwise the fresh mux
+  // selection above would sit ready but never actually commit.
+  const fWeStage3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8700, y: pos.y + 2220 });
+  wire(parent, fWeStage2.out, fWeStage3.a);
+  tieToLabel('ADDHL_NOW', fWeStage3.b, { x: pos.x + 8600, y: pos.y + 2220 });
+  // RLCA/RRCA/RLA/RRA/CPL/SCF/CCF (x=00, z=7 — see the doc comment above)
+  // need `F`'s own `we` too — `ROTACC_N_NOW` is already the OR of all
+  // seven (six from `rotAccCNowFinal`, plus CPL), so this one term alone
+  // covers the whole group, not just the bit-0/bit-1 layers it also gates.
+  const fWeStage4 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8750, y: pos.y + 2230 });
+  wire(parent, fWeStage3.out, fWeStage4.a);
+  tieToLabel('ROTACC_N_NOW', fWeStage4.b, { x: pos.x + 8650, y: pos.y + 2230 });
+  // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) needs `F`'s
+  // own `we` too — a fifth OR term.
+  const fWeStage5 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8760, y: pos.y + 2240 });
+  wire(parent, fWeStage4.out, fWeStage5.a);
+  tieToLabel('EX_AFAF_NOW', fWeStage5.b, { x: pos.x + 8660, y: pos.y + 2240 });
+  // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) needs
+  // `F`'s own `we` too — a sixth OR term.
+  const fWeFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 8770, y: pos.y + 2250 });
+  wire(parent, fWeStage5.out, fWeFinal.a);
+  tieToLabel('DAA_NOW', fWeFinal.b, { x: pos.x + 8670, y: pos.y + 2250 });
+  wire(parent, fWeFinal.out, f.we);
+
+  // SP: same external-seed contract as B..L above — `sp.d`/`sp.we` here
+  // are the caller's own sink pins, muxed ahead of the raw register the
+  // same way. `spAluActive` widens the original `stackActive` (any PUSH/
+  // POP/RET/RST currently in EXEC1/EXEC2) with INCDEC_SP_NOW (x=00 z=3
+  // y=6/7's explicit INC/DEC SP) — spAdder.out is the right value either
+  // way, only the *reason* it's being committed differs; see spWantDec's
+  // own doc comment above for why the two conditions never overlap.
+  const spAluActive = buildOr(parent, vcc4, gnd4, { x: pos.x + 8500, y: pos.y + 2850 });
+  wire(parent, stackActive.out, spAluActive.a);
+  tieToLabel('INCDEC_SP_NOW', spAluActive.b, { x: pos.x + 8400, y: pos.y + 2850 });
+  const spExtD: Pin[] = [];
+  sp.q.forEach((_, i) => {
+    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 8600, y: pos.y + 2900 + i * 100 });
+    wire(parent, spAluActive.out, mux.pins[muxDef.ports[0]!]!);
+    spExtD.push(mux.pins[muxDef.ports[1]!]!); // in0: external seed
+    wire(parent, spAdder.out[i]!, mux.pins[muxDef.ports[2]!]!); // in1: SP+-1
+    wire(parent, mux.pins[muxDef.ports[3]!]!, sp.d[i]!);
+  });
+  const spWeOr = buildOr(parent, vcc4, gnd4, { x: pos.x + 8600, y: pos.y + 3200 });
+  wire(parent, spAluActive.out, spWeOr.a);
+  wire(parent, spWeOr.out, sp.we);
+  const spExternal: Register = { d: spExtD, we: spWeOr.b, clk: sp.clk, q: sp.q, qn: sp.qn };
+
+  // LD SP,nn (x=00, z=1, y=6 — see "x=00, z=1: LD dd,nn" above): SP is one
+  // monolithic `buildRegister`, not two independently-addressable 8-bit
+  // ones the way `BC`/`DE`/`HL` are (`B`/`C` etc.), so the low/high
+  // immediate bytes can't each get their own register's own `we` —
+  // `sp.we` is a single fanout across every bit, so every write commits
+  // *all* of SP's bits at once. Solved with the same "mux ahead of d,
+  // self-loop to hold" shape used everywhere else in this file for "leave
+  // this alone by default" (`PC`'s own `retMux`/`rstMux`, `F`'s own C-bit
+  // hold in the `x=00, z=4/z=5` layer): each bit gets its own small mux
+  // choosing between the low byte (bits below 8) or the high byte (bits 8
+  // and up) *while holding* (self-looping `sp.q[i]`) during the *other*
+  // half's own write phase — two separate `we`-firing edges, each one
+  // re-committing the other half's already-correct value right back to
+  // itself. Bits at or past `addrBits` for the high byte simply don't
+  // exist (the loop below stops at `addrBits`), the same natural
+  // truncation `spAdder`'s own `addrBits`-wide arithmetic already has.
+  const ldDdNnLowSpNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 3300 });
+  tieToLabel('LDDDNN_LOW_NOW', ldDdNnLowSpNow.a, { x: pos.x + 8200, y: pos.y + 3300 });
+  wire(parent, dec.y[6]!, ldDdNnLowSpNow.b);
+  const ldDdNnHighSpNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 3350 });
+  tieToLabel('LDDDNN_HIGH_NOW', ldDdNnHighSpNow.a, { x: pos.x + 8200, y: pos.y + 3350 });
+  wire(parent, dec.y[6]!, ldDdNnHighSpNow.b);
+  const ldDdNnSpAnyNow = buildOr(parent, vcc4, gnd4, { x: pos.x + 8400, y: pos.y + 3325 });
+  wire(parent, ldDdNnLowSpNow.out, ldDdNnSpAnyNow.a);
+  wire(parent, ldDdNnHighSpNow.out, ldDdNnSpAnyNow.b);
+
+  const spExtD2: Pin[] = [];
+  sp.q.forEach((q, i) => {
+    const freshMux = makeChipInstance(parent, muxDef, { x: pos.x + 8500, y: pos.y + 3400 + i * 100 });
+    if (i < 8) {
+      wire(parent, ldDdNnHighSpNow.out, freshMux.pins[muxDef.ports[0]!]!); // sel=1 (high phase): hold
+      tieToLabel(`BUS${i}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x + 8400, y: pos.y + 3400 + i * 100 }); // in0 (low phase): the fresh low byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (high phase): hold — self-loop
+    } else {
+      wire(parent, ldDdNnLowSpNow.out, freshMux.pins[muxDef.ports[0]!]!); // sel=1 (low phase): hold
+      tieToLabel(`BUS${i - 8}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x + 8400, y: pos.y + 3400 + i * 100 }); // in0 (high phase): the fresh high byte bit
+      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (low phase): hold — self-loop
+    }
+    const outerMux = makeChipInstance(parent, muxDef, { x: pos.x + 8700, y: pos.y + 3400 + i * 100 });
+    wire(parent, ldDdNnSpAnyNow.out, outerMux.pins[muxDef.ports[0]!]!);
+    spExtD2.push(outerMux.pins[muxDef.ports[1]!]!); // in0: the layer below (spAluActive-gated: external seed or spAdder.out)
+    wire(parent, freshMux.pins[muxDef.ports[3]!]!, outerMux.pins[muxDef.ports[2]!]!); // in1: this half's own fresh-or-hold bit
+    wire(parent, outerMux.pins[muxDef.ports[3]!]!, spExternal.d[i]!); // drives the layer below's own sink, not sp.d directly
+  });
+  const spWeOr2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8600, y: pos.y + 3600 });
+  wire(parent, ldDdNnSpAnyNow.out, spWeOr2.a);
+  wire(parent, spWeOr2.out, spExternal.we);
+  const spExternal2: Register = { d: spExtD2, we: spWeOr2.b, clk: spExternal.clk, q: spExternal.q, qn: spExternal.qn };
+
+  // LD SP,HL (x=11, z=1, y=7 — see "x=11: LD SP,HL" above): a third layer
+  // on top of `spExternal2`, unconditional (single byte, no low/high split
+  // needed the way `LD SP,nn`'s own two sequentially-read immediate bytes
+  // needed one — `H`/`L` are both already sitting in registers).
+  const spExtD3: Pin[] = [];
+  sp.q.forEach((_, i) => {
+    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 8900, y: pos.y + 3700 + i * 100 });
+    tieToLabel('LDSPHL_NOW', mux.pins[muxDef.ports[0]!]!, { x: pos.x + 8800, y: pos.y + 3700 + i * 100 });
+    spExtD3.push(mux.pins[muxDef.ports[1]!]!); // in0: the layer below (spExternal2's own sink)
+    wire(parent, i < 8 ? rL.q[i]! : (rH.q[i - 8] ?? gnd), mux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
+    wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal2.d[i]!);
+  });
+  const spWeOr3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8900, y: pos.y + 3900 });
+  tieToLabel('LDSPHL_NOW', spWeOr3.a, { x: pos.x + 8800, y: pos.y + 3900 });
+  wire(parent, spWeOr3.out, spExternal2.we);
+  const spExternal3: Register = { d: spExtD3, we: spWeOr3.b, clk: spExternal2.clk, q: spExternal2.q, qn: spExternal2.qn };
+
+  // Two non-overlapping clocks — see "A control FSM: the fetch loop". The
+  // whole register file shares this CPU's own dataClk — an 11-way fanout,
+  // labeled (CLK) rather than drawn as 11 long lines back to `pc.clk`.
+  tieToLabel('CLK', pc.clk, { x: pos.x, y: pos.y - 60 });
+  tieToLabel('CLK', ram.pins.clk!, { x: pos.x + 1400, y: pos.y - 60 });
+  tieToLabel('CLK', ir.clk, { x: pos.x + 2600, y: pos.y - 60 });
+  tieToLabel('CLK', a.clk, { x: pos.x + 3800, y: pos.y - 60 });
+  tieToLabel('CLK', rB.clk, { x: pos.x + 5000, y: pos.y - 60 });
+  tieToLabel('CLK', rC.clk, { x: pos.x + 5000, y: pos.y + 1140 });
+  tieToLabel('CLK', rD.clk, { x: pos.x + 6200, y: pos.y - 60 });
+  tieToLabel('CLK', rE.clk, { x: pos.x + 6200, y: pos.y + 1140 });
+  tieToLabel('CLK', rH.clk, { x: pos.x + 7400, y: pos.y - 60 });
+  tieToLabel('CLK', rL.clk, { x: pos.x + 7400, y: pos.y + 1140 });
+  tieToLabel('CLK', f.clk, { x: pos.x + 8000, y: pos.y + 2140 });
+  tieToLabel('CLK', aP.clk, { x: pos.x + 3800, y: pos.y + 3740 }); // this exact bug, again — see "x=00: EX AF,AF'" above; caught by the test this time, not left to a live-browser surprise
+  tieToLabel('CLK', fP.clk, { x: pos.x + 8000, y: pos.y + 3740 });
+  tieToLabel('CLK', bP.clk, { x: pos.x + 5000, y: pos.y + 3740 }); // same checklist item, every time, no exceptions — see "x=11: EXX" below
+  tieToLabel('CLK', cP.clk, { x: pos.x + 5000, y: pos.y + 4540 });
+  tieToLabel('CLK', dP.clk, { x: pos.x + 6200, y: pos.y + 3740 });
+  tieToLabel('CLK', eP.clk, { x: pos.x + 6200, y: pos.y + 4540 });
+  tieToLabel('CLK', hP.clk, { x: pos.x + 7400, y: pos.y + 3740 });
+  tieToLabel('CLK', lP.clk, { x: pos.x + 7400, y: pos.y + 4540 });
+  tieToLabel('CLK', sp.clk, { x: pos.x + 8000, y: pos.y + 2940 });
+  tieToLabel('CLK', jpTarget.clk, { x: pos.x - 700, y: pos.y - 2160 }); // found live: this was missing entirely — jpTarget's own D-flip-flops never captured anything without it, reading 'Z' forever regardless of we/d (see "x=11: JP nn" above)
+  tieToLabel('CLK', callTarget.clk, { x: pos.x - 700, y: pos.y - 3060 }); // learned from jpTarget's own missing-CLK bug above — every new register in this file gets this checked off explicitly now, not assumed
+  tieToLabel('CLK', jpCcTarget.clk, { x: pos.x - 700, y: pos.y - 3960 });
+  tieToLabel('CLK', callCcTarget.clk, { x: pos.x - 700, y: pos.y - 4860 });
+
+  return {
+    clk: pc.clk,
+    phaseClk: fsm.clk,
+    reset: pc.reset,
+    aReset,
+    fsmLoad: fsm.load,
+    fsmD: fsm.d,
+    pc: pc.q,
+    ir: ir.q,
+    a: a.q,
+    rB: rBExt5,
+    rC: rCExt4,
+    rD: rDExt5,
+    rE: rEExt5,
+    rH: rHExt8,
+    rL: rLExt8,
+    f: f.q,
+    aP: aPExt,
+    fP: fPExt,
+    bP: bPExt,
+    cP: cPExt,
+    dP: dPExt,
+    eP: ePExt,
+    hP: hPExt,
+    lP: lPExt,
+    sp: spExternal3,
+    phase: fsm.phase,
+    ram,
+    ioPortAddr,
+    ioPortDataOut,
+    ioPortDataIn,
+    ioRead: inNow.out,
+    ioWrite: outNow.out,
+  };
+}

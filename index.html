@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Z80 Circuit Simulator</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0c10;
+        --panel: #14161d;
+        --panel-2: #191c25;
+        --border: #262b36;
+        --text: #e7e9ef;
+        --text-dim: #9aa1b3;
+        --accent: #f5c518;
+        --accent-ink: #14161d;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      }
+      body { display: flex; flex-direction: column; }
+
+      #toolbar, #breadcrumb, #chip-palette {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        padding: 7px 12px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+        flex: 0 0 auto;
+      }
+      #toolbar { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); z-index: 2; }
+
+      button {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 5px 10px;
+        cursor: pointer;
+        font: 12px ui-monospace, 'SF Mono', monospace;
+        transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.06s ease;
+      }
+      button:hover { background: #20242f; border-color: #333a48; }
+      button:active { transform: translateY(1px); }
+      button.active {
+        background: var(--accent);
+        color: var(--accent-ink);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+
+      #toolbar .group { display: flex; gap: 6px; }
+      #toolbar .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+      #status {
+        margin-left: auto;
+        opacity: 0.7;
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+        white-space: nowrap;
+      }
+
+      #breadcrumb { font: 12px ui-monospace, monospace; padding-block: 5px; }
+      #breadcrumb button {
+        background: none; border: none; padding: 2px 4px;
+        color: var(--text-dim);
+      }
+      #breadcrumb button:hover { color: var(--text); background: none; }
+      #breadcrumb button:last-child { color: var(--accent); cursor: default; }
+      #breadcrumb button:last-child:hover { color: var(--accent); }
+      #breadcrumb .crumb-sep { color: #454b5a; }
+
+      #chip-palette { font: 12px ui-monospace, monospace; flex-wrap: wrap; }
+      #chip-palette .hint { color: var(--text-dim); }
+
+      #stage {
+        position: relative;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
+      }
+      canvas { display: block; width: 100%; height: 100%; }
+
+      #zoom-controls {
+        position: absolute;
+        right: 16px;
+        bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px;
+        background: rgba(20, 22, 29, 0.85);
+        backdrop-filter: blur(6px);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+        font: 12px ui-monospace, monospace;
+      }
+      #zoom-controls button { padding: 5px 9px; }
+      #zoom-pct { min-width: 44px; text-align: center; color: var(--text-dim); }
+
+      #hint {
+        position: absolute;
+        left: 16px;
+        bottom: 16px;
+        padding: 6px 10px;
+        background: rgba(20, 22, 29, 0.85);
+        backdrop-filter: blur(6px);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text-dim);
+        font: 11px ui-monospace, monospace;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="toolbar">
+      <div class="group">
+        <button data-tool="select" data-key="1" title="Select / move / toggle inputs (1)">select</button>
+        <button data-tool="pan" data-key="2" title="Pan — or hold Space / middle-drag (2)">pan</button>
+        <button data-tool="wire" data-key="3" title="Draw a wire between two pins (3)">wire</button>
+      </div>
+      <span class="sep"></span>
+      <div class="group">
+        <button data-tool="nmos" data-key="4" title="Place an N-mos transistor (4)">N-mos</button>
+        <button data-tool="pmos" data-key="5" title="Place a P-mos transistor (5)">P-mos</button>
+      </div>
+      <span class="sep"></span>
+      <div class="group">
+        <button data-tool="vcc" data-key="6" title="Place a VCC source (6)">VCC</button>
+        <button data-tool="gnd" data-key="7" title="Place a GND source (7)">GND</button>
+        <button data-tool="input" data-key="8" title="Place a toggleable input (8)">input</button>
+        <button data-tool="probe" data-key="9" title="Place a probe (9)">probe</button>
+        <button data-tool="label" data-key="l" title="Place a net label (L)">label</button>
+      </div>
+      <span class="sep"></span>
+      <button id="fold" title="Fold selection into a reusable chip (Ctrl+G)">fold ⌃G</button>
+      <button id="clear">clear</button>
+      <span class="sep"></span>
+      <div class="group">
+        <button id="add-register" title="Insert an N-bit register (asks for width)">+ REG</button>
+        <button id="add-alu" title="Insert an N-bit ripple-carry ALU (asks for width)">+ ALU</button>
+        <button id="add-pc" title="Insert an N-bit program counter — increments on CLK, loads D when LOAD=1, RESET=1 forces 0 (overrides LOAD) (asks for width)">+ PC</button>
+        <button id="add-ir" title="Insert an 8-bit instruction register — latches D on a WE&CLK edge, holds otherwise (fixed width: a Z80 opcode byte)">+ IR</button>
+        <button id="add-fsm" title="Insert an N-phase one-hot control-FSM sequencer — rotates on CLK, loads a seed pattern when LOAD=1 (asks for phase count)">+ FSM</button>
+        <button id="add-rom" title="Insert a fixed-content memory stub, addressed and read through real tri-state bus drivers — no storage, no write port (asks for hex bytes)">+ ROM</button>
+        <button id="add-ram" title="Insert real read/write memory — reads bytes[addr] while OE=1, writes the data bus into bytes[addr] on a WE&CLK rising edge (asks for address bits)">+ RAM</button>
+        <button id="add-cpu" title="Insert a complete tiny CPU — PC+RAM+IR+ACC+ALU sequenced by a FETCH/INCREMENT/DECODE_EXECUTE FSM, running a 2-instruction LDI/ADI program (asks for RAM address bits, then program bytes)">+ CPU</button>
+        <button id="add-z80cpu" title="Insert a CPU decoding and executing REAL Z80 opcodes — x=10 (ADD/ADC/SUB/SBC/AND/XOR/OR/CP A,r — P/V is signed overflow for the first five, parity for the last three; INC r/DEC r always overflow, no parity variant), x=11's ALU op A,n (same eight ops against an immediate byte), x=01 (LD r,r'), x=11's PUSH/POP/RET/RST n/JP nn/CALL nn/JP cc,nn/CALL cc,nn/RET cc/EXX/JP (HL)/LD SP,HL/EX DE,HL/EX (SP),HL/IN A,(n)/OUT (n),A (every non-prefix x=11 opcode real Z80 defines that isn't DI/EI — permanently inert, no interrupt line exists to gate), x=00's NOP/EX AF,AF'/INC/DEC rr (BC/DE/HL/SP), INC/DEC r, LD r,n, LD dd,nn (B/C/D/E/H/L/A, not (HL), for the 8-bit ones; BC/DE/HL/SP for the 16-bit one), ADD HL,rr (BC/DE/HL/SP into HL, carry flag only), JR e/DJNZ e/JR cc,e (JR cc,e tests NZ/Z/NC/C only — real Z80's own limit for this opcode), indirect loads through (BC)/(DE)/(nn) — LD (BC),A/LD A,(BC)/LD (DE),A/LD A,(DE) (single-byte) and LD (nn),HL/LD HL,(nn)/LD (nn),A/LD A,(nn) (3-byte, through a freshly-read absolute address), INC (HL)/DEC (HL)/LD (HL),n (the y=6 slot every other x=00 register group leaves inert, a real RAM read-modify-write through a dedicated holding register), and RLCA/RRCA/RLA/RRA/CPL/SCF/CCF/DAA (single-byte accumulator/flag ops, z=7 — DAA corrects A back into valid packed BCD after an 8-bit add or subtract, reading the real H/C/N flags this simulator now models for the x=10/x=11 ALU group and INC r/DEC r; the other six still leave H and the two undocumented flag bits stale, same as always). JP cc,nn, CALL cc,nn, and RET cc all test NZ/Z/NC/C/PO/PE/P/M off the identical one-hot tree — JP cc,nn either jumps or falls through, CALL cc,nn either pushes-and-calls or falls through, RET cc either pops-and-jumps or falls through, with no extra FSM phases needed on top of JP nn's/CALL nn's/RET's own. The JR family needs real PC-relative arithmetic instead — a signed 8-bit displacement added to PC (needs addrBits >= 8 for correct sign-extension), not a fixed target written into it; DJNZ additionally decrements B and jumps only while it's still nonzero. CALL nn, a taken CALL cc,nn, and a taken RET cc all share the same single stack byte — pushed by the first two, popped by the last (and by plain RET). EX (SP),HL swaps HL with that same top-of-stack pair, a real read-modify-write, not just a register swap. IN A,(n)/OUT (n),A move a byte through this simulator's own invented I/O port — ioPortAddr/ioPortDataOut/ioPortDataIn/ioRead/ioWrite, wired to nothing else on this canvas by default. The FSM has 8 phases, not 4 — its seed pattern (fsmD) is 8 bits wide, e.g. [1,0,0,0,0,0,0,0]. B/C/D/E/H/L/SP, the shadow register set (A'/F'/B'/C'/D'/E'/H'/L'), CLK, PHASE_CLK, RESET, A_RESET and the FSM seed all need wiring by hand afterwards, same as every other bare-pin composite (asks for RAM address bits, then program bytes)">+ Z80CPU</button>
+      </div>
+      <span class="sep"></span>
+      <div class="group">
+        <button id="export-project" title="Download the whole project (this circuit + every chip def) as one JSON file">export project</button>
+        <button id="import-project" title="Replace everything with a project JSON file">import project</button>
+      </div>
+      <div class="group">
+        <button id="export-chip" title="Select one chip instance, then download its definition (and every chip it depends on) as a JSON file">export chip</button>
+        <button id="import-chip" title="Add a chip from a JSON file to this session's palette">import chip</button>
+      </div>
+      <div id="status"></div>
+    </div>
+    <input type="file" id="import-project-file" accept="application/json" hidden />
+    <input type="file" id="import-chip-file" accept="application/json" hidden />
+    <div id="breadcrumb"></div>
+    <div id="chip-palette"><span class="hint">chips:</span></div>
+    <div id="stage">
+      <canvas id="canvas"></canvas>
+      <div id="zoom-controls">
+        <button id="zoom-out" title="Zoom out">−</button>
+        <span id="zoom-pct">100%</span>
+        <button id="zoom-in" title="Zoom in">+</button>
+        <button id="zoom-100" title="Reset to 100%">1:1</button>
+        <button id="zoom-fit" title="Fit everything in view">fit</button>
+      </div>
+      <div id="hint">1-9/L for tools · drag to move · arrows to nudge · scroll to zoom · space/middle-drag to pan · dblclick a chip to dive in</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
