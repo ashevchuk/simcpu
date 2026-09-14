@@ -2203,12 +2203,10 @@ export function buildZ80Cpu(
   // detection, and correctly *active* starting PHASE3 of the very same
   // instruction, once the real opcode byte has actually landed in `ir`.
   //
-  // Nested prefixes (real Z80's own `DD CB d op` 4-byte sequences, and a
-  // prefix immediately following another, which real hardware treats as a
-  // restart) aren't modeled — this project's own one-shot "prefix, then
-  // real opcode" shape doesn't extend to a *second* prefix byte appearing
-  // where the real opcode was expected, a real, documented limitation, not
-  // a hidden one.
+  // Nested `DD CB d op` / `FD CB d op` are partially modeled below via
+  // `ddCbMode`/`fdCbMode` (BIT y,(IX+d)/(IY+d) only this slice). A prefix
+  // immediately following another (real hardware restart) is still not
+  // modeled — one-shot "prefix, then real opcode" does not restart.
   const rawStackGroup = dec.x[3]!;
   const isCbPrefixZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8700, y: pos.y - 4200 });
   wire(parent, rawStackGroup, isCbPrefixZ.a);
@@ -2302,6 +2300,65 @@ export function buildZ80Cpu(
   tieToLabel('IS_CB_ACTIVE', isCbActive, { x: pos.x + 9100, y: pos.y - 6330 }); // anchor — BIT y,r (near) reads this
   tieToLabel('IS_DD_ACTIVE', isDdActive, { x: pos.x + 9100, y: pos.y - 6310 }); // anchor — LD IX,nn / PUSH IX / POP IX (near+far) read this
   tieToLabel('IS_FD_ACTIVE', isFdActive, { x: pos.x + 9100, y: pos.y - 6290 }); // anchor — LD IY,nn / PUSH IY / POP IY (near+far) read this
+
+  // DD CB / FD CB nested mode: `activePrefix` is one-hot — after DD, PHASE2
+  // recaptures CB into IR and latches `isDdActive`; `isCbActive` stays 0.
+  // A separate 1-bit mode latch fires at PHASE3 (IR already holds CB) so the
+  // CB table can run under DD/FD without rewriting `activePrefix` on the
+  // second IR-only op recapture at PHASE6. See "DD CB / FD CB" in ARCHITECTURE.md.
+  const ddCbMode = buildRegister(parent, library, 1, { x: pos.x + 8900, y: pos.y - 6700 });
+  tieToLabel('CLK', ddCbMode.clk, { x: pos.x + 8900, y: pos.y - 6720 });
+  const ddCbModeSetNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y - 6680 });
+  wire(parent, isDdActive, ddCbModeSetNow.a);
+  wire(parent, isCbPrefixRaw.out, ddCbModeSetNow.b);
+  const ddCbModeSetPhase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y - 6680 });
+  wire(parent, ddCbModeSetNow.out, ddCbModeSetPhase.a);
+  tieToLabel('PHASE3', ddCbModeSetPhase.b, { x: pos.x + 8900, y: pos.y - 6680 });
+  const ddCbModeWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6660 });
+  tieToLabel('PHASE0', ddCbModeWe.a, { x: pos.x + 8950, y: pos.y - 6660 });
+  wire(parent, ddCbModeSetPhase.out, ddCbModeWe.b);
+  wire(parent, ddCbModeWe.out, ddCbMode.we);
+  {
+    const dMux = makeChipInstance(parent, muxDef, { x: pos.x + 9100, y: pos.y - 6700 });
+    tieToLabel('PHASE0', dMux.pins[muxDef.ports[0]!]!, { x: pos.x + 9000, y: pos.y - 6700 });
+    wire(parent, ddCbModeSetPhase.out, dMux.pins[muxDef.ports[1]!]!);
+    wire(parent, gnd3, dMux.pins[muxDef.ports[2]!]!);
+    wire(parent, dMux.pins[muxDef.ports[3]!]!, ddCbMode.d[0]!);
+  }
+  tieToLabel('IS_DDCB_MODE', ddCbMode.q[0]!, { x: pos.x + 9200, y: pos.y - 6700 });
+
+  const fdCbMode = buildRegister(parent, library, 1, { x: pos.x + 8900, y: pos.y - 6800 });
+  tieToLabel('CLK', fdCbMode.clk, { x: pos.x + 8900, y: pos.y - 6820 });
+  const fdCbModeSetNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y - 6780 });
+  wire(parent, isFdActive, fdCbModeSetNow.a);
+  wire(parent, isCbPrefixRaw.out, fdCbModeSetNow.b);
+  const fdCbModeSetPhase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y - 6780 });
+  wire(parent, fdCbModeSetNow.out, fdCbModeSetPhase.a);
+  tieToLabel('PHASE3', fdCbModeSetPhase.b, { x: pos.x + 8900, y: pos.y - 6780 });
+  const fdCbModeWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6760 });
+  tieToLabel('PHASE0', fdCbModeWe.a, { x: pos.x + 8950, y: pos.y - 6760 });
+  wire(parent, fdCbModeSetPhase.out, fdCbModeWe.b);
+  wire(parent, fdCbModeWe.out, fdCbMode.we);
+  {
+    const dMux = makeChipInstance(parent, muxDef, { x: pos.x + 9100, y: pos.y - 6800 });
+    tieToLabel('PHASE0', dMux.pins[muxDef.ports[0]!]!, { x: pos.x + 9000, y: pos.y - 6800 });
+    wire(parent, fdCbModeSetPhase.out, dMux.pins[muxDef.ports[1]!]!);
+    wire(parent, gnd3, dMux.pins[muxDef.ports[2]!]!);
+    wire(parent, dMux.pins[muxDef.ports[3]!]!, fdCbMode.d[0]!);
+  }
+  tieToLabel('IS_FDCB_MODE', fdCbMode.q[0]!, { x: pos.x + 9200, y: pos.y - 6800 });
+
+  const ddFdCbMode = buildOr(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6750 });
+  wire(parent, ddCbMode.q[0]!, ddFdCbMode.a);
+  wire(parent, fdCbMode.q[0]!, ddFdCbMode.b);
+  const notDdFdCbMode = buildNot(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6750 });
+  wire(parent, ddFdCbMode.out, notDdFdCbMode.in);
+  const cbTableActiveStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6720 });
+  wire(parent, isCbActive, cbTableActiveStage.a);
+  wire(parent, ddCbMode.q[0]!, cbTableActiveStage.b);
+  const cbTableActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6720 });
+  wire(parent, cbTableActiveStage.out, cbTableActive.a);
+  wire(parent, fdCbMode.q[0]!, cbTableActive.b);
 
   // DD: LD IX,nn (real 0xDD 0x21 nn nn) — after the prefix burns PHASE2
   // (IR recapture) and PHASE3 (PREFIX_ADVANCE), the body reuses
@@ -2778,9 +2835,13 @@ export function buildZ80Cpu(
   const isDdMemExtra = buildOr(parent, vcc3, gnd3, { x: pos.x + 9360, y: pos.y - 5125 });
   wire(parent, isDdMemIncDec.out, isDdMemExtra.a);
   wire(parent, isDdMemAluZ.out, isDdMemExtra.b);
-  const isDdMemAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5155 });
-  wire(parent, isDdMemLdAny.out, isDdMemAny.a);
-  wire(parent, isDdMemExtra.out, isDdMemAny.b);
+  const isDdMemAnyBase = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5155 });
+  wire(parent, isDdMemLdAny.out, isDdMemAnyBase.a);
+  wire(parent, isDdMemExtra.out, isDdMemAnyBase.b);
+  // DD CB also needs d-fetch / advance at PHASE4–5 (op is not yet in IR).
+  const isDdMemAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9440, y: pos.y - 5155 });
+  wire(parent, isDdMemAnyBase.out, isDdMemAny.a);
+  wire(parent, ddCbMode.q[0]!, isDdMemAny.b);
 
   const ddDispReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 5220 });
   wire(parent, isDdMemAny.out, ddDispReadNow.a);
@@ -2877,10 +2938,34 @@ export function buildZ80Cpu(
   const ddIxDispAddrExtra = buildOr(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 5010 });
   wire(parent, ddIxDispAddrIncDec.out, ddIxDispAddrExtra.a);
   wire(parent, ddMemAluNow.out, ddIxDispAddrExtra.b);
-  const ddIxDispAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 5070 });
-  wire(parent, ddIxDispAddrLd.out, ddIxDispAddrNow.a);
-  wire(parent, ddIxDispAddrExtra.out, ddIxDispAddrNow.b);
-  tieToLabel('IXDISP_ADDR_NOW', ddIxDispAddrNow.out, { x: pos.x + 9720, y: pos.y - 5070 }); // anchor — RAM addr mux
+  const ddIxDispAddrBase = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 5070 });
+  wire(parent, ddIxDispAddrLd.out, ddIxDispAddrBase.a);
+  wire(parent, ddIxDispAddrExtra.out, ddIxDispAddrBase.b);
+  // BIT y,(IX+d) @ PHASE7 — label produced later near isCbX1Active.
+  const ddIxDispAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9660, y: pos.y - 5070 });
+  wire(parent, ddIxDispAddrBase.out, ddIxDispAddrNow.a);
+  tieToLabel('BIT_IX_NOW', ddIxDispAddrNow.b, { x: pos.x + 9560, y: pos.y - 5050 });
+  tieToLabel('IXDISP_ADDR_NOW', ddIxDispAddrNow.out, { x: pos.x + 9760, y: pos.y - 5070 }); // anchor — RAM addr mux
+
+  // DD CB second IR-only op recapture @ PHASE6 (does NOT touch activePrefix).
+  // Exclude PHASE5 d-advance (ring-counter transient).
+  const ddCbOpReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4960 });
+  wire(parent, ddCbMode.q[0]!, ddCbOpReadRaw.a);
+  tieToLabel('PHASE6', ddCbOpReadRaw.b, { x: pos.x + 9320, y: pos.y - 4960 });
+  const ddCbOpReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4960 });
+  wire(parent, ddCbOpReadRaw.out, ddCbOpReadNow.a);
+  wire(parent, notDdDispAdvanceNow.out, ddCbOpReadNow.b);
+  tieToLabel('DDCB_OP_READ_NOW', ddCbOpReadNow.out, { x: pos.x + 9600, y: pos.y - 4960 }); // anchor — ir.we, ram.oe
+  const notDdCbOpReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4945 });
+  wire(parent, ddCbOpReadNow.out, notDdCbOpReadNow.in);
+  // Advance past op on PHASE7 (PC stayed on op through PHASE6 read).
+  const ddCbOpAdvanceRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4935 });
+  wire(parent, ddCbMode.q[0]!, ddCbOpAdvanceRaw.a);
+  tieToLabel('PHASE7', ddCbOpAdvanceRaw.b, { x: pos.x + 9320, y: pos.y - 4935 });
+  const ddCbOpAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4935 });
+  wire(parent, ddCbOpAdvanceRaw.out, ddCbOpAdvanceNow.a);
+  wire(parent, notDdCbOpReadNow.out, ddCbOpAdvanceNow.b);
+  tieToLabel('DDCB_OP_ADVANCE_NOW', ddCbOpAdvanceNow.out, { x: pos.x + 9600, y: pos.y - 4935 }); // anchor — pcHold
 
   // Per-y write-back strobes for LD r,(IX+d) — parallel to ldGroupNow∧y.
   const ddMemLdWeSpecs: { y: Pin; label: string }[] = [
@@ -2965,9 +3050,12 @@ export function buildZ80Cpu(
   const isFdMemExtra = buildOr(parent, vcc3, gnd3, { x: pos.x + 9360, y: pos.y - 4765 });
   wire(parent, isFdMemIncDec.out, isFdMemExtra.a);
   wire(parent, isFdMemAluZ.out, isFdMemExtra.b);
-  const isFdMemAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 4795 });
-  wire(parent, isFdMemLdAny.out, isFdMemAny.a);
-  wire(parent, isFdMemExtra.out, isFdMemAny.b);
+  const isFdMemAnyBase = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 4795 });
+  wire(parent, isFdMemLdAny.out, isFdMemAnyBase.a);
+  wire(parent, isFdMemExtra.out, isFdMemAnyBase.b);
+  const isFdMemAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9440, y: pos.y - 4795 });
+  wire(parent, isFdMemAnyBase.out, isFdMemAny.a);
+  wire(parent, fdCbMode.q[0]!, isFdMemAny.b);
 
   const fdDispReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4860 });
   wire(parent, isFdMemAny.out, fdDispReadNow.a);
@@ -3058,10 +3146,31 @@ export function buildZ80Cpu(
   const fdIyDispAddrExtra = buildOr(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4650 });
   wire(parent, fdIyDispAddrIncDec.out, fdIyDispAddrExtra.a);
   wire(parent, fdMemAluNow.out, fdIyDispAddrExtra.b);
-  const fdIyDispAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4710 });
-  wire(parent, fdIyDispAddrLd.out, fdIyDispAddrNow.a);
-  wire(parent, fdIyDispAddrExtra.out, fdIyDispAddrNow.b);
-  tieToLabel('IYDISP_ADDR_NOW', fdIyDispAddrNow.out, { x: pos.x + 9720, y: pos.y - 4710 });
+  const fdIyDispAddrBase = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4710 });
+  wire(parent, fdIyDispAddrLd.out, fdIyDispAddrBase.a);
+  wire(parent, fdIyDispAddrExtra.out, fdIyDispAddrBase.b);
+  const fdIyDispAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9660, y: pos.y - 4710 });
+  wire(parent, fdIyDispAddrBase.out, fdIyDispAddrNow.a);
+  tieToLabel('BIT_IY_NOW', fdIyDispAddrNow.b, { x: pos.x + 9560, y: pos.y - 4690 });
+  tieToLabel('IYDISP_ADDR_NOW', fdIyDispAddrNow.out, { x: pos.x + 9760, y: pos.y - 4710 });
+
+  // FD CB second IR-only op recapture @ PHASE6 (mirror of DDCB_OP_READ_NOW).
+  const fdCbOpReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4600 });
+  wire(parent, fdCbMode.q[0]!, fdCbOpReadRaw.a);
+  tieToLabel('PHASE6', fdCbOpReadRaw.b, { x: pos.x + 9320, y: pos.y - 4600 });
+  const fdCbOpReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4600 });
+  wire(parent, fdCbOpReadRaw.out, fdCbOpReadNow.a);
+  wire(parent, notFdDispAdvanceNow.out, fdCbOpReadNow.b);
+  tieToLabel('FDCB_OP_READ_NOW', fdCbOpReadNow.out, { x: pos.x + 9600, y: pos.y - 4600 });
+  const notFdCbOpReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4585 });
+  wire(parent, fdCbOpReadNow.out, notFdCbOpReadNow.in);
+  const fdCbOpAdvanceRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4575 });
+  wire(parent, fdCbMode.q[0]!, fdCbOpAdvanceRaw.a);
+  tieToLabel('PHASE7', fdCbOpAdvanceRaw.b, { x: pos.x + 9320, y: pos.y - 4575 });
+  const fdCbOpAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4575 });
+  wire(parent, fdCbOpAdvanceRaw.out, fdCbOpAdvanceNow.a);
+  wire(parent, notFdCbOpReadNow.out, fdCbOpAdvanceNow.b);
+  tieToLabel('FDCB_OP_ADVANCE_NOW', fdCbOpAdvanceNow.out, { x: pos.x + 9600, y: pos.y - 4575 });
 
   const fdMemLdWeSpecs: { y: Pin; label: string }[] = [
     { y: dec.y[0]!, label: 'FDMEMLD_WE_B_NOW' },
@@ -3104,21 +3213,22 @@ export function buildZ80Cpu(
   wire(parent, isEdActive, isEdX1Active.a);
   wire(parent, dec.x[1]!, isEdX1Active.b);
   // CB x=00 — rotate/shift column (RLC…SRL). Same "prefix ∧ x" shape.
+  // `cbTableActive` covers plain CB plus DD CB / FD CB mode (nested).
   const isCbX0Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6375 });
-  wire(parent, isCbActive, isCbX0Active.a);
+  wire(parent, cbTableActive.out, isCbX0Active.a);
   wire(parent, dec.x[0]!, isCbX0Active.b);
   tieToLabel('IS_CB_ROT', isCbX0Active.out, { x: pos.x + 9200, y: pos.y - 6375 });
   // CB x=01 is the BIT family — same "prefix ∧ this table's x" shape ED uses.
   const isCbX1Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6380 });
-  wire(parent, isCbActive, isCbX1Active.a);
+  wire(parent, cbTableActive.out, isCbX1Active.a);
   wire(parent, dec.x[1]!, isCbX1Active.b);
   // CB x=10 / x=11 — RES / SET.
   const isCbX2Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6390 });
-  wire(parent, isCbActive, isCbX2Active.a);
+  wire(parent, cbTableActive.out, isCbX2Active.a);
   wire(parent, dec.x[2]!, isCbX2Active.b);
   tieToLabel('IS_CB_RES', isCbX2Active.out, { x: pos.x + 9200, y: pos.y - 6390 });
   const isCbX3Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6400 });
-  wire(parent, isCbActive, isCbX3Active.a);
+  wire(parent, cbTableActive.out, isCbX3Active.a);
   wire(parent, dec.x[3]!, isCbX3Active.b);
   tieToLabel('IS_CB_SET', isCbX3Active.out, { x: pos.x + 9200, y: pos.y - 6400 });
   const isCbSetRes = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6395 });
@@ -3129,20 +3239,28 @@ export function buildZ80Cpu(
   // Register: flags-only, single PHASE4 after the prefix. (HL): PHASE4
   // reads into shared `hlMemTemp`, PHASE5 commits flags — no write-back.
   // Collides with unprefixed `LD r,r'` — `NOT_PREFIX_ACTIVE` keeps that quiet.
+  // Under DD CB / FD CB mode, register-form CB stays quiet (CB itself in IR
+  // at PHASE4 looks like SET z=3); SET/RES/rot (HL) also gated off this slice.
   const notCbBitHl = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7400 });
   wire(parent, dec.z[6]!, notCbBitHl.in);
+  const isBitRegRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7400 });
+  wire(parent, isCbX1Active.out, isBitRegRaw.a);
+  wire(parent, notCbBitHl.out, isBitRegRaw.b);
   const isBitRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7400 });
-  wire(parent, isCbX1Active.out, isBitRegNow.a);
-  wire(parent, notCbBitHl.out, isBitRegNow.b);
+  wire(parent, isBitRegRaw.out, isBitRegNow.a);
+  wire(parent, notDdFdCbMode.out, isBitRegNow.b);
   tieToLabel('IS_BIT_REG_NOW', isBitRegNow.out, { x: pos.x + 9300, y: pos.y - 7400 });
   const bitRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7420 });
   wire(parent, isBitRegNow.out, bitRegNow.a);
   tieToLabel('PHASE4', bitRegNow.b, { x: pos.x + 9250, y: pos.y - 7420 });
   tieToLabel('BIT_REG_NOW', bitRegNow.out, { x: pos.x + 9450, y: pos.y - 7420 }); // anchor — F we/layer
 
+  const isBitHlRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7440 });
+  wire(parent, isCbX1Active.out, isBitHlRaw.a);
+  wire(parent, dec.z[6]!, isBitHlRaw.b);
   const isBitHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7440 });
-  wire(parent, isCbX1Active.out, isBitHl.a);
-  wire(parent, dec.z[6]!, isBitHl.b);
+  wire(parent, isBitHlRaw.out, isBitHl.a);
+  wire(parent, notDdFdCbMode.out, isBitHl.b);
   tieToLabel('IS_BIT_HL', isBitHl.out, { x: pos.x + 9300, y: pos.y - 7440 });
   const bitHlReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7460 });
   wire(parent, isBitHl.out, bitHlReadNow.a);
@@ -3152,6 +3270,46 @@ export function buildZ80Cpu(
   wire(parent, isBitHl.out, bitHlNow.a);
   tieToLabel('PHASE5', bitHlNow.b, { x: pos.x + 9250, y: pos.y - 7480 });
   tieToLabel('BIT_HL_NOW', bitHlNow.out, { x: pos.x + 9450, y: pos.y - 7480 }); // anchor — F we/layer
+
+  // DD CB / FD CB: BIT y,(IX+d)/(IY+d) — documented z=6 only. After PHASE6
+  // op recapture, PHASE7 reads @ IX+d/IY+d and commits flags from BUS same
+  // phase (mirror ALU A,(IX+d) @ PHASE6 — not BIT_HL's two-phase hold).
+  const isDdCbBit = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7495 });
+  wire(parent, ddCbMode.q[0]!, isDdCbBit.a);
+  wire(parent, isCbX1Active.out, isDdCbBit.b);
+  const isDdCbBitZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7495 });
+  wire(parent, isDdCbBit.out, isDdCbBitZ.a);
+  wire(parent, dec.z[6]!, isDdCbBitZ.b);
+  const bitIxRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7495 });
+  wire(parent, isDdCbBitZ.out, bitIxRaw.a);
+  tieToLabel('PHASE7', bitIxRaw.b, { x: pos.x + 9200, y: pos.y - 7495 });
+  const notDdCbOpReadForBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7485 });
+  tieToLabel('DDCB_OP_READ_NOW', notDdCbOpReadForBit.in, { x: pos.x + 9220, y: pos.y - 7485 });
+  const bitIxNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7495 });
+  wire(parent, bitIxRaw.out, bitIxNow.a);
+  wire(parent, notDdCbOpReadForBit.out, bitIxNow.b);
+  tieToLabel('BIT_IX_NOW', bitIxNow.out, { x: pos.x + 9450, y: pos.y - 7495 }); // anchor — ram.oe, IXDISP, F
+
+  const isFdCbBit = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7510 });
+  wire(parent, fdCbMode.q[0]!, isFdCbBit.a);
+  wire(parent, isCbX1Active.out, isFdCbBit.b);
+  const isFdCbBitZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7510 });
+  wire(parent, isFdCbBit.out, isFdCbBitZ.a);
+  wire(parent, dec.z[6]!, isFdCbBitZ.b);
+  const bitIyRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7510 });
+  wire(parent, isFdCbBitZ.out, bitIyRaw.a);
+  tieToLabel('PHASE7', bitIyRaw.b, { x: pos.x + 9200, y: pos.y - 7510 });
+  const notFdCbOpReadForBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7500 });
+  tieToLabel('FDCB_OP_READ_NOW', notFdCbOpReadForBit.in, { x: pos.x + 9220, y: pos.y - 7500 });
+  const bitIyNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7510 });
+  wire(parent, bitIyRaw.out, bitIyNow.a);
+  wire(parent, notFdCbOpReadForBit.out, bitIyNow.b);
+  tieToLabel('BIT_IY_NOW', bitIyNow.out, { x: pos.x + 9450, y: pos.y - 7510 }); // anchor — ram.oe, IYDISP, F
+
+  const bitIxIyNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7502 });
+  wire(parent, bitIxNow.out, bitIxIyNow.a);
+  wire(parent, bitIyNow.out, bitIxIyNow.b);
+  tieToLabel('BIT_IXIY_NOW', bitIxIyNow.out, { x: pos.x + 9600, y: pos.y - 7502 }); // anchor — shared F we/layer
 
   // One-hot z picks B/C/D/E/H/L/A (no (HL)); y picks which bit to test.
   const bitRegSelect: { reg: Pin[]; z: Pin }[] = [
@@ -3213,9 +3371,12 @@ export function buildZ80Cpu(
   // after hlMemTemp exists (shared src mux: register select vs HLMEM).
   const notCbSetResHl = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7500 });
   wire(parent, dec.z[6]!, notCbSetResHl.in);
+  const isSetResRegRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7500 });
+  wire(parent, isCbSetRes.out, isSetResRegRaw.a);
+  wire(parent, notCbSetResHl.out, isSetResRegRaw.b);
   const isSetResReg = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7500 });
-  wire(parent, isCbSetRes.out, isSetResReg.a);
-  wire(parent, notCbSetResHl.out, isSetResReg.b);
+  wire(parent, isSetResRegRaw.out, isSetResReg.a);
+  wire(parent, notDdFdCbMode.out, isSetResReg.b);
   tieToLabel('IS_SETRES_REG', isSetResReg.out, { x: pos.x + 9300, y: pos.y - 7500 });
   const setResRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7520 });
   wire(parent, isSetResReg.out, setResRegNow.a);
@@ -3237,9 +3398,12 @@ export function buildZ80Cpu(
     tieToLabel(label, gate.out, { x: pos.x + 9600, y: pos.y - 7500 - i * 25 });
   });
 
+  const isSetResHlRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7540 });
+  wire(parent, isCbSetRes.out, isSetResHlRaw.a);
+  wire(parent, dec.z[6]!, isSetResHlRaw.b);
   const isSetResHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7540 });
-  wire(parent, isCbSetRes.out, isSetResHl.a);
-  wire(parent, dec.z[6]!, isSetResHl.b);
+  wire(parent, isSetResHlRaw.out, isSetResHl.a);
+  wire(parent, notDdFdCbMode.out, isSetResHl.b);
   tieToLabel('IS_SETRES_HL', isSetResHl.out, { x: pos.x + 9300, y: pos.y - 7540 });
   const setResHlReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7560 });
   wire(parent, isSetResHl.out, setResHlReadNow.a);
@@ -3265,9 +3429,12 @@ export function buildZ80Cpu(
   // unprefixed x=00 — `NOT_PREFIX_ACTIVE` keeps that quiet.
   const notCbRotHl = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7620 });
   wire(parent, dec.z[6]!, notCbRotHl.in);
+  const isCbRotRegRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7620 });
+  wire(parent, isCbX0Active.out, isCbRotRegRaw.a);
+  wire(parent, notCbRotHl.out, isCbRotRegRaw.b);
   const isCbRotReg = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7620 });
-  wire(parent, isCbX0Active.out, isCbRotReg.a);
-  wire(parent, notCbRotHl.out, isCbRotReg.b);
+  wire(parent, isCbRotRegRaw.out, isCbRotReg.a);
+  wire(parent, notDdFdCbMode.out, isCbRotReg.b);
   tieToLabel('IS_CBROT_REG', isCbRotReg.out, { x: pos.x + 9300, y: pos.y - 7620 });
   const cbRotRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7640 });
   wire(parent, isCbRotReg.out, cbRotRegNow.a);
@@ -3288,9 +3455,12 @@ export function buildZ80Cpu(
     wire(parent, z, gate.b);
     tieToLabel(label, gate.out, { x: pos.x + 9600, y: pos.y - 7620 - i * 25 });
   });
+  const isCbRotHlRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7660 });
+  wire(parent, isCbX0Active.out, isCbRotHlRaw.a);
+  wire(parent, dec.z[6]!, isCbRotHlRaw.b);
   const isCbRotHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7660 });
-  wire(parent, isCbX0Active.out, isCbRotHl.a);
-  wire(parent, dec.z[6]!, isCbRotHl.b);
+  wire(parent, isCbRotHlRaw.out, isCbRotHl.a);
+  wire(parent, notDdFdCbMode.out, isCbRotHl.b);
   tieToLabel('IS_CBROT_HL', isCbRotHl.out, { x: pos.x + 9300, y: pos.y - 7660 });
   const cbRotHlReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7680 });
   wire(parent, isCbRotHl.out, cbRotHlReadNow.a);
@@ -4304,7 +4474,14 @@ export function buildZ80Cpu(
   const irWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 4300 });
   tieToLabel('PHASE0', irWe.a, { x: pos.x + 8950, y: pos.y - 4300 });
   wire(parent, prefixReadNow.out, irWe.b);
-  wire(parent, irWe.out, ir.we);
+  // DD CB / FD CB second IR-only op recapture — never touches activePrefix.we.
+  const ddFdCbOpRead = buildOr(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 4280 });
+  tieToLabel('DDCB_OP_READ_NOW', ddFdCbOpRead.a, { x: pos.x + 8950, y: pos.y - 4280 });
+  tieToLabel('FDCB_OP_READ_NOW', ddFdCbOpRead.b, { x: pos.x + 8950, y: pos.y - 4260 });
+  const irWe2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 4300 });
+  wire(parent, irWe.out, irWe2.a);
+  wire(parent, ddFdCbOpRead.out, irWe2.b);
+  wire(parent, irWe2.out, ir.we);
 
   // ir.q[3..5] (y's own real bits, not dec.y's one-hot lines — see the
   // RST-target doc comment further down for why that distinction matters)
@@ -4638,6 +4815,34 @@ export function buildZ80Cpu(
   const bitHlPBit = bitHlZBit.out;
   const bitHlXBit = hlMemTemp.q[3]!;
   const bitHlYBit = hlMemTemp.q[5]!;
+
+  // BIT y,(IX+d)/(IY+d) flags — same recipe, off BUS while ram.oe drives
+  // (IX+d)/(IY+d) at PHASE7 (same-phase commit, no hlMemTemp hold).
+  let bitIxTest: Pin | null = null;
+  for (let yi = 0; yi < 8; yi++) {
+    const andGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 600, y: pos.y - 6550 + yi * 20 });
+    tieToLabel(`BUS${yi}`, andGate.a, { x: pos.x - 700, y: pos.y - 6550 + yi * 20 });
+    wire(parent, dec.y[yi]!, andGate.b);
+    if (bitIxTest === null) {
+      bitIxTest = andGate.out;
+    } else {
+      const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x - 550, y: pos.y - 6550 + yi * 20 });
+      wire(parent, bitIxTest, orGate.a);
+      wire(parent, andGate.out, orGate.b);
+      bitIxTest = orGate.out;
+    }
+  }
+  const bitIxZBit = buildNot(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 6570 });
+  wire(parent, bitIxTest!, bitIxZBit.in);
+  const bitIxSBit = buildAnd(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 6550 });
+  wire(parent, bitIxTest!, bitIxSBit.a);
+  wire(parent, dec.y[7]!, bitIxSBit.b);
+  const bitIxPBit = bitIxZBit.out;
+  // X/Y from the live BUS byte (bits 3/5) — same simplification as BIT (HL).
+  const bitIxXBitLabel = makeLabel(parent, 'BUS3', { x: pos.x - 500, y: pos.y - 6530 });
+  const bitIxYBitLabel = makeLabel(parent, 'BUS5', { x: pos.x - 500, y: pos.y - 6510 });
+  const bitIxXBit = bitIxXBitLabel.pins.net;
+  const bitIxYBit = bitIxYBitLabel.pins.net;
 
   // SET/RES result byte — src is the z-selected register (bitRegByte) or
   // HLMEM when z=6. Force 1 on SET's y bit, 0 on RES's y bit; other bits
@@ -6721,9 +6926,15 @@ export function buildZ80Cpu(
   const ddMemIncDecAluOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10400, y: pos.y + 220 });
   tieToLabel('DDMEM_INCDEC_READ_NOW', ddMemIncDecAluOe.a, { x: pos.x + 10300, y: pos.y + 220 });
   tieToLabel('DDMEM_ALU_NOW', ddMemIncDecAluOe.b, { x: pos.x + 10300, y: pos.y + 240 });
+  const ddCbOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10400, y: pos.y + 260 });
+  tieToLabel('DDCB_OP_READ_NOW', ddCbOe.a, { x: pos.x + 10300, y: pos.y + 260 });
+  tieToLabel('BIT_IX_NOW', ddCbOe.b, { x: pos.x + 10300, y: pos.y + 280 });
   const ddMemOeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10450, y: pos.y + 210 });
   wire(parent, ddMemLdNOe.out, ddMemOeAny.a);
   wire(parent, ddMemIncDecAluOe.out, ddMemOeAny.b);
+  const ddMemOeAny2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 230 });
+  wire(parent, ddMemOeAny.out, ddMemOeAny2.a);
+  wire(parent, ddCbOe.out, ddMemOeAny2.b);
   const fdDispOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 160 });
   tieToLabel('FDDISP_READ_NOW', fdDispOe.a, { x: pos.x + 10400, y: pos.y + 160 });
   tieToLabel('FDMEMLD_READ_NOW', fdDispOe.b, { x: pos.x + 10400, y: pos.y + 180 });
@@ -6733,12 +6944,18 @@ export function buildZ80Cpu(
   const fdMemIncDecAluOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 220 });
   tieToLabel('FDMEM_INCDEC_READ_NOW', fdMemIncDecAluOe.a, { x: pos.x + 10400, y: pos.y + 220 });
   tieToLabel('FDMEM_ALU_NOW', fdMemIncDecAluOe.b, { x: pos.x + 10400, y: pos.y + 240 });
+  const fdCbOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 260 });
+  tieToLabel('FDCB_OP_READ_NOW', fdCbOe.a, { x: pos.x + 10400, y: pos.y + 260 });
+  tieToLabel('BIT_IY_NOW', fdCbOe.b, { x: pos.x + 10400, y: pos.y + 280 });
   const fdMemOeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10550, y: pos.y + 210 });
   wire(parent, fdMemLdNOe.out, fdMemOeAny.a);
   wire(parent, fdMemIncDecAluOe.out, fdMemOeAny.b);
-  const ddFdDispOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10600, y: pos.y + 180 });
-  wire(parent, ddMemOeAny.out, ddFdDispOe.a);
-  wire(parent, fdMemOeAny.out, ddFdDispOe.b);
+  const fdMemOeAny2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10600, y: pos.y + 230 });
+  wire(parent, fdMemOeAny.out, fdMemOeAny2.a);
+  wire(parent, fdCbOe.out, fdMemOeAny2.b);
+  const ddFdDispOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10650, y: pos.y + 180 });
+  wire(parent, ddMemOeAny2.out, ddFdDispOe.a);
+  wire(parent, fdMemOeAny2.out, ddFdDispOe.b);
   const ramOeFinal4c = buildOr(parent, vcc3, gnd3, { x: pos.x + 10650, y: pos.y + 150 });
   wire(parent, ramOeFinal4b.out, ramOeFinal4c.a);
   wire(parent, ddFdDispOe.out, ramOeFinal4c.b);
@@ -7244,12 +7461,18 @@ export function buildZ80Cpu(
   const ddFdMemLdNAdv = buildOr(parent, vcc, gnd, { x: pos.x - 250, y: pos.y - 1360 });
   tieToLabel('DDMEMLDN_WRITE_NOW', ddFdMemLdNAdv.a, { x: pos.x - 350, y: pos.y - 1360 });
   tieToLabel('FDMEMLDN_WRITE_NOW', ddFdMemLdNAdv.b, { x: pos.x - 350, y: pos.y - 1380 });
+  const ddFdCbOpAdv = buildOr(parent, vcc, gnd, { x: pos.x - 250, y: pos.y - 1400 });
+  tieToLabel('DDCB_OP_ADVANCE_NOW', ddFdCbOpAdv.a, { x: pos.x - 350, y: pos.y - 1400 });
+  tieToLabel('FDCB_OP_ADVANCE_NOW', ddFdCbOpAdv.b, { x: pos.x - 350, y: pos.y - 1420 });
   const ddFdPcAdvAny = buildOr(parent, vcc, gnd, { x: pos.x - 200, y: pos.y - 1340 });
   wire(parent, ddFdDispAdv.out, ddFdPcAdvAny.a);
   wire(parent, ddFdMemLdNAdv.out, ddFdPcAdvAny.b);
+  const ddFdPcAdvAny2 = buildOr(parent, vcc, gnd, { x: pos.x - 150, y: pos.y - 1360 });
+  wire(parent, ddFdPcAdvAny.out, ddFdPcAdvAny2.a);
+  wire(parent, ddFdCbOpAdv.out, ddFdPcAdvAny2.b);
   const pcHoldFinal8 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1350 });
   wire(parent, pcHoldFinal7.out, pcHoldFinal8.a);
-  wire(parent, ddFdPcAdvAny.out, pcHoldFinal8.b);
+  wire(parent, ddFdPcAdvAny2.out, pcHoldFinal8.b);
   const notPhase1 = buildNot(parent, vcc, gnd, { x: pos.x - 200, y: pos.y - 200 });
   wire(parent, pcHoldFinal8.out, notPhase1.in);
   wire(parent, notPhase1.out, pc.load);
@@ -9610,6 +9833,23 @@ export function buildZ80Cpu(
       wire(parent, bitHlFreshBit[i]!, bitHlFMux.pins[muxDef.ports[2]!]!);
       cLayerIn = bitHlFMux.pins[muxDef.ports[3]!]!;
     }
+    // BIT y,(IX+d)/(IY+d) — same recipe, off BUS at PHASE7.
+    if (i !== 0) {
+      const bitIxIyFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8385, y: pos.y + 2231 + i * 100 });
+      tieToLabel('BIT_IXIY_NOW', bitIxIyFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8285, y: pos.y + 2231 + i * 100 });
+      wire(parent, cLayerIn, bitIxIyFMux.pins[muxDef.ports[1]!]!);
+      const bitIxIyFreshBit: Record<number, Pin> = {
+        1: gnd4,
+        2: bitIxPBit,
+        3: bitIxXBit,
+        4: vcc4,
+        5: bitIxYBit,
+        6: bitIxZBit.out,
+        7: bitIxSBit.out,
+      };
+      wire(parent, bitIxIyFreshBit[i]!, bitIxIyFMux.pins[muxDef.ports[2]!]!);
+      cLayerIn = bitIxIyFMux.pins[muxDef.ports[3]!]!;
+    }
     // CB rotate/shift (x=00 — see decode near isCbX0Active): every flag bit
     // fresh from the result (unlike RLCA, which holds S/Z/P). Includes C.
     const cbRotFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8386, y: pos.y + 2230 + i * 100 });
@@ -9731,8 +9971,11 @@ export function buildZ80Cpu(
   const fWeFinal11 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9870, y: pos.y + 2360 });
   wire(parent, fWeFinal10.out, fWeFinal11.a);
   tieToLabel('BIT_HL_NOW', fWeFinal11.b, { x: pos.x + 9770, y: pos.y + 2360 });
+  const fWeFinal11b = buildOr(parent, vcc4, gnd4, { x: pos.x + 9920, y: pos.y + 2365 });
+  wire(parent, fWeFinal11.out, fWeFinal11b.a);
+  tieToLabel('BIT_IXIY_NOW', fWeFinal11b.b, { x: pos.x + 9820, y: pos.y + 2365 });
   const fWeFinal12 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9970, y: pos.y + 2370 });
-  wire(parent, fWeFinal11.out, fWeFinal12.a);
+  wire(parent, fWeFinal11b.out, fWeFinal12.a);
   tieToLabel('CBROT_NOW', fWeFinal12.b, { x: pos.x + 9870, y: pos.y + 2370 });
   wire(parent, fWeFinal12.out, f.we);
 

@@ -403,3 +403,86 @@ describe('buildZ80Cpu — DD: (IX+d) INC/DEC and ALU A,(IX+d)', () => {
     expectHlIyUntouched(h);
   });
 });
+
+describe('buildZ80Cpu — DD CB: BIT y,(IX+d)', () => {
+  /**
+   *  0: DD 21 40 00   LD IX,0x0040
+   *  4: DD CB 02 5E   BIT 3,(IX+2)   ; bit 3 of 0x88 set → Z clear
+   *  8: DD CB 02 66   BIT 4,(IX+2)   ; bit 4 clear → Z set
+   * 12: DD CB 02 7E   BIT 7,(IX+2)   ; bit 7 set → S set, Z clear
+   *
+   * ADDR_BITS=8; seed RAM[0x42]=0x88. HL/IY untouched; RAM unchanged.
+   */
+  const ADDR_BITS = 8;
+  const HL_H = 0x55;
+  const HL_L = 0xaa;
+  const IY_H = 0x66;
+  const IY_L = 0xbb;
+  // F: S Z Y H X P N C — same expectations as z80cpu-bit.test.ts for 0x88
+  const F_BIT3_SET = 0b00011000;
+  const F_BIT4_CLEAR = 0b01011100;
+  const F_BIT7_SET_X = 0b10011000;
+
+  const PROGRAM = (() => {
+    const bytes = new Uint8Array(256);
+    bytes.set([0xdd, 0x21, 0x40, 0x00], 0);
+    bytes.set([0xdd, 0xcb, 0x02, 0x5e], 4);
+    bytes.set([0xdd, 0xcb, 0x02, 0x66], 8);
+    bytes.set([0xdd, 0xcb, 0x02, 0x7e], 12);
+    bytes[0x42] = 0x88;
+    return bytes;
+  })();
+
+  const expectHlIyUntouched = (h: ReturnType<typeof makeZ80Harness>) => {
+    expect(h.readReg(h.cpu.rH.q)).toBe(HL_H);
+    expect(h.readReg(h.cpu.rL.q)).toBe(HL_L);
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(IY_H);
+    expect(h.readReg(h.cpu.rIYL.q)).toBe(IY_L);
+  };
+
+  it('BIT y,(IX+d) tests memory without writing RAM or touching HL/IY', () => {
+    const h = makeZ80Harness(PROGRAM, ADDR_BITS, (cpu, seedReg) => {
+      seedReg(cpu.rB, 0);
+      seedReg(cpu.rC, 0);
+      seedReg(cpu.rD, 0);
+      seedReg(cpu.rE, 0);
+      seedReg(cpu.rH, HL_H);
+      seedReg(cpu.rL, HL_L);
+      seedReg(cpu.rIXH, 0);
+      seedReg(cpu.rIXL, 0);
+      seedReg(cpu.rIYH, IY_H);
+      seedReg(cpu.rIYL, IY_L);
+      seedReg(cpu.sp, 0, ADDR_BITS);
+      seedReg(cpu.aP, 0);
+      seedReg(cpu.fP, 0);
+      seedReg(cpu.bP, 0);
+      seedReg(cpu.cP, 0);
+      seedReg(cpu.dP, 0);
+      seedReg(cpu.eP, 0);
+      seedReg(cpu.hP, 0);
+      seedReg(cpu.lP, 0);
+    });
+
+    h.runInstruction(); // LD IX,0x0040
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x40);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // BIT 3,(IX+2)
+    expect(h.cpu.ram.bytes[0x42]).toBe(0x88);
+    expect(h.readReg(h.cpu.f)).toBe(F_BIT3_SET);
+    expect(h.readReg(h.cpu.pc)).toBe(8);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // BIT 4,(IX+2)
+    expect(h.cpu.ram.bytes[0x42]).toBe(0x88);
+    expect(h.readReg(h.cpu.f)).toBe(F_BIT4_CLEAR);
+    expect(h.readReg(h.cpu.pc)).toBe(12);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // BIT 7,(IX+2)
+    expect(h.cpu.ram.bytes[0x42]).toBe(0x88);
+    expect(h.readReg(h.cpu.f)).toBe(F_BIT7_SET_X);
+    expect(h.readReg(h.cpu.pc)).toBe(16);
+    expectHlIyUntouched(h);
+  });
+});

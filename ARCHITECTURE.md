@@ -12,8 +12,9 @@ prefix table, the `ED` prefix table including a thin IM1 IRQ layer
 (`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and first `DD`/`FD`
 slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY`, HL-clone
 `ADD`/`INC`/`DEC`/`JP`/`LD SP`/`EX (SP)`, plus `(IX+d)`/`(IY+d)` LD
-`r,(IX+d)` / `(IX+d),r` / `(IX+d),n`, `INC`/`DEC (IX+d)`, and ALU
-`A,(IX+d)` — `DD CB` and H→IXH remap still later). Memory map, monitor,
+`r,(IX+d)` / `(IX+d),r` / `(IX+d),n`, `INC`/`DEC (IX+d)`, ALU
+`A,(IX+d)`, and nested `DD CB`/`FD CB` **BIT** `y,(IX+d)`/`(IY+d)` —
+SET/RES/rot and H→IXH remap still later). Memory map, monitor,
 BASIC, and the assembler remain later phases.
 
 ## Layout
@@ -95,9 +96,11 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    First `DD`/`FD` slices: `IX`/`IY` + `LD IX/IY,nn` /
                    `PUSH`/`POP IX/IY` plus HL-clone ADD/INC/DEC/JP/LD SP/EX
                    plus `(IX+d)`/`(IY+d)` LD (`r,(IX+d)`, `(IX+d),r`,
-                   `(IX+d),n`), `INC`/`DEC (IX+d)`, and ALU `A,(IX+d)` —
-                   `DD CB` / H→IXH remap still later — see "DD: IX" /
-                   "FD: IY" and the CB/ED/DD/FD prefix sections below).
+                   `(IX+d),n`), `INC`/`DEC (IX+d)`, ALU `A,(IX+d)`, and
+                   nested `DD CB`/`FD CB` BIT `y,(IX+d)`/`(IY+d)` —
+                   SET/RES/rot and H→IXH remap still later — see "DD: IX" /
+                   "FD: IY" / "DD CB / FD CB" and the CB/ED/DD/FD prefix
+                   sections below).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -2922,14 +2925,13 @@ ever reached the file, just a naming discipline (`raw*` for the four
 unexcluded signals prefix-detection needs, the familiar name for the
 excluded signal everything downstream keeps using unchanged).
 
-**Deliberately not modeled**: nested prefixes (real Z80's own `DD CB d
-op` four-byte sequences, and a prefix immediately following another,
-which real hardware treats as a restart) — this project's one-shot
-"prefix, then real opcode" shape doesn't extend to a *second* prefix byte
-appearing where the real opcode was expected. `isEdActive` was the first
-of the four prefix bits to get a label (LDI); `isCbActive` followed for
-`BIT`; `isDdActive` is now labeled for the IX slice below. `isFdActive`
-is labeled for the IY slice below.
+**Deliberately not modeled**: a prefix immediately following another
+(real hardware treats that as a restart) — this project's one-shot
+"prefix, then real opcode" shape does not restart. Nested `DD CB d op` /
+`FD CB d op` *are* partially modeled (BIT only — see "DD CB / FD CB"
+below). `isEdActive` was the first of the four prefix bits to get a
+label (LDI); `isCbActive` followed for `BIT`; `isDdActive` is labeled
+for the IX slice below. `isFdActive` is labeled for the IY slice below.
 
 Verified against the two existing test files most likely to catch a
 retrofit mistake in the four base group gates (`blocks.test.ts`,
@@ -3030,9 +3032,64 @@ isDdMemAlu     = isDdActive ∧ x[2] ∧ z[6]            // ALU A,(IX+d)
   prefix) so A/F commit like unprefixed ALU. Operand already comes from
   `BUS` when `ram.oe` drives it; `IXDISP_ADDR_NOW` + `ram.oe` OR PHASE6.
 
-`DD CB` and H→IXH remap remain later. Verified by `z80cpu-dd-ix.test.ts`
-(load/push/pop, HL-clone, `(IX+d)` LD, and INC/DEC + ALU programs;
-asserts HL and IY unchanged).
+`DD CB` BIT is below; H→IXH remap remains later. Verified by
+`z80cpu-dd-ix.test.ts` (load/push/pop, HL-clone, `(IX+d)` LD, INC/DEC +
+ALU, and DD CB BIT programs; asserts HL and IY unchanged).
+
+### DD CB / FD CB (BIT y,(IX+d)/(IY+d) only)
+
+`activePrefix` is one-hot — after `DD`, PHASE2 recaptures `CB` into IR and
+latches `isDdActive`; `isCbActive` stays 0, so a bare CB-table decode
+never sees the nested op. Fix: separate mode latches + a second IR-only
+recapture that does **not** rewrite `activePrefix`.
+
+**Mode latch** (`ddCbMode` / `fdCbMode`, 1-bit, CLK wired):
+
+- `we = OR(PHASE0, setNow)`; d-mux resets to 0 on PHASE0 (same shape as
+  `activePrefix`).
+- `setNow = PHASE3 ∧ isDdActive ∧ isCbPrefixRaw` (IR already holds CB after
+  the PHASE2 edge). FD twin with `isFdActive`.
+- Labels: `IS_DDCB_MODE`, `IS_FDCB_MODE`.
+
+**CB table under mode:**
+
+- `cbTableActive = OR(isCbActive, ddCbMode, fdCbMode)` feeds `isCbX0..X3`
+  instead of bare `isCbActive`.
+- Register-form CB (`isBitRegNow` / `isSetResReg` / `isCbRotReg`) and
+  SET/RES/rot (HL) paths AND `NOT(ddCbMode∨fdCbMode)` — CB itself in IR at
+  PHASE4 looks like SET z=3; under mode those paths must stay quiet.
+  Plain BIT (HL) is also gated off under mode so it never forces addr=HL.
+- `ddCbMode` ORs into `isDdMemAny` (FD twin) so existing
+  `DDDISP_READ_NOW` / `DDDISP_ADVANCE_NOW` / `ixDisp` fetch `d` at
+  PHASE4–5.
+
+**Second IR recapture** (prefix latch untouched):
+
+- `DDCB_OP_READ_NOW = ddCbMode ∧ PHASE6` (excludes PHASE5 d-advance).
+- Widens `ir.we` and `ram.oe`. No PC advance on the op fetch — PC stays
+  on the op through PHASE6.
+- `DDCB_OP_ADVANCE_NOW` @ PHASE7 advances past the op (same edge as BIT
+  commit; addr is IX+d, not PC).
+
+**BIT body @ PHASE7:**
+
+- `BIT_IX_NOW = ddCbMode ∧ isCbX1 ∧ z[6] ∧ PHASE7` (op already in IR from
+  the PHASE6 edge). Read @ `(IX+d)`: `ram.oe` + `IXDISP_ADDR_NOW`.
+- Flags same phase from **BUS** (not BIT_HL's two-phase `hlMemTemp`) —
+  mirror ALU `A,(IX+d)` @ PHASE6. F we/mux layer `BIT_IXIY_NOW`.
+- FD mirror with `BIT_IY_NOW` / `IYDISP_ADDR_NOW`.
+
+| Phase | Action |
+|-------|--------|
+| 0–1 | FETCH DD / PC++ |
+| 2–3 | IR←CB, latch DD; PREFIX_ADVANCE; latch ddCbMode |
+| 4–5 | d→ixDisp; advance |
+| 6 | IR←op (2nd recapture; `activePrefix` untouched) |
+| 7 | Read (IX+d); commit BIT flags; advance past op |
+
+SET/RES/rot under DD CB / FD CB (and undocumented z≠6 write-back) remain
+later — may need ring widen. Verified by DD/FD BIT describes in
+`z80cpu-dd-ix.test.ts` / `z80cpu-fd-iy.test.ts`.
 
 ### FD: IY (first slice + HL-clone + (IY+d) mem)
 
@@ -3050,8 +3107,9 @@ PHASE4–7 / PHASE4–5 / PHASE4 bodies, plus the `(IY+d)` mem mirror
   **`INC`/`DEC (IY+d)`** / **ALU `A,(IY+d)`** — FD mirror of the DD
   displacement mem slice.
 
-`FD CB` remains later. Verified by `z80cpu-fd-iy.test.ts` (mirror
-programs; asserts HL and IX unchanged under FD).
+`FD CB` BIT is above (shared "DD CB / FD CB" section); H→IXH remap
+remains later. Verified by `z80cpu-fd-iy.test.ts` (mirror programs;
+asserts HL and IX unchanged under FD).
 
 ### x=10, z=0: LDI/LDD/LDIR/LDDR
 
