@@ -62,11 +62,15 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
   hierarchy.ts    fold() (Ctrl+G: cut a selection out into a reusable chip
                    — refuses a selection containing RAM, see "Real RAM"),
                    foldExposing() (fold()'s stub-wiring trick promoted to a
-                   reusable helper — see blocks.ts), and flatten()
-                   (recursively expand every chip instance back into
-                   transistors for the solver — see below; also where RAM's
-                   `bytes` reference gets preserved across clones, again see
-                   "Real RAM").
+                   reusable helper — see blocks.ts), foldZ80CpuLeavingRam()
+                   (see foldZ80.ts / "Folded Z80CPU placement"), and
+                   flatten() (recursively expand every chip instance back
+                   into transistors for the solver — see below; also where
+                   RAM's `bytes` reference gets preserved across clones,
+                   again see "Real RAM").
+  foldZ80.ts      After + Z80CPU: fold the flat composite into one chip,
+                   leaving RamComponent (and already-wired Inputs) on the
+                   parent so Canvas redraw cost collapses.
   blocks.ts       Structures assembled *using the hierarchy system itself*
                    (fold a bit, place N instances of it) rather than more
                    raw transistors: buildRegister (N register-bit chip
@@ -172,7 +176,8 @@ src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 draw the *currently viewed* level -> sample the soft TTY
                 panel when a 12-bit Z80 RAM is attached -> repeat.
                 `+ Z80CPU` defaults to 12-bit address space, the soft
-                echo monitor program, and auto-run after boot.
+                echo monitor program, auto-run after boot, then folds the
+                transistor guts into one `Z80CPU` chip (RAM stays outside).
 
 test/solver.test.ts      Engine correctness: NOT/NAND/AND truth tables, an
                           SR latch's feedback-held state, and short detection
@@ -229,6 +234,8 @@ test/machine-monitor.test.ts Echo monitor on addrBits=12: prompt + key
                           echo into FB, KEY_STATUS cleared.
 test/softConsole.test.ts Soft M/W/G/R/H commands + loadHexAt.
 test/assembler.test.ts   Mini assembler: LD/JR/labels/DB + error cases.
+test/fold-z80.test.ts    foldZ80CpuLeavingRam: RAM outside, top-level
+                          component count collapses; clocks still tick.
 test/serialize.test.ts   Project round-trip through a real JSON.stringify/
                           parse cycle, including a folded chip instance
                           still simulating correctly after reload; the id
@@ -958,12 +965,30 @@ animation frame. Not a transistor oscillator — same soft trade-off as
 Real RAM / the TTY panel. First boot after place still pays a
 multi-second `flatten()`; later ticks hit the flatten cache.
 
+### Folded Z80CPU placement (Canvas)
+
+`buildZ80Cpu` still builds a flat composite (tests keep that path). The
+interactive `+ Z80CPU` path then calls `foldZ80CpuLeavingRam`
+(`src/sim/foldZ80.ts`): every placed component **except** the
+`RamComponent` is folded into one `Z80CPU` chip. MachineRunner Inputs are
+wired first so they become ports rather than disappearing into the chip.
+Top-level `draw()` then paints one chip box + RAM + a handful of Inputs
+instead of thousands of MUX/REG primitives — the Canvas 2D idle cost that
+previously dominated after place.
+
+**Single folded instance only** on a given top circuit: Z80 internals use
+global `tieToLabel` names (`CLK`, `BUS0`, …) that `flatten()` does not
+namespace; a second folded Z80 would short those nets. Dive-in still shows
+the full transistor guts. Unit tests continue to use the unfolded
+`buildZ80Cpu`.
+
 ### Explicitly later
 
 Full Z80ASM (IX/IY/CB/ED) / BASIC; port-I/O TTY (`OUT`/`IN` devices);
 clear-on-read keyboard in the solver; bitmap graphics beyond text cells;
 drawing glyphs on the transistor canvas itself; free-running unthrottled
-clocks; Z80-native command ROM (vs soft Cmd).
+clocks; Z80-native command ROM (vs soft Cmd); namespaced labels so
+multiple folded Z80 instances can coexist.
 
 ## Decode and execute: a tiny working CPU
 

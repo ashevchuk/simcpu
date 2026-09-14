@@ -1,6 +1,7 @@
 import { buildAlu, buildInstructionRegister, buildMinimalCpu, buildProgramCounter, buildRegister, buildRingCounter, buildStubRom, buildZ80Cpu } from './sim/blocks.js';
 import { ChipLibrary } from './sim/ChipLibrary.js';
 import { Circuit } from './sim/Circuit.js';
+import { foldZ80CpuLeavingRam, newComponentIds } from './sim/foldZ80.js';
 import { flatten, fold, renamePort } from './sim/hierarchy.js';
 import { buildNot, makeInput, makeProbe, makeRam, makeSource, wire } from './sim/library.js';
 import {
@@ -402,8 +403,13 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
   if (program === null) return;
   const pos = snap(camera.screenToWorld({ x: vw() / 2, y: vh() / 2 }, vw(), vh()));
   machineRunner.detach();
+
+  // Snapshot ids so we can fold the flat composite into one chip afterward
+  // (RAM stays outside — see foldZ80CpuLeavingRam).
+  const beforeIds = new Set(editor.circuit.components.keys());
   const cpu = buildZ80Cpu(editor.circuit, library, addrBits, program, pos);
-  refreshChipPalette();
+  const placedIds = newComponentIds(editor.circuit, beforeIds);
+
   if (addrBits >= MACHINE_ADDR_BITS) {
     const simTick = () => {
       const flat = flatten(topCircuit, library);
@@ -413,8 +419,8 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
     };
     machinePanel.attach(cpu.ram);
     machinePanel.bindRunner(machineRunner);
+    // Wire Inputs *before* fold so clocks/seeds become chip ports.
     machineRunner.attach(editor.circuit, library, cpu, simTick);
-    // Boot blocks on first flatten — status hint already warns.
     machineRunner.boot();
     machineRunner.setSpeed('normal');
     machineRunner.setRunning(true);
@@ -424,6 +430,9 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
     machinePanel.detach();
     machineRunner.detach();
   }
+
+  foldZ80CpuLeavingRam(editor.circuit, library, placedIds, pos);
+  refreshChipPalette();
 });
 
 // --- Project & chip file I/O ------------------------------------------------
