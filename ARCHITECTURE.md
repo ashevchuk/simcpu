@@ -7,9 +7,11 @@ all running in the browser, no accounts, no install.
 
 This document covers what exists today: the simulation engine, hierarchy/
 chip-folding, a canvas editor, and a transistor-level Z80-like CPU
-(`buildZ80Cpu`) that executes the unprefixed opcode table plus the
-non-interrupt half of the `ED` prefix table. Memory map, monitor, BASIC,
-and the assembler remain later phases.
+(`buildZ80Cpu`) that executes the unprefixed opcode table, the `CB`
+prefix table, the `ED` prefix table including a thin IM1 IRQ layer
+(`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and leaves `DD`/`FD`
+bodies for later. Memory map, monitor, BASIC, and the assembler remain
+later phases.
 
 ## Layout
 
@@ -83,12 +85,12 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    — x/y/z as one-hot line groups, no meaning assigned), and
                    buildZ80Cpu (a second, separate CPU executing real Z80
                    opcodes across `x=00`/`x=01`/`x=10`/`x=11`, plus the
-                   non-interrupt `ED`-prefix table — block transfers,
-                   `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`,
-                   `IN r,(C)`/`OUT (C),r`, `LD I/R` — see "A real Z80
-                   decoder" and the CB/ED/DD/FD prefix sections below.
-                   `CB` has `BIT`, `SET`/`RES`, and rotates/shifts
-                   (register + `(HL)`); `DD`/`FD`/IRQ ops are still inert).
+                   `ED`-prefix table (block transfers, `NEG`, `ADC`/`SBC
+                   HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN r,(C)`/`OUT (C),r`,
+                   `LD I/R`, and thin IM1 IRQ — `IM 1`/`RETI`/`EI`/`DI`)
+                   and the `CB` table (`BIT`, `SET`/`RES`, rotates/shifts).
+                   `DD`/`FD` bodies remain inert — see "A real Z80
+                   decoder" and the CB/ED/DD/FD prefix sections below).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -2395,13 +2397,13 @@ Nine opcodes/opcode-groups landed in one push, closing out every
 real, buildable gap the project's own instruction set had left: `ADC`/
 `SBC` (`x=10`), `NOP` (already correct, just never had its own test),
 `EX AF,AF'`, `EXX`, `JP (HL)`, `LD SP,HL`, `EX DE,HL`, `EX (SP),HL`, `ALU
-op A,n` (`x=11, z=6`), and `IN A,(n)`/`OUT (n),A`. `DI`/`EI` stay a
-permanent exception (no interrupt line — see Known Simplifications). The
-`CB`/`DD`/`ED`/`FD` prefix bytes were called permanent exceptions in this
-same push; that was true *then* — the prefix *mechanism* and the
-non-interrupt half of `ED` landed in later passes (see "The CB/ED/DD/FD
-prefix mechanism" and the `ED` sections below). `CB`/`DD`/`FD` instruction
-bodies are still deliberately inert.
+op A,n` (`x=11, z=6`), and `IN A,(n)`/`OUT (n),A`. `DI`/`EI` were a
+permanent exception then (no interrupt line); a thin IM1 IRQ layer later
+closed them (see "Thin IM1 IRQ" below). The `CB`/`DD`/`ED`/`FD` prefix
+bytes were called permanent exceptions in this same push; that was true
+*then* — the prefix *mechanism*, the `ED` table, and the `CB` table landed
+in later passes (see "The CB/ED/DD/FD prefix mechanism" and the `ED`/`CB`
+sections below). `DD`/`FD` instruction bodies are still deliberately inert.
 
 **`ADC`/`SBC`** turned out to be exactly the "smaller lift" the very first
 `x=10` doc comment predicted, back when this file had no flags register at
@@ -3575,15 +3577,39 @@ software writes them only via `LD I,A` / `LD R,A`.
 into `I`/`R` via `wrapWithPairCommit` (no flags). `LD A,I`/`LD A,R`
 commit into `A` and refresh every flag bit but `C` — `S`/`Z`/`X`/`Y` off
 the transferred byte, `H`/`N` forced 0, **`P/V` forced 0**. Real Z80
-copies `IFF2` into `P/V` here; this project has no interrupt flip-flops
-yet (same honesty as inert `DI`/`EI`), so the bit is documented stale
-rather than faked. `R` is also not auto-incremented on FETCH/`M1` —
-plain software-visible storage until a refresh model exists.
+copies `IFF2` into `P/V` here; this project still leaves that bit forced
+0 (Known Simplifications) even though `IFF2` now exists for thin IM1 IRQ.
+`R` is also not auto-incremented on FETCH/`M1` — plain software-visible
+storage until a refresh model exists.
 
 Verified with one dedicated round-trip test (`z80cpu-ld-i-r.test.ts`) —
-before the full suite. With this column, every non-interrupt `ED`
-opcode this project can meaningfully execute is closed; `RETN`/`RETI`/
-`IM` wait on IRQ machinery (Known Simplifications).
+before the full suite.
+
+### Thin IM1 IRQ
+
+Maskable interrupt support, deliberately thin: only **IM 1**, no INTACK
+bus cycle, no IM0/IM2, no NMI/`RETN`.
+
+**State.** `IFF1`/`IFF2` and an `IM1` latch (q-only, like `I`/`R` — no
+external seed; `CPU_RESET` clears them to 0). External INT is an internal
+`Input` defaulting to 0 (`cpu.intDrive.value` raises it).
+
+**`EI`/`DI`** (`0xFB`/`0xF3`, `x=11 z=3 y=7/6`): `PHASE2` sets/clears both
+IFFs. No one-instruction EI delay (Known Simplifications).
+
+**`IM 1`** (`ED 0x56`): `PHASE4` sets the mode latch. Other `IM` encodings
+stay inert.
+
+**Accept.** At `PHASE0`, if `IFF1 ∧ IM1 ∧ INT`, force `IR←0xFF` (RST 38h)
+via a mux ahead of `ir.d` (the shared `BUS*` net stays on the RAM side),
+latch `intServing`, clear both IFFs, and suppress `PHASE1`'s PC advance so
+the existing RST push/jump path pushes the interrupted instruction's own
+PC and jumps to `0x38`.
+
+**`RETI`** (`ED 0x4D`): same stack-pop/PC-capture as `RET` (widened
+`readNow` / `retMux`), plus `IFF1←IFF2` on `PHASE4`.
+
+Verified with `z80cpu-irq-im1.test.ts`. `DD`/`FD` remain next.
 
 ### CB x=01: BIT y,r / BIT y,(HL)
 
@@ -4378,19 +4404,13 @@ section's own success story.
   out the CPU" above). `ADC`/`SBC` (`x=10`) and `ALU op A,n` (`x=11,
   z=6`) are real too, reusing `x=10`'s own op-select/`cin`/`bInv`
   machinery unchanged (`dec.y` alone selects the operation, never
-  `dec.x`). `DI`/`EI` (`x=11, z=3, y=6/7`) are the one *permanent* gap in
-  this column, for a reason distinct from every other simplification in
-  this file: implementing them honestly would mean building a real
-  interrupt-enable flip-flop feeding a real interrupt line — and this
-  simulator has no interrupt line, no interrupt-acknowledge cycle,
-  nothing an `IFF1`/`IFF2` flip-flop could meaningfully gate. A flip-flop
-  nobody ever reads would be decoration wearing the shape of a feature,
-  not the feature itself — decoded but deliberately inert, the same
-  honest treatment `HALT` (`0x76`, left inert since this slice has no
-  concept of "stop clocking" either — see "x=01: LD r,r'" above) already
-  gets. `buildZ80Decoder` would extract `DI`'s/`EI`'s own `x`/`y`/`z`
-  fields correctly if asked — nothing downstream just wires them to an
-  action. `H` (half-carry) and the two undocumented flag bits are real
+  `dec.x`). `DI`/`EI` (`x=11, z=3, y=6/7`) now drive real `IFF1`/`IFF2`
+  flip-flops as part of the thin IM1 IRQ layer (see "Thin IM1 IRQ" above) —
+  no longer the permanent gap this paragraph once described. Remaining IRQ
+  gaps are deliberate: no INTACK cycle, no IM0/IM2, no NMI/`RETN`, no
+  one-instruction EI delay, no `R` auto-increment on `M1`, and no
+  `P/V←IFF2` on `LD A,I`/`LD A,R`. `HALT` (`0x76`) stays inert (no "stop
+  clocking" concept — see "x=01: LD r,r'" above). `H` (half-carry) and the two undocumented flag bits are real
   now for the `x=10`/`x=11` ALU group, `INC r`/`DEC r`, and `DAA` itself
   (see "Closing the half-carry gap" above) — `ADD HL,rr` and the
   `RLCA`/`RRCA`/`RLA`/`RRA`/`CPL`/`SCF`/`CCF` group still leave them
@@ -4439,18 +4459,11 @@ section's own success story.
   gates were found live, while designing `NEG`'s, to have never checked
   `dec.x` at all (see "A decode gap found across all sixteen
   block-instruction gates" above) — fixed before `NEG` landed, rather
-  than propagating the same gap into a seventeenth gate. The other three
-  prefix bytes (`CB`/`DD`/`FD`) execute nothing yet — the block-instruction
-  half of `ED`'s table is closed out entirely, plus `NEG`,
-  `ADC HL,rr`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`/`LD dd,(nn)`,
-  `IN r,(C)`/`OUT (C),r`, and `LD I,A`/`LD R,A`/`LD A,I`/`LD A,R` (see the
-  matching sections above). That is the entire non-interrupt `ED` table
-  this project can observe without IRQ machinery. `RETN`/`RETI`/`IM` (and
-  `IFF1`/`IFF2`, auto-increment of `R` on `M1`, and `P/V←IFF2` on
-  `LD A,I`/`LD A,R`) wait until an interrupt line exists; CB is being
-  filled column by column (`BIT`, `SET`/`RES`, and rotates/shifts done —
-  see above); `DD`/`FD` instruction bodies remain deliberately untouched until
-  a thin IRQ layer lands next.
+  than propagating the same gap into a seventeenth gate. `ED` also has
+  thin IM1 IRQ (`IM 1`/`RETI`, plus unprefixed `EI`/`DI` — see "Thin IM1
+  IRQ" above). `CB` is closed for `BIT`/`SET`/`RES`/rotates (see above).
+  `DD`/`FD` instruction bodies remain deliberately untouched — next after
+  IRQ.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this

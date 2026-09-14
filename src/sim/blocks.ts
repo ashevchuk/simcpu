@@ -22,6 +22,7 @@ import {
   buildXor,
   chipInstanceHeight,
   makeChipInstance,
+  makeInput,
   makeLabel,
   makeRam,
   makeSource,
@@ -859,6 +860,11 @@ export interface Z80Cpu {
   fP: Register; // F' — A''s own shadow flags, identical contract
   rI: Pin[]; // I — interrupt vector base (q only); LD I,A / LD A,I (see "x=01, z=7, y=0..3"). No external seed — program `LD I,A` is the write path (avoids a floating we on every pre-existing test).
   rR: Pin[]; // R — refresh counter (q only); LD R,A / LD A,R. Same contract; not auto-incremented on M1 (Known Simplifications).
+  iff1: Pin[]; // IFF1 (q only) — EI/DI/INT-accept/RETI write it; no external seed (same contract as rI)
+  iff2: Pin[]; // IFF2 (q only) — EI/DI/INT-accept write it; RETI copies iff2→iff1
+  im1: Pin[]; // IM 1 latch (q only) — `ED 0x56` sets it
+  int: Pin; // maskable-INT net (active high), driven by the internal `intDrive` Input (defaults to 0)
+  intDrive: { value: 0 | 1 }; // raise/clear INT by writing `.value` (same Input contract clocks use)
   bP: Register; // B'/C'/D'/E'/H'/L' — EXX's own shadow register-pair set, identical seed-path contract (see "x=11: EXX")
   cP: Register;
   dP: Register;
@@ -2008,6 +2014,14 @@ export function buildZ80Cpu(
   // see Known Simplifications.
   const regI = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 3800 });
   const regR = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 4600 });
+  // Thin IM1 IRQ state — IFF1/IFF2, IM 1 latch, and a one-instruction
+  // "serving" latch that suppresses PHASE1's PC advance while RST 38h
+  // reuses the existing stack/jump path. Seed contract matches rB
+  // (external d/we); INT is a genuine external sink like ioPortDataIn.
+  const iff1 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 3800 });
+  const iff2 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4000 });
+  const im1 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4200 });
+  const intServing = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4400 });
   const alu = buildAlu(parent, library, 8, { x: pos.x + 3400, y: pos.y + 2400 });
   const fsm = buildRingCounter(parent, library, 8, { x: pos.x, y: pos.y + 3600 }); // FETCH/INCREMENT/EXEC1-EXEC6 — see the doc comment above ("x=11: SP, PUSH/POP, RET, RST n" for why a 4th phase exists; "x=00, z=1: LD dd,nn" for why a 5th and 6th do too; "x=11: CALL nn" for why a 7th and 8th do too). Widening is, again, a pure parameter change — buildRingCounter is fully generic (any N>=2), and every existing PHASE0-PHASE5 label keeps its exact ring position, the two new phases appended after EXEC4, before the wrap back to FETCH.
   const dec = buildZ80Decoder(parent, ir.q, { x: pos.x + 8600, y: pos.y });
@@ -2037,6 +2051,7 @@ export function buildZ80Cpu(
   const tieToLabel = (name: string, p: Pin, labelPos: Point): void => {
     wire(parent, p, makeLabel(parent, name, labelPos).pins.net);
   };
+  tieToLabel('CPU_RESET', pc.reset, { x: pos.x - 50, y: pos.y - 80 }); // anchor — IFF/IM1 power-on clear (far)
 
   // `EX AF,AF'` (see "x=00: EX AF,AF'" above) is a real *swap*, both
   // directions committing on the same edge: A gets A''s old value, A' gets
@@ -2090,6 +2105,38 @@ export function buildZ80Cpu(
   // labels once each, right here, instead of redrawing that whole spread
   // as 13 separate long lines.
   fsm.phase.forEach((p, k) => tieToLabel(`PHASE${k}`, p!, { x: pos.x + k * 100, y: pos.y + 3500 }));
+
+  // --- Thin IM1 IRQ accept ------------------------------------------------
+  // Maskable INT is accepted only when IFF1, IM1, and the external `int`
+  // pin are all high at FETCH. Force IR to `0xFF` (RST 38h) on that edge,
+  // latch `intServing` so PHASE1 does not advance PC (the pushed return
+  // address must be the interrupted instruction's own PC), clear both
+  // IFFs, then let the existing RST push/jump path run. No INTACK cycle,
+  // no IM0/IM2 — see Known Simplifications.
+  const intIffAndIm = buildAnd(parent, vcc3, gnd3, { x: pos.x + 2050, y: pos.y + 4600 });
+  wire(parent, iff1.q[0]!, intIffAndIm.a);
+  wire(parent, im1.q[0]!, intIffAndIm.b);
+  const intPending = buildAnd(parent, vcc3, gnd3, { x: pos.x + 2100, y: pos.y + 4600 });
+  wire(parent, intIffAndIm.out, intPending.a);
+  // Default INT low via an internal Input — every FETCH samples this, so a
+  // floating pin would be unsafe the way unused `ioPortDataIn` bits are not.
+  // Callers raise it through `intDrive.value` (exposed on the return object).
+  const intDrive = makeInput(parent, 0, { x: pos.x + 1950, y: pos.y + 4600 });
+  wire(parent, intDrive.pins.out, intPending.b);
+  const intPin = intDrive.pins.out;
+  const intAcceptNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 2150, y: pos.y + 4600 });
+  wire(parent, intPending.out, intAcceptNow.a);
+  tieToLabel('PHASE0', intAcceptNow.b, { x: pos.x + 2050, y: pos.y + 4620 });
+  tieToLabel('INT_ACCEPT_NOW', intAcceptNow.out, { x: pos.x + 2250, y: pos.y + 4600 }); // anchor — IR force mux, IFF clear, intServing we/d
+  // Every FETCH writes intServing: 1 on accept, 0 otherwise — so it powers
+  // on clean (not Z) and clears itself on the next instruction's FETCH
+  // without a separate PHASE7 term.
+  tieToLabel('PHASE0', intServing.we, { x: pos.x + 2050, y: pos.y + 4480 });
+  wire(parent, intAcceptNow.out, intServing.d[0]!);
+  const notIntServing = buildNot(parent, vcc3, gnd3, { x: pos.x + 2200, y: pos.y + 4440 });
+  wire(parent, intServing.q[0]!, notIntServing.in);
+  tieToLabel('NOT_INT_SERVING', notIntServing.out, { x: pos.x + 2300, y: pos.y + 4440 }); // anchor — pcHold's PHASE1 term
+  tieToLabel('INT_SERVING', intServing.q[0]!, { x: pos.x + 2300, y: pos.y + 4420 });
 
   // --- CB/ED/DD/FD prefix bytes --------------------------------------
   // Real Z80 puts all four prefix opcodes in x=11's own z=3/z=5 columns —
@@ -3001,11 +3048,11 @@ export function buildZ80Cpu(
   const negCBit = negCChain;
 
   // x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R (real 0xED
-  // 0x47/0x4F/0x57/0x5F) — the last non-interrupt ED column this project
-  // can close without IRQ machinery. Collides with unprefixed `LD y,A`
+  // 0x47/0x4F/0x57/0x5F). Collides with unprefixed `LD y,A`
   // (`z=7`) the same way RRD/RLD (y=4/5) does. Single PHASE4 after the
-  // ED prefix: copy A→I/R, or I/R→A with S/Z/H=0/N=0/P/V=0 (IFF2 absent
-  // — see Known Simplifications) / X/Y from the transferred byte; C held.
+  // ED prefix: copy A→I/R, or I/R→A with S/Z/H=0/N=0/P/V=0 (IFF2 exists
+  // for thin IM1 IRQ but is not copied into P/V here — Known Simplifications)
+  // / X/Y from the transferred byte; C held.
   const isLdIA = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5680 });
   const isLdIAStage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5680 });
   wire(parent, isEdX1Active.out, isLdIAStage.a);
@@ -3055,6 +3102,30 @@ export function buildZ80Cpu(
   wire(parent, ldAINow.out, ldAIrNow.a);
   wire(parent, ldARNow.out, ldAIrNow.b);
   tieToLabel('LDAIR_NOW', ldAIrNow.out, { x: pos.x - 700, y: pos.y - 5730 }); // anchor — A's we/mux + F we/layer
+
+  // Thin IRQ: `IM 1` (ED 0x56 — y=2, z=6) and `RETI` (ED 0x4D — y=1, z=5).
+  // Both commit on PHASE4 like every other ED x=01 body. RETI reuses RET's
+  // stack-pop/PC-capture path (widened below); IM 1 only sets the mode latch.
+  const isIm1 = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5780 });
+  const isIm1Stage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5780 });
+  wire(parent, isEdX1Active.out, isIm1Stage.a);
+  wire(parent, dec.y[2]!, isIm1Stage.b);
+  wire(parent, isIm1Stage.out, isIm1.a);
+  wire(parent, dec.z[6]!, isIm1.b);
+  const im1Now = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5780 });
+  wire(parent, isIm1.out, im1Now.a);
+  tieToLabel('PHASE4', im1Now.b, { x: pos.x - 950, y: pos.y - 5760 });
+  tieToLabel('IM1_NOW', im1Now.out, { x: pos.x - 800, y: pos.y - 5780 }); // anchor — im1's own write mux
+  const isReti = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5800 });
+  const isRetiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5800 });
+  wire(parent, isEdX1Active.out, isRetiStage.a);
+  wire(parent, dec.y[1]!, isRetiStage.b);
+  wire(parent, isRetiStage.out, isReti.a);
+  wire(parent, dec.z[5]!, isReti.b);
+  const retiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5800 });
+  wire(parent, isReti.out, retiNow.a);
+  tieToLabel('PHASE4', retiNow.b, { x: pos.x - 950, y: pos.y - 5780 });
+  tieToLabel('RETI_NOW', retiNow.out, { x: pos.x - 800, y: pos.y - 5800 }); // anchor — readNow / retMux / IFF1←IFF2
 
   // x=01, z=7, y=4/y=5: RRD/RLD (real 0xED 0x67/0x6F) — a 12-bit BCD
   // nibble rotate spanning `A`'s own low nibble and both of `(HL)`'s,
@@ -3468,19 +3539,21 @@ export function buildZ80Cpu(
   }
   pc.q.forEach((q, i) => tieToLabel(`REGPC${i}`, q, { x: pos.x - 100, y: pos.y - 40 - i * 20 }));
 
-  // FETCH (phase 0): RAM drives the bus, IR captures it. `ir.we` itself is
-  // wired above (`irWe`) — PHASE0 unconditionally, plus a second, later
-  // term for the CB/ED/DD/FD prefix bytes' own second-byte recapture — not
-  // a bare label anchor here anymore. (ram.pins.oe/we are wired below,
-  // once the decode logic that gates them exists.) IR's own `d` is this
-  // composite's actual shared-bus net — RAM's data pins wire straight to
-  // it (short, local, no label needed), and it's also tied to the
-  // `BUS0`-`BUS7` labels every other bus touch point below uses, so it's
-  // the one thing anchoring the label group to a real net rather than the
-  // labels forming a same-named-but-disconnected island.
+  // FETCH (phase 0): RAM drives the bus; IR captures it — unless thin IM1
+  // IRQ accept forces every IR bit to 1 (`0xFF` = RST 38h) on that same
+  // edge. The shared `BUS*` net stays on the RAM side of the mux so every
+  // other bus driver/reader is unchanged; only IR's own `d` sees the force.
+  // `ir.we` itself is wired above (`irWe`) — PHASE0 unconditionally, plus
+  // a second, later term for the CB/ED/DD/FD prefix bytes' own second-byte
+  // recapture — not a bare label anchor here anymore. (ram.pins.oe/we are
+  // wired below, once the decode logic that gates them exists.)
   ramDataPins(ram).forEach((p, i) => {
-    wire(parent, p, ir.d[i]!);
-    tieToLabel(`BUS${i}`, ir.d[i]!, { x: pos.x + 2500, y: pos.y - 60 - i * 20 });
+    tieToLabel(`BUS${i}`, p, { x: pos.x + 2500, y: pos.y - 60 - i * 20 });
+    const irForceMux = makeChipInstance(parent, muxDef, { x: pos.x + 2550, y: pos.y - 60 - i * 100 });
+    tieToLabel('INT_ACCEPT_NOW', irForceMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2450, y: pos.y - 60 - i * 100 });
+    wire(parent, p, irForceMux.pins[muxDef.ports[1]!]!); // in0: normal FETCH from RAM
+    wire(parent, vcc3, irForceMux.pins[muxDef.ports[2]!]!); // in1: force 1 (RST 38h)
+    wire(parent, irForceMux.pins[muxDef.ports[3]!]!, ir.d[i]!);
   });
 
   // Real Z80 decode: x=10 (dec.x[2]) is ALU-on-register, x=01 (dec.x[1]) is
@@ -4791,10 +4864,18 @@ export function buildZ80Cpu(
   // popReadNow OR retNow — widened further below (see "x=11: RET cc") once
   // `RET cc`'s own conditional pop signal exists; that widening needs
   // `conditionTrue`, itself only built later inside "x=11: JP cc,nn", so
-  // the *final* `readNow` const lives down there, not here.
+  // the *final* `readNow` const lives down there, not here. RETI (ED 0x4D)
+  // joins here as a fourth pop source — same SP+/PC-from-bus shape as RET.
   const readNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 850 });
   wire(parent, popReadNow.out, readNowStage.a);
   wire(parent, retNow.out, readNowStage.b);
+  const readNowStageReti = buildOr(parent, vcc3, gnd3, { x: pos.x + 10150, y: pos.y + 850 });
+  wire(parent, readNowStage.out, readNowStageReti.a);
+  tieToLabel('RETI_NOW', readNowStageReti.b, { x: pos.x + 10050, y: pos.y + 850 });
+  const retOrRetiNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 920 });
+  wire(parent, retNow.out, retOrRetiNow.a);
+  tieToLabel('RETI_NOW', retOrRetiNow.b, { x: pos.x + 10000, y: pos.y + 920 });
+  tieToLabel('RET_OR_RETI_NOW', retOrRetiNow.out, { x: pos.x + 10200, y: pos.y + 920 }); // anchor — PC's own retMux (far)
   // RST pushes PC on EXEC1, then jumps to its fixed target on EXEC2 — NOT
   // both on the same edge. First version did both on EXEC1: the push-data
   // driver (below) reads `pc.q` combinationally, and RAM's write (like any
@@ -4815,9 +4896,9 @@ export function buildZ80Cpu(
   // JP nn: z=3, y=0 (real 0xC3) — see the doc comment above ("x=11: JP nn")
   // for the full derivation. z=3's other y values that this slice owns
   // (EX (SP),HL, EX DE,HL, OUT (n),A, IN A,(n), and the CB prefix detect)
-  // are implemented elsewhere; DI/EI stay inert (no interrupt line).
-  // Reuses `LD dd,nn`'s exact read-low/advance/read-high phase shape
-  // (PHASE2-4) — the difference is entirely in PHASE5: `LD dd,nn`
+  // are implemented elsewhere; DI/EI (y=6/7) now drive IFF1/IFF2 (thin
+  // IM1 IRQ). Reuses `LD dd,nn`'s exact read-low/advance/read-high phase
+  // shape (PHASE2-4) — the difference is entirely in PHASE5: `LD dd,nn`
   // advances `PC` a third time there, `JP nn` *overwrites* it with the
   // freshly-read target instead, so PHASE5 is deliberately left OUT of
   // `pcHold`'s own OR-chain for this instruction (unlike
@@ -4827,6 +4908,20 @@ export function buildZ80Cpu(
   const isX11Z3 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 2900 });
   wire(parent, isStackGroup, isX11Z3.a);
   wire(parent, dec.z[3]!, isX11Z3.b);
+  const isDi = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 2980 });
+  wire(parent, isX11Z3.out, isDi.a);
+  wire(parent, dec.y[6]!, isDi.b);
+  const diNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2980 });
+  wire(parent, isDi.out, diNow.a);
+  tieToLabel('PHASE2', diNow.b, { x: pos.x + 9200, y: pos.y - 2960 });
+  tieToLabel('DI_NOW', diNow.out, { x: pos.x + 9400, y: pos.y - 2980 }); // anchor — IFF1/IFF2 clear
+  const isEi = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 3010 });
+  wire(parent, isX11Z3.out, isEi.a);
+  wire(parent, dec.y[7]!, isEi.b);
+  const eiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 3010 });
+  wire(parent, isEi.out, eiNow.a);
+  tieToLabel('PHASE2', eiNow.b, { x: pos.x + 9200, y: pos.y - 2990 });
+  tieToLabel('EI_NOW', eiNow.out, { x: pos.x + 9400, y: pos.y - 3010 }); // anchor — IFF1/IFF2 set
   const isJpNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2900 });
   wire(parent, isX11Z3.out, isJpNn.a);
   wire(parent, dec.y[0]!, isJpNn.b);
@@ -5037,14 +5132,14 @@ export function buildZ80Cpu(
   wire(parent, conditionTrue!, retCcTakenNow.b);
   tieToLabel('RETCC_TAKEN_NOW', retCcTakenNow.out, { x: pos.x + 10000, y: pos.y - 3950 }); // anchor — readNow's own widening (below) and PC's own retCcMux (far) both read this
 
-  // `readNow`'s real, final definition — `readNowStage` (popReadNow OR
-  // retNow, built with unconditional RET/POP long before `RET cc` or
-  // `conditionTrue` existed) widens a third term here, exactly the same
-  // "gated already by `conditionTrue` inside the term itself, no extra
-  // check at the `OR` gate" shape `CALL cc,nn`'s own `stackWriteNow`
+  // `readNow`'s real, final definition — `readNowStageReti` (popReadNow OR
+  // retNow OR retiNow, built with unconditional RET/POP/RETI long before
+  // `RET cc` or `conditionTrue` existed) widens a further term here, exactly
+  // the same "gated already by `conditionTrue` inside the term itself, no
+  // extra check at the `OR` gate" shape `CALL cc,nn`'s own `stackWriteNow`
   // widening used.
   const readNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 10150, y: pos.y + 870 });
-  wire(parent, readNowStage.out, readNow.a);
+  wire(parent, readNowStageReti.out, readNow.a);
   tieToLabel('RETCC_TAKEN_NOW', readNow.b, { x: pos.x + 10050, y: pos.y + 870 });
 
   // x=00, z=0, y=4..7: JR cc,e (real 0x20/0x28/0x30/0x38 — NZ/Z/NC/C only,
@@ -5945,9 +6040,14 @@ export function buildZ80Cpu(
   // to a computed target. With LDIMM8_ADVANCE_NOW=0 (every instruction
   // except `LD r,n`, always, since it's PHASE3-gated and no other group
   // uses that phase for this purpose) this is exactly the original
-  // PHASE1-only condition, unchanged.
+  // PHASE1-only condition, unchanged — except thin IM1 IRQ accept ANDs
+  // PHASE1 with NOT_INT_SERVING so the pushed return address stays the
+  // interrupted instruction's PC (RST 38h path reuses the rest).
+  const phase1Advance = buildAnd(parent, vcc, gnd, { x: pos.x - 350, y: pos.y - 250 });
+  tieToLabel('PHASE1', phase1Advance.a, { x: pos.x - 450, y: pos.y - 250 });
+  tieToLabel('NOT_INT_SERVING', phase1Advance.b, { x: pos.x - 450, y: pos.y - 230 });
   const pcHold = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 250 });
-  tieToLabel('PHASE1', pcHold.a, { x: pos.x - 400, y: pos.y - 250 });
+  wire(parent, phase1Advance.out, pcHold.a);
   tieToLabel('LDIMM8_ADVANCE_NOW', pcHold.b, { x: pos.x - 400, y: pos.y - 220 });
   // LD dd,nn (see "x=00, z=1: LD dd,nn" above) needs PC to advance a
   // *third* and *fourth* time in one instruction — past the low immediate
@@ -6158,9 +6258,9 @@ export function buildZ80Cpu(
 
   pc.q.forEach((q, i) => {
     const retMux = makeChipInstance(parent, muxDef, { x: pos.x - 400, y: pos.y - 300 - i * 100 });
-    wire(parent, retNow.out, retMux.pins[muxDef.ports[0]!]!); // phase-restricted (EXEC1 only) — see popReadNow/retNow above
+    tieToLabel('RET_OR_RETI_NOW', retMux.pins[muxDef.ports[0]!]!, { x: pos.x - 500, y: pos.y - 280 - i * 100 }); // RET or RETI — see retOrRetiNow above
     wire(parent, q, retMux.pins[muxDef.ports[1]!]!); // in0: hold (default — self-loop)
-    tieToLabel(`BUS${i}`, retMux.pins[muxDef.ports[2]!]!, { x: pos.x - 500, y: pos.y - 300 - i * 100 }); // in1: RET's popped byte (the bus)
+    tieToLabel(`BUS${i}`, retMux.pins[muxDef.ports[2]!]!, { x: pos.x - 500, y: pos.y - 300 - i * 100 }); // in1: RET/RETI's popped byte (the bus)
 
     const rstMux = makeChipInstance(parent, muxDef, { x: pos.x - 200, y: pos.y - 300 - i * 100 });
     wire(parent, rstJumpNow.out, rstMux.pins[muxDef.ports[0]!]!); // EXEC2, not EXEC1 — see rstNow/rstJumpNow above
@@ -7085,6 +7185,75 @@ export function buildZ80Cpu(
   wire(parent, gnd5, rRExt.we);
   aP.q.forEach((q, i) => tieToLabel(`APOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 700 + i * 20 })); // anchor — A's own write mux (far) reads this
   fP.q.forEach((q, i) => tieToLabel(`FPOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 300 + i * 20 })); // anchor — F's own write mux (far) reads this
+
+  // Thin IRQ: IFF1/IFF2/IM1 write-back — seed path on the exposed Register,
+  // internal commits via DI/EI/INT-accept/RETI/IM1_NOW. Mux priority for
+  // IFF1: clear (DI|accept) > EI=1 > RETI←IFF2 > seed. IFF2 omits RETI.
+  const iff1Clear = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 900 });
+  tieToLabel('DI_NOW', iff1Clear.a, { x: pos.x + 12000, y: pos.y - 900 });
+  tieToLabel('INT_ACCEPT_NOW', iff1Clear.b, { x: pos.x + 12000, y: pos.y - 880 });
+  const iff1RetiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 900 });
+  tieToLabel('RETI_NOW', iff1RetiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 900 });
+  const iff1SeedD = iff1RetiMux.pins[muxDef.ports[1]!]!; // in0: seed (or fall-through)
+  wire(parent, iff2.q[0]!, iff1RetiMux.pins[muxDef.ports[2]!]!); // in1: IFF2
+  const iff1EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12300, y: pos.y - 900 });
+  tieToLabel('EI_NOW', iff1EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12200, y: pos.y - 900 });
+  wire(parent, iff1RetiMux.pins[muxDef.ports[3]!]!, iff1EiMux.pins[muxDef.ports[1]!]!);
+  wire(parent, vcc5, iff1EiMux.pins[muxDef.ports[2]!]!);
+  const iff1ClearMux = makeChipInstance(parent, muxDef, { x: pos.x + 12400, y: pos.y - 900 });
+  wire(parent, iff1Clear.out, iff1ClearMux.pins[muxDef.ports[0]!]!);
+  wire(parent, iff1EiMux.pins[muxDef.ports[3]!]!, iff1ClearMux.pins[muxDef.ports[1]!]!);
+  wire(parent, gnd5, iff1ClearMux.pins[muxDef.ports[2]!]!);
+  wire(parent, iff1ClearMux.pins[muxDef.ports[3]!]!, iff1.d[0]!);
+  const iff1We1 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 820 });
+  tieToLabel('DI_NOW', iff1We1.a, { x: pos.x + 12000, y: pos.y - 820 });
+  tieToLabel('EI_NOW', iff1We1.b, { x: pos.x + 12000, y: pos.y - 800 });
+  const iff1We2 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12200, y: pos.y - 820 });
+  wire(parent, iff1We1.out, iff1We2.a);
+  tieToLabel('INT_ACCEPT_NOW', iff1We2.b, { x: pos.x + 12100, y: pos.y - 800 });
+  const iff1We3 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12300, y: pos.y - 820 });
+  wire(parent, iff1We2.out, iff1We3.a);
+  tieToLabel('RETI_NOW', iff1We3.b, { x: pos.x + 12200, y: pos.y - 800 });
+  const iff1WeFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 12400, y: pos.y - 820 });
+  wire(parent, iff1We3.out, iff1WeFinal.a);
+  wire(parent, gnd5, iff1WeFinal.b); // no external seed — EI/DI/accept/RETI only (same as I/R)
+  wire(parent, iff1WeFinal.out, iff1.we);
+  wire(parent, gnd5, iff1SeedD);
+
+  const iff2Clear = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 700 });
+  tieToLabel('DI_NOW', iff2Clear.a, { x: pos.x + 12000, y: pos.y - 700 });
+  tieToLabel('INT_ACCEPT_NOW', iff2Clear.b, { x: pos.x + 12000, y: pos.y - 680 });
+  const iff2EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 700 });
+  tieToLabel('EI_NOW', iff2EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 700 });
+  const iff2SeedD = iff2EiMux.pins[muxDef.ports[1]!]!;
+  wire(parent, vcc5, iff2EiMux.pins[muxDef.ports[2]!]!);
+  const iff2ClearMux = makeChipInstance(parent, muxDef, { x: pos.x + 12300, y: pos.y - 700 });
+  wire(parent, iff2Clear.out, iff2ClearMux.pins[muxDef.ports[0]!]!);
+  wire(parent, iff2EiMux.pins[muxDef.ports[3]!]!, iff2ClearMux.pins[muxDef.ports[1]!]!);
+  wire(parent, gnd5, iff2ClearMux.pins[muxDef.ports[2]!]!);
+  wire(parent, iff2ClearMux.pins[muxDef.ports[3]!]!, iff2.d[0]!);
+  const iff2We1 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 620 });
+  tieToLabel('DI_NOW', iff2We1.a, { x: pos.x + 12000, y: pos.y - 620 });
+  tieToLabel('EI_NOW', iff2We1.b, { x: pos.x + 12000, y: pos.y - 600 });
+  const iff2We2 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12200, y: pos.y - 620 });
+  wire(parent, iff2We1.out, iff2We2.a);
+  tieToLabel('INT_ACCEPT_NOW', iff2We2.b, { x: pos.x + 12100, y: pos.y - 600 });
+  const iff2WeFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 12300, y: pos.y - 620 });
+  wire(parent, iff2We2.out, iff2WeFinal.a);
+  wire(parent, gnd5, iff2WeFinal.b);
+  wire(parent, iff2WeFinal.out, iff2.we);
+  wire(parent, gnd5, iff2SeedD);
+
+  const im1Mux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 500 });
+  tieToLabel('IM1_NOW', im1Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 500 });
+  const im1SeedD = im1Mux.pins[muxDef.ports[1]!]!;
+  wire(parent, vcc5, im1Mux.pins[muxDef.ports[2]!]!);
+  wire(parent, im1Mux.pins[muxDef.ports[3]!]!, im1.d[0]!);
+  const im1WeFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 12300, y: pos.y - 500 });
+  tieToLabel('IM1_NOW', im1WeFinal.a, { x: pos.x + 12200, y: pos.y - 500 });
+  wire(parent, gnd5, im1WeFinal.b);
+  wire(parent, im1WeFinal.out, im1.we);
+  wire(parent, gnd5, im1SeedD);
 
   // INC r/DEC r (x=00, z=4/z=5 — see the doc comment above) needs a
   // *fourth* layer on top: `wrapWithPairCommit` is generic enough to reuse
@@ -8420,6 +8589,10 @@ export function buildZ80Cpu(
   tieToLabel('CLK', fP.clk, { x: pos.x + 8000, y: pos.y + 3740 });
   tieToLabel('CLK', regI.clk, { x: pos.x + 2600, y: pos.y + 3740 }); // same checklist — see "x=01, z=7, y=0..3: LD I/R"
   tieToLabel('CLK', regR.clk, { x: pos.x + 2600, y: pos.y + 4540 });
+  tieToLabel('CLK', iff1.clk, { x: pos.x + 2000, y: pos.y + 3740 }); // thin IM1 IRQ — same checklist, every register
+  tieToLabel('CLK', iff2.clk, { x: pos.x + 2000, y: pos.y + 3940 });
+  tieToLabel('CLK', im1.clk, { x: pos.x + 2000, y: pos.y + 4140 });
+  tieToLabel('CLK', intServing.clk, { x: pos.x + 2000, y: pos.y + 4340 });
   tieToLabel('CLK', bP.clk, { x: pos.x + 5000, y: pos.y + 3740 }); // same checklist item, every time, no exceptions — see "x=11: EXX" below
   tieToLabel('CLK', cP.clk, { x: pos.x + 5000, y: pos.y + 4540 });
   tieToLabel('CLK', dP.clk, { x: pos.x + 6200, y: pos.y + 3740 });
@@ -8632,6 +8805,11 @@ export function buildZ80Cpu(
     fP: fPExt,
     rI: regI.q,
     rR: regR.q,
+    iff1: iff1.q,
+    iff2: iff2.q,
+    im1: im1.q,
+    int: intPin,
+    intDrive,
     bP: bPExt,
     cP: cPExt,
     dP: dPExt,

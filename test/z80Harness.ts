@@ -35,6 +35,8 @@ export interface Z80Harness {
   levelAt: (pinId: string) => Level;
   /** Live Inputs wired to `cpu.ioPortDataIn`, if `ioPortReply` was given. */
   ioDevice?: { value: 0 | 1 }[];
+  /** Live Input wired to maskable INT (`cpu.intDrive`). Default 0. */
+  intInput: { value: 0 | 1 };
   phaseClk: { value: 0 | 1 };
   dataClk: { value: 0 | 1 };
 }
@@ -150,6 +152,7 @@ export function makeZ80Harness(
     readPin: (pin) => levelAt(state, netMap, pin.id),
     levelAt: (pinId) => levelAt(state, netMap, pinId),
     ioDevice,
+    intInput: cpu.intDrive,
     phaseClk,
     dataClk,
   };
