@@ -5,10 +5,11 @@ A transistor-level digital circuit simulator, in the spirit of
 gates from wires, and eventually a Z80-flavored 8-bit computer from gates —
 all running in the browser, no accounts, no install.
 
-This document covers what exists today (Phase 0/1 of the project plan: the
-simulation engine, hierarchy/chip-folding, and a minimal editor UI). CPU,
-memory map, monitor, BASIC and the assembler are later phases, not yet
-started.
+This document covers what exists today: the simulation engine, hierarchy/
+chip-folding, a canvas editor, and a transistor-level Z80-like CPU
+(`buildZ80Cpu`) that executes the unprefixed opcode table plus the
+non-interrupt half of the `ED` prefix table. Memory map, monitor, BASIC,
+and the assembler remain later phases.
 
 ## Layout
 
@@ -80,11 +81,13 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    STORE/LOAD — see "Decode and execute" below),
                    buildZ80Decoder (real `xxyyyzzz` opcode-field extraction
                    — x/y/z as one-hot line groups, no meaning assigned), and
-                   buildZ80Cpu (a second, separate tiny CPU executing real
-                   Z80 opcodes for three groups — `x=10` ALU-on-register,
-                   `x=01` `LD r,r'`, and a real subset of `x=11` (flags,
-                   SP, PUSH/POP, RET, RST n) — see "A real Z80 decoder"
-                   below).
+                   buildZ80Cpu (a second, separate CPU executing real Z80
+                   opcodes across `x=00`/`x=01`/`x=10`/`x=11`, plus the
+                   non-interrupt `ED`-prefix table — block transfers,
+                   `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`,
+                   `IN r,(C)`/`OUT (C),r`, `LD I/R` — see "A real Z80
+                   decoder" and the CB/ED/DD/FD prefix sections below.
+                   `CB`/`DD`/`FD` tables and IRQ ops are still inert).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -2391,9 +2394,13 @@ Nine opcodes/opcode-groups landed in one push, closing out every
 real, buildable gap the project's own instruction set had left: `ADC`/
 `SBC` (`x=10`), `NOP` (already correct, just never had its own test),
 `EX AF,AF'`, `EXX`, `JP (HL)`, `LD SP,HL`, `EX DE,HL`, `EX (SP),HL`, `ALU
-op A,n` (`x=11, z=6`), and `IN A,(n)`/`OUT (n),A`. `DI`/`EI` and the
-`CB`/`DD`/`ED`/`FD` prefix bytes are the two genuinely permanent
-exceptions — see Known Simplifications below for why each.
+op A,n` (`x=11, z=6`), and `IN A,(n)`/`OUT (n),A`. `DI`/`EI` stay a
+permanent exception (no interrupt line — see Known Simplifications). The
+`CB`/`DD`/`ED`/`FD` prefix bytes were called permanent exceptions in this
+same push; that was true *then* — the prefix *mechanism* and the
+non-interrupt half of `ED` landed in later passes (see "The CB/ED/DD/FD
+prefix mechanism" and the `ED` sections below). `CB`/`DD`/`FD` instruction
+bodies are still deliberately inert.
 
 **`ADC`/`SBC`** turned out to be exactly the "smaller lift" the very first
 `x=10` doc comment predicted, back when this file had no flags register at
@@ -2817,8 +2824,11 @@ single new instruction can run on top of it — detect a prefix byte,
 recapture `ir` with the real opcode that follows it, advance `pc` an
 extra time, and — the genuinely hard, invasive part — keep the four
 already-built opcode tables from misinterpreting that recaptured byte as
-if it had arrived unprefixed. No CB/ED/DD/FD instruction executes
-anything yet; this is the foundation the next several passes build on.
+if it had arrived unprefixed. At the moment this mechanism landed, no
+prefixed instruction body executed yet — the foundation the next several
+passes built on. The non-interrupt half of `ED` is now wired (block
+column, `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN`/`OUT
+(C)`, `LD I/R`); `CB`/`DD`/`FD` bodies remain inert by design.
 
 **Finding the four prefix bytes needed no new decode table at all.** Real
 Z80 puts all four in `x=11`'s own `z=3`/`z=5` columns — `CB`=0xCB sits at
@@ -3444,6 +3454,155 @@ pair whose own low/high halves are the identical registers being read
 twice at once, genuinely wrapping past `0xFFFF` back to `1` with a real
 carry out — before the full suite: `53/53` files, `201/201` tests,
 still green.
+
+### x=01, z=7, y=4/y=5: RRD/RLD
+
+Real `0xED 0x67`/`0x6F` — a 12-bit BCD nibble rotate spanning `A`'s own
+low nibble and both of `(HL)`'s, real Z80's own way to shift a packed-BCD
+digit string one position without touching every byte's own high nibble.
+Collides with real unprefixed `LD y,A` (`x=01`, `z=7` picks `A` as the
+source) for every destination `y` picks.
+
+**Three phases**, the identical shape `LDI`'s own family uses:
+`PHASE4` reads `(HL)` into a holding register, `PHASE5` writes the
+freshly rotated byte back to that *same* address (unlike `LDI`'s own
+family, read and write share one address here, so both phases reuse a
+single address-mux layer rather than needing two), `PHASE6` commits
+`A`'s own low nibble and every flag bit but `C`. The rotate itself is a
+per-nibble-position mux with `isRldNow` as the select — the two are
+mutually exclusive by construction (`y=4` vs `y=5`), and `RRD`'s own
+wiring is exactly "not `RLD`'s."
+
+**`A`'s high nibble needs an explicit hold layer.** `A`'s own `we`
+commits the whole byte in one edge, so leaving no layer at all for
+`i>=4` doesn't hold anything by itself — it falls through to whatever
+the shared ALU's own live, unrelated computation is carrying at the
+bottom of the write-mux chain. Found live chasing this instruction's
+own repro; every earlier feature that touched a subset of `A`'s bits
+happened to touch *all eight*, so this exact gap never showed itself
+before. Flags: `S`/`Z`/`P` (parity, not overflow) off the *new* `A`,
+`H`/`N` forced to `0`, `C` untouched, `X`/`Y` mirroring the new result's
+own bits 3/5.
+
+Verified with three dedicated tests (`z80cpu-rrd-rld.test.ts`): `RRD`
+and `RLD` on `A=0x3A`/`(HL)=0x12` (three genuinely distinct nibbles, so
+a mixed-up rotate direction lands on a wrong digit in a specific place),
+plus `RRD` on all-zeros proving `Z`/`P` — before the full suite.
+
+### x=01, z=3: LD (nn),dd / LD dd,(nn)
+
+Real `0xED 0x43`/`0x53`/`0x63`/`0x73` (`LD (nn),BC`/`DE`/`HL`/`SP`) and
+`0x4B`/`0x5B`/`0x6B`/`0x7B` (the load direction). Collides with real
+unprefixed `LD y,E` (`z=3` picks `E` as the source). `y` even = store,
+`y` odd = load; `y>>1` picks the pair.
+
+**Phase budget after the ED prefix is tight.** Unprefixed `LD (nn),HL`
+needs six phases (read-low/adv/read-high/adv/write-low/write-high), and
+only `PHASE4`-`PHASE7` remain once the prefix has consumed `PHASE0`-`3`.
+Solved by collapsing the two immediate-byte advances into a `PC+1`
+address override on the high-byte read — no separate advance between the
+two reads:
+
+- `PHASE4`: read nn low at `PC` → `nnAddr`
+- `PHASE5`: read nn high at `PC+1` → `nnAddr`; advance `PC` once
+- `PHASE6`: advance `PC` past the instruction; data low (store or load)
+- `PHASE7`: data high
+
+`pcPlusOne` is a light `addrBits`-wide XOR/AND ripple (+1), published onto
+the address-mux chain as one more override layer after RRD/RLD's.
+`nnAddr`'s own hold-vs-fresh muxes widen to accept either the unprefixed
+or the ED immediate-read strobes. Register write-back reuses the existing
+bus-capture `ldWe` OR-chain (one more term per `B`/`C`/`D`/`E`/`H`/`L`);
+`SP` gets another hold-vs-fresh layer stacked on `LD SP,nn`/`LD SP,HL`.
+
+**`ramOe`/`ramWe` path depth matters.** The first wiring of EDNN's four
+read strobes (and two write strobes) as sequential `OR`s *after*
+`RRDRLD_*_NOW` delayed RRD's own OE/WE by two or more NOR+NOT pairs —
+enough that the PHASE4 bus fight on RRD's read window cascaded into
+VCC/GND contention and froze the ring counter at `PHASE4` forever.
+Fix: side-fold the EDNN terms into their own OR-tree, merge once *before*
+RRD, and keep RRD as the final term so its path depth matches the
+pre-EDNN shape. Same lesson as the existing `groupActive`-gated FETCH
+OE comment, applied to OR-chain length rather than phase-bit races.
+
+Verified with one dedicated round-trip test (`z80cpu-ld-nn-dd.test.ts`)
+covering all four pairs store-then-reload through distinct absolute
+addresses, plus the RRD/RLD suite still green after the OE/WE fold —
+before the full suite.
+
+### x=01, z=0/z=1: IN r,(C) / OUT (C),r
+
+Real `0xED 0x40`/`0x48`/…/`0x78` (`IN B,(C)` … `IN A,(C)`) and
+`0x41`/`0x49`/…/`0x79` (`OUT (C),B` … `OUT (C),A`). Collides with
+unprefixed `LD r,B`/`LD r,C` (`z=0`/`z=1`). `y` picks the register; `y=6`
+is real Z80's undocumented `IN 0,(C)` / `OUT 0,(C)` — flags + strobe
+still fire, but IN writes no register and OUT drives a literal `0`.
+
+**Single `PHASE4` after the ED prefix** (same budget `NEG` uses): `C`
+onto the bus for `ioPortAddr`, `ioRead`/`ioWrite`, and — for IN — commit
+the external `ioPortDataIn` byte into the destination (and `F`). Address
+and data ride different nets (`BUS` vs raw `ioPortDataIn` /
+`ioPortDataOut`), the identical dual-path shape `IN A,(n)` already
+established at `PHASE2`.
+
+IN flags: every bit but `C`, off the port byte — `S`/`Z`/`P`(parity)/
+`H=0`/`N=0`/`X`/`Y` mirroring bits 3/5 — same recipe RRD/RLD uses off
+the new `A`. Register write-back reuses the B–L bus-capture `ldWe` chain
+(one more term + a mux that picks `ioPortDataIn` over `BUS` when that
+term fires); `A` gets another layer on its write-mux stack. OUT extends
+`ioPortDataOut`'s existing OUTI mux with one more layer gated by
+`OUTRC_NOW`, fed by per-`y` tribufs (or GND for `y=6`). `C`-onto-bus
+side-folds `INRC_NOW|OUTRC_NOW` before merging with INI/OUTI, so the
+enable chain does not grow two sequential stages.
+
+Verified with one dedicated mid-PHASE4 test
+(`z80cpu-in-rc-out-rc.test.ts`): `IN A,(C)` / `OUT (C),B` / `OUT (C),0` /
+`IN 0,(C)` / `IN B,(C)` against a fixed `0x99` device reply — before the
+full suite.
+
+### x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R
+
+Real `0xED 0x47`/`0x4F`/`0x57`/`0x5F`. Collides with unprefixed `LD y,A`
+(`z=7`) the same way `RRD`/`RLD` (y=4/5) does. Two new seed-path
+registers (`I`, `R`) sit alongside `A'`/`F'`. Unlike the shadow
+registers they have **no external seed path** — their write-enable seed
+pin is tied to GND so pre-existing tests cannot leave it floating;
+software writes them only via `LD I,A` / `LD R,A`.
+
+**Single `PHASE4` after the ED prefix:** `LD I,A`/`LD R,A` commit `A`
+into `I`/`R` via `wrapWithPairCommit` (no flags). `LD A,I`/`LD A,R`
+commit into `A` and refresh every flag bit but `C` — `S`/`Z`/`X`/`Y` off
+the transferred byte, `H`/`N` forced 0, **`P/V` forced 0**. Real Z80
+copies `IFF2` into `P/V` here; this project has no interrupt flip-flops
+yet (same honesty as inert `DI`/`EI`), so the bit is documented stale
+rather than faked. `R` is also not auto-incremented on FETCH/`M1` —
+plain software-visible storage until a refresh model exists.
+
+Verified with one dedicated round-trip test (`z80cpu-ld-i-r.test.ts`) —
+before the full suite. With this column, every non-interrupt `ED`
+opcode this project can meaningfully execute is closed; `RETN`/`RETI`/
+`IM` wait on IRQ machinery (Known Simplifications).
+
+### Solver hot-path rewrite: indexed nets
+
+`step()` used to pay a `Map<string, …>` tax on every net, every
+transistor pin, every relaxation pass — on the live `buildZ80Cpu`
+composite (~67k transistors, ~34k nets) that was ~670ms per tick, which
+is why a single `buildZ80Cpu` test file routinely took minutes. The
+rewrite indexes nets once per `step()` into dense parallel arrays
+(levels, driver bitmasks, `Int32Array` union-find with intrusive group
+lists); transistor pin→net lookups happen once up front, not once per
+pass. Same semantics (majority-vote capacitive hold, unconditional `Z`
+on conflict, oscillation window on the fallback path only) — measured
+~6× faster on the same composite (~111ms/tick), which is what made
+adding `RRD`/`RLD` and continuing the suite tractable again. A follow-up
+WeakMap caches that index + scratch buffers across ticks when the
+structure version and `netMap` identity match (only Input values change),
+and — when the caller threads the previous `SimState` straight back in —
+seeds `cur[]` from a retained dense copy instead of ~34k `Map.get`s;
+together those cut another ~2× (~54ms/tick on `scripts/profile-z80.ts`).
+A shared `test/z80Harness.ts` also factors the repeated seed/clock/FSM
+boilerplate every `buildZ80Cpu` file had been copy-pasting.
 
 ### A real solver bug this retrofit exposed — and the test that un-broke itself
 
@@ -4213,14 +4372,15 @@ section's own success story.
   `dec.x` at all (see "A decode gap found across all sixteen
   block-instruction gates" above) — fixed before `NEG` landed, rather
   than propagating the same gap into a seventeenth gate. The other three
-  prefix bytes (`CB`/`DD`/`FD`) and the rest of `ED`'s own table (`RRD`/
-  `RLD`, `RETN`/`RETI`, `IM`, and friends) execute nothing yet — these
-  six instructions close out the block-instruction half of `ED`'s table
-  entirely, add its first two non-block ones, and prove the prefix
-  mechanism works end to end for a single-shot instruction, three
-  differently-gated repeat conditions, and two real decode collisions
-  outside the block-instruction shape, without filling in the other
-  tables they unlock.
+  prefix bytes (`CB`/`DD`/`FD`) execute nothing yet — the block-instruction
+  half of `ED`'s table is closed out entirely, plus `NEG`,
+  `ADC HL,rr`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`/`LD dd,(nn)`,
+  `IN r,(C)`/`OUT (C),r`, and `LD I,A`/`LD R,A`/`LD A,I`/`LD A,R` (see the
+  matching sections above). That is the entire non-interrupt `ED` table
+  this project can observe without IRQ machinery. `RETN`/`RETI`/`IM` (and
+  `IFF1`/`IFF2`, auto-increment of `R` on `M1`, and `P/V←IFF2` on
+  `LD A,I`/`LD A,R`) wait until an interrupt line exists; `CB`/`DD`/`FD`
+  instruction bodies remain the next large unlock, deliberately untouched.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
