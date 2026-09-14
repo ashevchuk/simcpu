@@ -87,8 +87,8 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`,
                    `IN r,(C)`/`OUT (C),r`, `LD I/R` — see "A real Z80
                    decoder" and the CB/ED/DD/FD prefix sections below.
-                   `CB` has `BIT` and `SET`/`RES` (register + `(HL)`);
-                   rotates/`DD`/`FD`/IRQ ops are still inert).
+                   `CB` has `BIT`, `SET`/`RES`, and rotates/shifts
+                   (register + `(HL)`); `DD`/`FD`/IRQ ops are still inert).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -2829,8 +2829,8 @@ if it had arrived unprefixed. At the moment this mechanism landed, no
 prefixed instruction body executed yet — the foundation the next several
 passes built on. The non-interrupt half of `ED` is now wired (block
 column, `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN`/`OUT
-(C)`, `LD I/R`); CB has `BIT` and `SET`/`RES` (register + `(HL)`);
-`DD`/`FD` bodies and CB rotates remain inert by design.
+(C)`, `LD I/R`); CB has `BIT`, `SET`/`RES`, and rotates/shifts
+(register + `(HL)`); `DD`/`FD` bodies remain inert by design.
 
 **Finding the four prefix bytes needed no new decode table at all.** Real
 Z80 puts all four in `x=11`'s own `z=3`/`z=5` columns — `CB`=0xCB sits at
@@ -3626,9 +3626,30 @@ for the new term. Leaving an OR input dangling floats it high in this
 solver — found live while adding SET/RES: `addr` stuck on `HL` so every
 `LD r,n` captured `RAM[0]` (the opcode) instead of the immediate.
 
-The CB rotate/shift column (`x=00`) is next.
-
 Verified with `z80cpu-set-res.test.ts` — before the full suite.
+
+### CB x=00: RLC/RRC/RL/RR/SLA/SRA/SLL/SRL
+
+CB rotate/shift column. Real `0xCB 0x00`–`0xCB 0x3F`. Unlike unprefixed
+`RLCA`/`RRCA`/`RLA`/`RRA` (which hold `S`/`Z`/`P`), these refresh
+`S`/`Z`/`H=0`/`P/V`(parity)/`N=0`/`C`/`X`/`Y` from the **result**.
+`SLL`/`SL1` (`y=6`) is the undocumented shift that forces new bit0 to 1.
+
+**Register form (`z≠6`):** `PHASE4` commit into B/C/D/E/H/L/A.
+
+**(HL) form (`z=6`):** `PHASE4` read into dedicated `cbRotHold` (not
+shared `hlMemTemp` — see below); `PHASE5` write + flags. OE/addr/we
+side-folds with BIT/SET/RES/(HL) RMW.
+
+**Datapath:** two deep rotate trees (register vs HL), muxed by `z[6]`.
+The HL tree's source is `mux(WRITE, 0, AND(cbRotHold.q, WRITE))` — found
+live: feeding a live-`we` register (or even a WRITE-gated bit that still
+fans into the deep cone) during the READ phase freezes the phase ring;
+isolating the deep cone onto grounded constants until WRITE drops `we`
+keeps the ring moving. Register form never hits this (source is
+`bitRegByte`, not being written).
+
+Verified with `z80cpu-cb-rot.test.ts` — before the full suite.
 
 ### Solver hot-path rewrite: indexed nets
 
@@ -4427,9 +4448,9 @@ section's own success story.
   this project can observe without IRQ machinery. `RETN`/`RETI`/`IM` (and
   `IFF1`/`IFF2`, auto-increment of `R` on `M1`, and `P/V←IFF2` on
   `LD A,I`/`LD A,R`) wait until an interrupt line exists; CB is being
-  filled column by column (`BIT` and `SET`/`RES` done — see above; rotates
-  next); `DD`/`FD` instruction bodies remain deliberately untouched until
-  CB is further along.
+  filled column by column (`BIT`, `SET`/`RES`, and rotates/shifts done —
+  see above); `DD`/`FD` instruction bodies remain deliberately untouched until
+  a thin IRQ layer lands next.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this

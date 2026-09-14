@@ -2261,6 +2261,11 @@ export function buildZ80Cpu(
   const isEdX1Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6370 });
   wire(parent, isEdActive, isEdX1Active.a);
   wire(parent, dec.x[1]!, isEdX1Active.b);
+  // CB x=00 — rotate/shift column (RLC…SRL). Same "prefix ∧ x" shape.
+  const isCbX0Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6375 });
+  wire(parent, isCbActive, isCbX0Active.a);
+  wire(parent, dec.x[0]!, isCbX0Active.b);
+  tieToLabel('IS_CB_ROT', isCbX0Active.out, { x: pos.x + 9200, y: pos.y - 6375 });
   // CB x=01 is the BIT family — same "prefix ∧ this table's x" shape ED uses.
   const isCbX1Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6380 });
   wire(parent, isCbActive, isCbX1Active.a);
@@ -2411,6 +2416,58 @@ export function buildZ80Cpu(
   wire(parent, setResRegNow.out, setResCommitNow.a);
   wire(parent, setResHlWriteNow.out, setResCommitNow.b);
   tieToLabel('SETRES_COMMIT_NOW', setResCommitNow.out, { x: pos.x + 9600, y: pos.y - 7550 });
+
+  // x=00 (CB): RLC/RRC/RL/RR/SLA/SRA/SLL/SRL — rotate/shift. Unlike
+  // unprefixed RLCA/… these refresh S/Z/P/X/Y/H/N/C from the *result*.
+  // Register: PHASE4. (HL): PHASE4 read, PHASE5 write+flags. Collides with
+  // unprefixed x=00 — `NOT_PREFIX_ACTIVE` keeps that quiet.
+  const notCbRotHl = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7620 });
+  wire(parent, dec.z[6]!, notCbRotHl.in);
+  const isCbRotReg = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7620 });
+  wire(parent, isCbX0Active.out, isCbRotReg.a);
+  wire(parent, notCbRotHl.out, isCbRotReg.b);
+  tieToLabel('IS_CBROT_REG', isCbRotReg.out, { x: pos.x + 9300, y: pos.y - 7620 });
+  const cbRotRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7640 });
+  wire(parent, isCbRotReg.out, cbRotRegNow.a);
+  tieToLabel('PHASE4', cbRotRegNow.b, { x: pos.x + 9250, y: pos.y - 7640 });
+  tieToLabel('CBROT_REG_NOW', cbRotRegNow.out, { x: pos.x + 9450, y: pos.y - 7640 });
+  const cbRotWeSpecs: { z: Pin; label: string }[] = [
+    { z: dec.z[0]!, label: 'CBROT_WE_B_NOW' },
+    { z: dec.z[1]!, label: 'CBROT_WE_C_NOW' },
+    { z: dec.z[2]!, label: 'CBROT_WE_D_NOW' },
+    { z: dec.z[3]!, label: 'CBROT_WE_E_NOW' },
+    { z: dec.z[4]!, label: 'CBROT_WE_H_NOW' },
+    { z: dec.z[5]!, label: 'CBROT_WE_L_NOW' },
+    { z: dec.z[7]!, label: 'CBROT_WE_A_NOW' },
+  ];
+  cbRotWeSpecs.forEach(({ z, label }, i) => {
+    const gate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7620 - i * 25 });
+    wire(parent, cbRotRegNow.out, gate.a);
+    wire(parent, z, gate.b);
+    tieToLabel(label, gate.out, { x: pos.x + 9600, y: pos.y - 7620 - i * 25 });
+  });
+  const isCbRotHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7660 });
+  wire(parent, isCbX0Active.out, isCbRotHl.a);
+  wire(parent, dec.z[6]!, isCbRotHl.b);
+  tieToLabel('IS_CBROT_HL', isCbRotHl.out, { x: pos.x + 9300, y: pos.y - 7660 });
+  const cbRotHlReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7680 });
+  wire(parent, isCbRotHl.out, cbRotHlReadNow.a);
+  tieToLabel('PHASE4', cbRotHlReadNow.b, { x: pos.x + 9250, y: pos.y - 7680 });
+  tieToLabel('CBROT_HL_READ_NOW', cbRotHlReadNow.out, { x: pos.x + 9450, y: pos.y - 7680 });
+  const cbRotHlWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7700 });
+  wire(parent, isCbRotHl.out, cbRotHlWriteRaw.a);
+  tieToLabel('PHASE5', cbRotHlWriteRaw.b, { x: pos.x + 9250, y: pos.y - 7700 });
+  const notCbRotHlReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 7690 });
+  wire(parent, cbRotHlReadNow.out, notCbRotHlReadNow.in);
+  const cbRotHlWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 7700 });
+  wire(parent, cbRotHlWriteRaw.out, cbRotHlWriteNow.a);
+  wire(parent, notCbRotHlReadNow.out, cbRotHlWriteNow.b);
+  tieToLabel('CBROT_HL_WRITE_NOW', cbRotHlWriteNow.out, { x: pos.x + 9550, y: pos.y - 7700 });
+  // Flags + register/RAM commit share this strobe (reg PHASE4, HL PHASE5).
+  const cbRotNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7670 });
+  wire(parent, cbRotRegNow.out, cbRotNow.a);
+  wire(parent, cbRotHlWriteNow.out, cbRotNow.b);
+  tieToLabel('CBROT_NOW', cbRotNow.out, { x: pos.x + 9600, y: pos.y - 7670 });
 
   // x=10, z=0: LDI/LDD/LDIR/LDDR (real 0xED 0xA0/0xA8/0xB0/0xB8) — real
   // Z80's own block-move family, `y=4..7` selecting which of the four:
@@ -3659,7 +3716,10 @@ export function buildZ80Cpu(
   const hlMemTempWe3 = buildOr(parent, vcc3, gnd3, { x: pos.x - 690, y: pos.y - 6220 });
   wire(parent, hlMemTempWe2.out, hlMemTempWe3.a);
   tieToLabel('SETRES_HL_READ_NOW', hlMemTempWe3.b, { x: pos.x - 850, y: pos.y - 6240 });
-  wire(parent, hlMemTempWe3.out, hlMemTemp.we);
+  const hlMemTempWe4 = buildOr(parent, vcc3, gnd3, { x: pos.x - 660, y: pos.y - 6220 });
+  wire(parent, hlMemTempWe3.out, hlMemTempWe4.a);
+  tieToLabel('CBROT_HL_READ_NOW', hlMemTempWe4.b, { x: pos.x - 850, y: pos.y - 6260 });
+  wire(parent, hlMemTempWe4.out, hlMemTemp.we);
   hlMemTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 6200 + i * 20 }));
   hlMemTemp.q.forEach((q, i) => tieToLabel(`HLMEM${i}`, q, { x: pos.x - 800, y: pos.y - 6180 + i * 20 })); // anchor — r8Select + BIT (HL) flags
   tieToLabel('CLK', hlMemTemp.clk, { x: pos.x - 700, y: pos.y - 6240 }); // learned from jpTarget's own missing-CLK bug, several features back — checked off explicitly, every time, no exceptions
@@ -3721,6 +3781,158 @@ export function buildZ80Cpu(
     wire(parent, isSetBit.out, result.b);
     tieToLabel(`SETRESRESULT${i}`, result.out, { x: pos.x - 50, y: pos.y - 6600 + i * 40 });
   }
+
+  // CB rotate/shift result.
+  // Register form: deep tree off `bitRegByte` only.
+  // (HL): `cbRotHold` captures on READ; `q` fans *only* into AND(WRITE)
+  // gates (`memBit`). The deep tree reads `memBit`, never `q` directly —
+  // found live: any live-`we` register fanning into this deep cone freezes
+  // the phase ring, while the same `q` into a dummy AND does not.
+  const cbRotHold = buildRegister(parent, library, 8, { x: pos.x - 700, y: pos.y - 6900 });
+  tieToLabel('CBROT_HL_READ_NOW', cbRotHold.we, { x: pos.x - 800, y: pos.y - 6920 });
+  tieToLabel('CLK', cbRotHold.clk, { x: pos.x - 700, y: pos.y - 6940 });
+  cbRotHold.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 6900 + i * 20 }));
+  const memBit: Pin[] = [];
+  for (let i = 0; i < 8; i++) {
+    const g = buildAnd(parent, vcc3, gnd3, { x: pos.x - 350, y: pos.y - 7000 + i * 40 });
+    wire(parent, cbRotHold.q[i]!, g.a);
+    tieToLabel('CBROT_HL_WRITE_NOW', g.b, { x: pos.x - 450, y: pos.y - 7000 + i * 40 });
+    memBit.push(g.out);
+  }
+
+  const buildCbRotTree = (src: Pin[], _labelPrefix: string, xBase: number): { result: Pin[]; c: Pin } => {
+    const leftY = buildOr(parent, vcc3, gnd3, { x: xBase - 400, y: pos.y - 6980 });
+    wire(parent, dec.y[0]!, leftY.a);
+    wire(parent, dec.y[2]!, leftY.b);
+    const leftY2 = buildOr(parent, vcc3, gnd3, { x: xBase - 380, y: pos.y - 6980 });
+    wire(parent, leftY.out, leftY2.a);
+    wire(parent, dec.y[4]!, leftY2.b);
+    const isLeft = buildOr(parent, vcc3, gnd3, { x: xBase - 360, y: pos.y - 6980 });
+    wire(parent, leftY2.out, isLeft.a);
+    wire(parent, dec.y[6]!, isLeft.b);
+    const rightY = buildOr(parent, vcc3, gnd3, { x: xBase - 400, y: pos.y - 6960 });
+    wire(parent, dec.y[1]!, rightY.a);
+    wire(parent, dec.y[3]!, rightY.b);
+    const rightY2 = buildOr(parent, vcc3, gnd3, { x: xBase - 380, y: pos.y - 6960 });
+    wire(parent, rightY.out, rightY2.a);
+    wire(parent, dec.y[5]!, rightY2.b);
+    const isRight = buildOr(parent, vcc3, gnd3, { x: xBase - 360, y: pos.y - 6960 });
+    wire(parent, rightY2.out, isRight.a);
+    wire(parent, dec.y[7]!, isRight.b);
+    const cLeft = buildAnd(parent, vcc3, gnd3, { x: xBase - 300, y: pos.y - 6980 });
+    wire(parent, isLeft.out, cLeft.a);
+    wire(parent, src[7]!, cLeft.b);
+    const cRight = buildAnd(parent, vcc3, gnd3, { x: xBase - 300, y: pos.y - 6960 });
+    wire(parent, isRight.out, cRight.a);
+    wire(parent, src[0]!, cRight.b);
+    const c = buildOr(parent, vcc3, gnd3, { x: xBase - 250, y: pos.y - 6970 });
+    wire(parent, cLeft.out, c.a);
+    wire(parent, cRight.out, c.b);
+    const result: Pin[] = [];
+    for (let i = 0; i < 8; i++) {
+      const prev = src[(i + 7) % 8]!;
+      const next = src[(i + 1) % 8]!;
+      const rlcTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 200, y: pos.y - 7100 + i * 100 });
+      wire(parent, dec.y[0]!, rlcTerm.a);
+      wire(parent, prev, rlcTerm.b);
+      const rrcTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 180, y: pos.y - 7100 + i * 100 });
+      wire(parent, dec.y[1]!, rrcTerm.a);
+      wire(parent, next, rrcTerm.b);
+      const rlTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 160, y: pos.y - 7100 + i * 100 });
+      wire(parent, dec.y[2]!, rlTerm.a);
+      wire(parent, i === 0 ? f.q[0]! : prev, rlTerm.b);
+      const rrTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 140, y: pos.y - 7100 + i * 100 });
+      wire(parent, dec.y[3]!, rrTerm.a);
+      wire(parent, i === 7 ? f.q[0]! : next, rrTerm.b);
+      const slaTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 120, y: pos.y - 7100 + i * 100 });
+      wire(parent, dec.y[4]!, slaTerm.a);
+      wire(parent, i === 0 ? gnd3 : prev, slaTerm.b);
+      const sraTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 100, y: pos.y - 7100 + i * 100 });
+      wire(parent, dec.y[5]!, sraTerm.a);
+      wire(parent, i === 7 ? src[7]! : next, sraTerm.b);
+      const sllTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 80, y: pos.y - 7100 + i * 100 });
+      wire(parent, dec.y[6]!, sllTerm.a);
+      wire(parent, i === 0 ? vcc3 : prev, sllTerm.b);
+      const srlTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 60, y: pos.y - 7100 + i * 100 });
+      wire(parent, dec.y[7]!, srlTerm.a);
+      wire(parent, i === 7 ? gnd3 : next, srlTerm.b);
+      const s1 = buildOr(parent, vcc3, gnd3, { x: xBase - 40, y: pos.y - 7100 + i * 100 });
+      wire(parent, rlcTerm.out, s1.a);
+      wire(parent, rrcTerm.out, s1.b);
+      const s2 = buildOr(parent, vcc3, gnd3, { x: xBase - 20, y: pos.y - 7100 + i * 100 });
+      wire(parent, rlTerm.out, s2.a);
+      wire(parent, rrTerm.out, s2.b);
+      const s3 = buildOr(parent, vcc3, gnd3, { x: xBase + 0, y: pos.y - 7100 + i * 100 });
+      wire(parent, slaTerm.out, s3.a);
+      wire(parent, sraTerm.out, s3.b);
+      const s4 = buildOr(parent, vcc3, gnd3, { x: xBase + 20, y: pos.y - 7100 + i * 100 });
+      wire(parent, sllTerm.out, s4.a);
+      wire(parent, srlTerm.out, s4.b);
+      const s5 = buildOr(parent, vcc3, gnd3, { x: xBase + 40, y: pos.y - 7100 + i * 100 });
+      wire(parent, s1.out, s5.a);
+      wire(parent, s2.out, s5.b);
+      const s6 = buildOr(parent, vcc3, gnd3, { x: xBase + 60, y: pos.y - 7100 + i * 100 });
+      wire(parent, s3.out, s6.a);
+      wire(parent, s4.out, s6.b);
+      const final = buildOr(parent, vcc3, gnd3, { x: xBase + 80, y: pos.y - 7100 + i * 100 });
+      wire(parent, s5.out, final.a);
+      wire(parent, s6.out, final.b);
+      result.push(final.out);
+    }
+    return { result, c: c.out };
+  };
+
+  const regTree = buildCbRotTree(bitRegByte, 'REG', pos.x);
+  // Isolate `memBit` from the HL deep tree while WRITE=0 (READ/hold.we
+  // high): feed the tree grounded constants instead. Attaching the deep
+  // cone to `memBit` during that window freezes the phase ring even when
+  // `memBit` is itself 0.
+  const hlSrc: Pin[] = [];
+  for (let i = 0; i < 8; i++) {
+    const m = makeChipInstance(parent, muxDef, { x: pos.x + 300, y: pos.y - 7000 + i * 40 });
+    tieToLabel('CBROT_HL_WRITE_NOW', m.pins[muxDef.ports[0]!]!, { x: pos.x + 250, y: pos.y - 7000 + i * 40 });
+    wire(parent, gnd3, m.pins[muxDef.ports[1]!]!);
+    wire(parent, memBit[i]!, m.pins[muxDef.ports[2]!]!);
+    hlSrc.push(m.pins[muxDef.ports[3]!]!);
+  }
+  const hlTree = buildCbRotTree(hlSrc, 'HL', pos.x + 400);
+  const cbRotResult: Pin[] = [];
+  for (let i = 0; i < 8; i++) {
+    const pick = makeChipInstance(parent, muxDef, { x: pos.x + 500, y: pos.y - 7100 + i * 100 });
+    wire(parent, dec.z[6]!, pick.pins[muxDef.ports[0]!]!);
+    wire(parent, regTree.result[i]!, pick.pins[muxDef.ports[1]!]!);
+    wire(parent, hlTree.result[i]!, pick.pins[muxDef.ports[2]!]!);
+    tieToLabel(`CBROTRESULT${i}`, pick.pins[muxDef.ports[3]!]!, { x: pos.x + 550, y: pos.y - 7100 + i * 100 });
+    cbRotResult.push(pick.pins[muxDef.ports[3]!]!);
+  }
+  const cbRotCPick = makeChipInstance(parent, muxDef, { x: pos.x + 500, y: pos.y - 6970 });
+  wire(parent, dec.z[6]!, cbRotCPick.pins[muxDef.ports[0]!]!);
+  wire(parent, regTree.c, cbRotCPick.pins[muxDef.ports[1]!]!);
+  wire(parent, hlTree.c, cbRotCPick.pins[muxDef.ports[2]!]!);
+  tieToLabel('CBROT_C', cbRotCPick.pins[muxDef.ports[3]!]!, { x: pos.x + 550, y: pos.y - 6970 });
+  let cbRotZChain: Pin = cbRotResult[0]!;
+  for (let i = 1; i < 8; i++) {
+    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 560, y: pos.y - 7100 + i * 40 });
+    wire(parent, cbRotZChain, orGate.a);
+    wire(parent, cbRotResult[i]!, orGate.b);
+    cbRotZChain = orGate.out;
+  }
+  const cbRotZBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 600, y: pos.y - 7100 });
+  wire(parent, cbRotZChain, cbRotZBit.in);
+  tieToLabel('CBROT_Z', cbRotZBit.out, { x: pos.x + 640, y: pos.y - 7100 });
+  let cbRotPChain: Pin = cbRotResult[0]!;
+  for (let i = 1; i < 8; i++) {
+    const xorGate = buildXor(parent, vcc3, gnd3, { x: pos.x + 560, y: pos.y - 7500 + i * 40 });
+    wire(parent, cbRotPChain, xorGate.a);
+    wire(parent, cbRotResult[i]!, xorGate.b);
+    cbRotPChain = xorGate.out;
+  }
+  const cbRotPBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 600, y: pos.y - 7500 });
+  wire(parent, cbRotPChain, cbRotPBit.in);
+  tieToLabel('CBROT_P', cbRotPBit.out, { x: pos.x + 640, y: pos.y - 7500 });
+  tieToLabel('CBROT_S', cbRotResult[7]!, { x: pos.x + 640, y: pos.y - 7480 });
+  tieToLabel('CBROT_X', cbRotResult[3]!, { x: pos.x + 640, y: pos.y - 7460 });
+  tieToLabel('CBROT_Y', cbRotResult[5]!, { x: pos.x + 640, y: pos.y - 7440 });
 
   // `(HL)`'s own commit: `PHASE3`, one phase after its own read — by now
   // `hlMemTemp` already holds the fresh value (the same one-phase-later
@@ -5139,7 +5351,10 @@ export function buildZ80Cpu(
   const hlMemWeTerms = buildOr(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y + 600 });
   tieToLabel('INCDEC_HLMEM_NOW', hlMemWeTerms.a, { x: pos.x + 9450, y: pos.y + 600 });
   tieToLabel('SETRES_HL_WRITE_NOW', hlMemWeTerms.b, { x: pos.x + 9450, y: pos.y + 620 });
-  wire(parent, hlMemWeTerms.out, ramWeStage7.b);
+  const hlMemWeTerms2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9520, y: pos.y + 610 });
+  wire(parent, hlMemWeTerms.out, hlMemWeTerms2.a);
+  tieToLabel('CBROT_HL_WRITE_NOW', hlMemWeTerms2.b, { x: pos.x + 9420, y: pos.y + 630 });
+  wire(parent, hlMemWeTerms2.out, ramWeStage7.b);
   const ramWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 650 });
   wire(parent, ramWeStage7.out, ramWe.a);
   tieToLabel('LDHLN_WRITE_NOW', ramWe.b, { x: pos.x + 9500, y: pos.y + 650 });
@@ -5290,15 +5505,21 @@ export function buildZ80Cpu(
   // the first OR's a/b; never leave an OR input floating (found live:
   // dangling `hlMemReads.b` stuck the fold high → addr forever = HL →
   // every immediate read returned RAM[0]/opcode).
+  // INC (HL)/DEC (HL), BIT (HL), SET/RES (HL), CBROT (HL) reads — side-fold
+  // so this OE stage does not grow sequential ORs. Pair the four terms as
+  // two ORs then one merge (never leave an OR input floating).
   const hlMemReads = buildOr(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y - 1200 });
   tieToLabel('HLMEM_READ_NOW', hlMemReads.a, { x: pos.x + 9450, y: pos.y - 1200 });
   tieToLabel('BIT_HL_READ_NOW', hlMemReads.b, { x: pos.x + 9450, y: pos.y - 1220 });
   const hlMemReads2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9520, y: pos.y - 1210 });
-  wire(parent, hlMemReads.out, hlMemReads2.a);
-  tieToLabel('SETRES_HL_READ_NOW', hlMemReads2.b, { x: pos.x + 9420, y: pos.y - 1240 });
+  tieToLabel('SETRES_HL_READ_NOW', hlMemReads2.a, { x: pos.x + 9420, y: pos.y - 1240 });
+  tieToLabel('CBROT_HL_READ_NOW', hlMemReads2.b, { x: pos.x + 9420, y: pos.y - 1260 });
+  const hlMemReadsAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9490, y: pos.y - 1220 });
+  wire(parent, hlMemReads.out, hlMemReadsAny.a);
+  wire(parent, hlMemReads2.out, hlMemReadsAny.b);
   const ramOeStage21 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1200 });
   wire(parent, ramOeStage20.out, ramOeStage21.a);
-  wire(parent, hlMemReads2.out, ramOeStage21.b);
+  wire(parent, hlMemReadsAny.out, ramOeStage21.b);
   const ramOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9650, y: pos.y - 150 });
   wire(parent, ramOeStage21.out, ramOe.a);
   wire(parent, readNow.out, ramOe.b);
@@ -5467,19 +5688,26 @@ export function buildZ80Cpu(
   // Side-fold INC/DEC (HL) / BIT (HL) / SETRES (HL) reads — all need
   // addr=HL for exactly one phase. Same floating-input trap as the OE
   // fold above: both original terms stay on the first OR.
+  // Side-fold (HL) reads — same paired-OR shape as the OE fold above.
   const addrHlReads = buildOr(parent, vcc, gnd, { x: pos.x + 580, y: pos.y - 440 });
   tieToLabel('HLMEM_READ_NOW', addrHlReads.a, { x: pos.x + 480, y: pos.y - 420 });
   tieToLabel('BIT_HL_READ_NOW', addrHlReads.b, { x: pos.x + 460, y: pos.y - 440 });
   const addrHlReads2 = buildOr(parent, vcc, gnd, { x: pos.x + 560, y: pos.y - 450 });
-  wire(parent, addrHlReads.out, addrHlReads2.a);
-  tieToLabel('SETRES_HL_READ_NOW', addrHlReads2.b, { x: pos.x + 440, y: pos.y - 460 });
-  wire(parent, addrHlReads2.out, addrIsHlStage2.b);
+  tieToLabel('SETRES_HL_READ_NOW', addrHlReads2.a, { x: pos.x + 440, y: pos.y - 460 });
+  tieToLabel('CBROT_HL_READ_NOW', addrHlReads2.b, { x: pos.x + 420, y: pos.y - 480 });
+  const addrHlReadsAny = buildOr(parent, vcc, gnd, { x: pos.x + 540, y: pos.y - 460 });
+  wire(parent, addrHlReads.out, addrHlReadsAny.a);
+  wire(parent, addrHlReads2.out, addrHlReadsAny.b);
+  wire(parent, addrHlReadsAny.out, addrIsHlStage2.b);
   const addrIsHlStage3 = buildOr(parent, vcc, gnd, { x: pos.x + 620, y: pos.y - 430 });
   wire(parent, addrIsHlStage2.out, addrIsHlStage3.a);
   const hlMemWrites = buildOr(parent, vcc, gnd, { x: pos.x + 580, y: pos.y - 470 });
   tieToLabel('INCDEC_HLMEM_NOW', hlMemWrites.a, { x: pos.x + 480, y: pos.y - 470 });
   tieToLabel('SETRES_HL_WRITE_NOW', hlMemWrites.b, { x: pos.x + 480, y: pos.y - 490 });
-  wire(parent, hlMemWrites.out, addrIsHlStage3.b);
+  const hlMemWrites2 = buildOr(parent, vcc, gnd, { x: pos.x + 560, y: pos.y - 480 });
+  wire(parent, hlMemWrites.out, hlMemWrites2.a);
+  tieToLabel('CBROT_HL_WRITE_NOW', hlMemWrites2.b, { x: pos.x + 460, y: pos.y - 500 });
+  wire(parent, hlMemWrites2.out, addrIsHlStage3.b);
   // `LD (HL),n`'s own write (see "x=00: INC (HL)/DEC (HL)/LD (HL),n"
   // above) needs `HL` only while it's actually writing (`PHASE4`) — its
   // own read phase (`PHASE2`) still needs `PC`, to read the immediate
@@ -6269,6 +6497,13 @@ export function buildZ80Cpu(
     tieToLabel('SETRES_HL_WRITE_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 5120 + i * 20 });
     tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 5100 + i * 20 });
   }
+  // CB rotate/shift (HL) write-back — CBROTRESULT onto the bus at PHASE5.
+  for (let i = 0; i < 8; i++) {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 5250 + i * 20 });
+    tieToLabel(`CBROTRESULT${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 5250 + i * 20 });
+    tieToLabel('CBROT_HL_WRITE_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 5270 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 5250 + i * 20 });
+  }
 
   // `LD (HL),n`'s own write-back data (see "x=00: INC (HL)/DEC (HL)/LD
   // (HL),n" above): `ldHlNImm`'s own captured immediate byte, driven onto
@@ -6639,9 +6874,14 @@ export function buildZ80Cpu(
     wire(parent, ldAIMux.pins[muxDef.ports[3]!]!, setResAMux.pins[muxDef.ports[1]!]!);
     tieToLabel(`SETRESRESULT${i}`, setResAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4402, y: pos.y + 1819 + i * 100 });
 
+    const cbRotAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4502.5, y: pos.y + 1799 + i * 100 });
+    tieToLabel('CBROT_WE_A_NOW', cbRotAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4402.5, y: pos.y + 1799 + i * 100 });
+    wire(parent, setResAMux.pins[muxDef.ports[3]!]!, cbRotAMux.pins[muxDef.ports[1]!]!);
+    tieToLabel(`CBROTRESULT${i}`, cbRotAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4402.5, y: pos.y + 1819 + i * 100 });
+
     const srcMux = makeChipInstance(parent, muxDef, { x: pos.x + 4503, y: pos.y + 1800 + i * 100 });
     wire(parent, isBusToA.out, srcMux.pins[muxDef.ports[0]!]!); // sel: LD A,z or POP AF's high byte, now?
-    wire(parent, setResAMux.pins[muxDef.ports[3]!]!, srcMux.pins[muxDef.ports[1]!]!); // in0: the layer above (… LD A,I/R, or SET/RES A)
+    wire(parent, cbRotAMux.pins[muxDef.ports[3]!]!, srcMux.pins[muxDef.ports[1]!]!); // in0: the layer above (… SET/RES A, or CB rotate A)
     tieToLabel(`BUS${i}`, srcMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4400, y: pos.y + 1800 + i * 100 }); // in1: the bus (LD's source, or POP's)
 
     const resetMux = makeChipInstance(parent, muxDef, { x: pos.x + 4600, y: pos.y + 1800 + i * 100 });
@@ -6702,8 +6942,11 @@ export function buildZ80Cpu(
   const aWeStage10 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4403, y: pos.y + 1950 });
   wire(parent, aWeStage9.out, aWeStage10.a);
   tieToLabel('SETRES_WE_A_NOW', aWeStage10.b, { x: pos.x + 4303, y: pos.y + 1950 });
+  const aWeStage11 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4403.5, y: pos.y + 1950 });
+  wire(parent, aWeStage10.out, aWeStage11.a);
+  tieToLabel('CBROT_WE_A_NOW', aWeStage11.b, { x: pos.x + 4303.5, y: pos.y + 1950 });
   const aWeFinal = buildOr(parent, vcc2, gnd2, { x: pos.x + 4404, y: pos.y + 1950 });
-  wire(parent, aWeStage10.out, aWeFinal.a);
+  wire(parent, aWeStage11.out, aWeFinal.a);
   wire(parent, aReset, aWeFinal.b);
   wire(parent, aWeFinal.out, a.we);
 
@@ -6717,15 +6960,15 @@ export function buildZ80Cpu(
   // condition — see the doc comment above). What a caller sees as this
   // Register's `d`/`we` from here on are these *new* external-seed pins,
   // not buildRegister's raw ones.
-  const ldDestSpecs: { reg: Register; ldY: Pin; popPhase: ReturnType<typeof buildAnd>; popY: Pin; ldImm8Label: string; ldDdNnLabel: string; edNnWeLabel: string; inRcWeLabel: string; setResWeLabel: string }[] = [
-    { reg: rB, ldY: dec.y[0]!, popPhase: popHighNow, popY: dec.y[0]!, ldImm8Label: 'LDIMM8_B_NOW', ldDdNnLabel: 'LDDDNN_HIGH_B_NOW', edNnWeLabel: 'EDNN_WE_B_NOW', inRcWeLabel: 'INRC_WE_B_NOW', setResWeLabel: 'SETRES_WE_B_NOW' },
-    { reg: rC, ldY: dec.y[1]!, popPhase: popLowNow, popY: dec.y[0]!, ldImm8Label: 'LDIMM8_C_NOW', ldDdNnLabel: 'LDDDNN_LOW_C_NOW', edNnWeLabel: 'EDNN_WE_C_NOW', inRcWeLabel: 'INRC_WE_C_NOW', setResWeLabel: 'SETRES_WE_C_NOW' },
-    { reg: rD, ldY: dec.y[2]!, popPhase: popHighNow, popY: dec.y[2]!, ldImm8Label: 'LDIMM8_D_NOW', ldDdNnLabel: 'LDDDNN_HIGH_D_NOW', edNnWeLabel: 'EDNN_WE_D_NOW', inRcWeLabel: 'INRC_WE_D_NOW', setResWeLabel: 'SETRES_WE_D_NOW' },
-    { reg: rE, ldY: dec.y[3]!, popPhase: popLowNow, popY: dec.y[2]!, ldImm8Label: 'LDIMM8_E_NOW', ldDdNnLabel: 'LDDDNN_LOW_E_NOW', edNnWeLabel: 'EDNN_WE_E_NOW', inRcWeLabel: 'INRC_WE_E_NOW', setResWeLabel: 'SETRES_WE_E_NOW' },
-    { reg: rH, ldY: dec.y[4]!, popPhase: popHighNow, popY: dec.y[4]!, ldImm8Label: 'LDIMM8_H_NOW', ldDdNnLabel: 'LDDDNN_HIGH_H_NOW', edNnWeLabel: 'EDNN_WE_H_NOW', inRcWeLabel: 'INRC_WE_H_NOW', setResWeLabel: 'SETRES_WE_H_NOW' },
-    { reg: rL, ldY: dec.y[5]!, popPhase: popLowNow, popY: dec.y[4]!, ldImm8Label: 'LDIMM8_L_NOW', ldDdNnLabel: 'LDDDNN_LOW_L_NOW', edNnWeLabel: 'EDNN_WE_L_NOW', inRcWeLabel: 'INRC_WE_L_NOW', setResWeLabel: 'SETRES_WE_L_NOW' },
+  const ldDestSpecs: { reg: Register; ldY: Pin; popPhase: ReturnType<typeof buildAnd>; popY: Pin; ldImm8Label: string; ldDdNnLabel: string; edNnWeLabel: string; inRcWeLabel: string; setResWeLabel: string; cbRotWeLabel: string }[] = [
+    { reg: rB, ldY: dec.y[0]!, popPhase: popHighNow, popY: dec.y[0]!, ldImm8Label: 'LDIMM8_B_NOW', ldDdNnLabel: 'LDDDNN_HIGH_B_NOW', edNnWeLabel: 'EDNN_WE_B_NOW', inRcWeLabel: 'INRC_WE_B_NOW', setResWeLabel: 'SETRES_WE_B_NOW', cbRotWeLabel: 'CBROT_WE_B_NOW' },
+    { reg: rC, ldY: dec.y[1]!, popPhase: popLowNow, popY: dec.y[0]!, ldImm8Label: 'LDIMM8_C_NOW', ldDdNnLabel: 'LDDDNN_LOW_C_NOW', edNnWeLabel: 'EDNN_WE_C_NOW', inRcWeLabel: 'INRC_WE_C_NOW', setResWeLabel: 'SETRES_WE_C_NOW', cbRotWeLabel: 'CBROT_WE_C_NOW' },
+    { reg: rD, ldY: dec.y[2]!, popPhase: popHighNow, popY: dec.y[2]!, ldImm8Label: 'LDIMM8_D_NOW', ldDdNnLabel: 'LDDDNN_HIGH_D_NOW', edNnWeLabel: 'EDNN_WE_D_NOW', inRcWeLabel: 'INRC_WE_D_NOW', setResWeLabel: 'SETRES_WE_D_NOW', cbRotWeLabel: 'CBROT_WE_D_NOW' },
+    { reg: rE, ldY: dec.y[3]!, popPhase: popLowNow, popY: dec.y[2]!, ldImm8Label: 'LDIMM8_E_NOW', ldDdNnLabel: 'LDDDNN_LOW_E_NOW', edNnWeLabel: 'EDNN_WE_E_NOW', inRcWeLabel: 'INRC_WE_E_NOW', setResWeLabel: 'SETRES_WE_E_NOW', cbRotWeLabel: 'CBROT_WE_E_NOW' },
+    { reg: rH, ldY: dec.y[4]!, popPhase: popHighNow, popY: dec.y[4]!, ldImm8Label: 'LDIMM8_H_NOW', ldDdNnLabel: 'LDDDNN_HIGH_H_NOW', edNnWeLabel: 'EDNN_WE_H_NOW', inRcWeLabel: 'INRC_WE_H_NOW', setResWeLabel: 'SETRES_WE_H_NOW', cbRotWeLabel: 'CBROT_WE_H_NOW' },
+    { reg: rL, ldY: dec.y[5]!, popPhase: popLowNow, popY: dec.y[4]!, ldImm8Label: 'LDIMM8_L_NOW', ldDdNnLabel: 'LDDDNN_LOW_L_NOW', edNnWeLabel: 'EDNN_WE_L_NOW', inRcWeLabel: 'INRC_WE_L_NOW', setResWeLabel: 'SETRES_WE_L_NOW', cbRotWeLabel: 'CBROT_WE_L_NOW' },
   ];
-  const ldExternal = ldDestSpecs.map(({ reg, ldY, popPhase, popY, ldImm8Label, ldDdNnLabel, edNnWeLabel, inRcWeLabel, setResWeLabel }, ri) => {
+  const ldExternal = ldDestSpecs.map(({ reg, ldY, popPhase, popY, ldImm8Label, ldDdNnLabel, edNnWeLabel, inRcWeLabel, setResWeLabel, cbRotWeLabel }, ri) => {
     const ldWeRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11000, y: pos.y - 500 + ri * 300 });
     wire(parent, ldGroupNow.out, ldWeRaw.a);
     wire(parent, ldY, ldWeRaw.b);
@@ -6747,10 +6990,13 @@ export function buildZ80Cpu(
     const ldWeStage5 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11140, y: pos.y - 485 + ri * 300 });
     wire(parent, ldWeStage4.out, ldWeStage5.a);
     tieToLabel(inRcWeLabel, ldWeStage5.b, { x: pos.x + 11040, y: pos.y - 485 + ri * 300 });
-    // CB SET/RES (see decode near isCbSetRes) — seventh source.
-    const ldWe = buildOr(parent, vcc5, gnd5, { x: pos.x + 11160, y: pos.y - 490 + ri * 300 });
-    wire(parent, ldWeStage5.out, ldWe.a);
-    tieToLabel(setResWeLabel, ldWe.b, { x: pos.x + 11060, y: pos.y - 490 + ri * 300 });
+    const ldWeStage6 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11160, y: pos.y - 490 + ri * 300 });
+    wire(parent, ldWeStage5.out, ldWeStage6.a);
+    tieToLabel(setResWeLabel, ldWeStage6.b, { x: pos.x + 11060, y: pos.y - 490 + ri * 300 });
+    // CB rotate/shift (see decode near isCbX0Active) — eighth source.
+    const ldWe = buildOr(parent, vcc5, gnd5, { x: pos.x + 11180, y: pos.y - 495 + ri * 300 });
+    wire(parent, ldWeStage6.out, ldWe.a);
+    tieToLabel(cbRotWeLabel, ldWe.b, { x: pos.x + 11080, y: pos.y - 495 + ri * 300 });
 
     const extD: Pin[] = [];
     for (let i = 0; i < 8; i++) {
@@ -6762,10 +7008,14 @@ export function buildZ80Cpu(
       tieToLabel(setResWeLabel, setResMux.pins[muxDef.ports[0]!]!, { x: pos.x + 11180, y: pos.y - 500 + ri * 300 + i * 100 });
       wire(parent, dataMux.pins[muxDef.ports[3]!]!, setResMux.pins[muxDef.ports[1]!]!);
       tieToLabel(`SETRESRESULT${i}`, setResMux.pins[muxDef.ports[2]!]!, { x: pos.x + 11180, y: pos.y - 480 + ri * 300 + i * 100 });
-      const mux = makeChipInstance(parent, muxDef, { x: pos.x + 11320, y: pos.y - 500 + ri * 300 + i * 100 });
+      const cbRotMux = makeChipInstance(parent, muxDef, { x: pos.x + 11300, y: pos.y - 500 + ri * 300 + i * 100 });
+      tieToLabel(cbRotWeLabel, cbRotMux.pins[muxDef.ports[0]!]!, { x: pos.x + 11200, y: pos.y - 500 + ri * 300 + i * 100 });
+      wire(parent, setResMux.pins[muxDef.ports[3]!]!, cbRotMux.pins[muxDef.ports[1]!]!);
+      tieToLabel(`CBROTRESULT${i}`, cbRotMux.pins[muxDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y - 480 + ri * 300 + i * 100 });
+      const mux = makeChipInstance(parent, muxDef, { x: pos.x + 11340, y: pos.y - 500 + ri * 300 + i * 100 });
       wire(parent, ldWe.out, mux.pins[muxDef.ports[0]!]!);
       extD.push(mux.pins[muxDef.ports[1]!]!);
-      wire(parent, setResMux.pins[muxDef.ports[3]!]!, mux.pins[muxDef.ports[2]!]!);
+      wire(parent, cbRotMux.pins[muxDef.ports[3]!]!, mux.pins[muxDef.ports[2]!]!);
       wire(parent, mux.pins[muxDef.ports[3]!]!, reg.d[i]!);
     }
     const weOr = buildOr(parent, vcc5, gnd5, { x: pos.x + 11000, y: pos.y - 400 + ri * 300 });
@@ -7914,6 +8164,29 @@ export function buildZ80Cpu(
       wire(parent, bitHlFreshBit[i]!, bitHlFMux.pins[muxDef.ports[2]!]!);
       cLayerIn = bitHlFMux.pins[muxDef.ports[3]!]!;
     }
+    // CB rotate/shift (x=00 — see decode near isCbX0Active): every flag bit
+    // fresh from the result (unlike RLCA, which holds S/Z/P). Includes C.
+    const cbRotFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8386, y: pos.y + 2230 + i * 100 });
+    tieToLabel('CBROT_NOW', cbRotFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8286, y: pos.y + 2230 + i * 100 });
+    wire(parent, cLayerIn, cbRotFMux.pins[muxDef.ports[1]!]!);
+    if (i === 0) {
+      tieToLabel('CBROT_C', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
+    } else if (i === 1) {
+      wire(parent, gnd4, cbRotFMux.pins[muxDef.ports[2]!]!);
+    } else if (i === 2) {
+      tieToLabel('CBROT_P', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
+    } else if (i === 3) {
+      tieToLabel('CBROT_X', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
+    } else if (i === 4) {
+      wire(parent, gnd4, cbRotFMux.pins[muxDef.ports[2]!]!);
+    } else if (i === 5) {
+      tieToLabel('CBROT_Y', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
+    } else if (i === 6) {
+      tieToLabel('CBROT_Z', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
+    } else {
+      tieToLabel('CBROT_S', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
+    }
+    cLayerIn = cbRotFMux.pins[muxDef.ports[3]!]!;
     // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) swaps the
     // *whole* byte, not just one or two bits — this layer runs for every
     // `i` that reaches this point (all eight, now that H and the two
@@ -8005,7 +8278,10 @@ export function buildZ80Cpu(
   const fWeFinal11 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9870, y: pos.y + 2360 });
   wire(parent, fWeFinal10.out, fWeFinal11.a);
   tieToLabel('BIT_HL_NOW', fWeFinal11.b, { x: pos.x + 9770, y: pos.y + 2360 });
-  wire(parent, fWeFinal11.out, f.we);
+  const fWeFinal12 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9970, y: pos.y + 2370 });
+  wire(parent, fWeFinal11.out, fWeFinal12.a);
+  tieToLabel('CBROT_NOW', fWeFinal12.b, { x: pos.x + 9870, y: pos.y + 2370 });
+  wire(parent, fWeFinal12.out, f.we);
 
   // SP: same external-seed contract as B..L above — `sp.d`/`sp.we` here
   // are the caller's own sink pins, muxed ahead of the raw register the
