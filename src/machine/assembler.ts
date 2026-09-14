@@ -1,9 +1,11 @@
 /**
  * Mini Z80 assembler for the machine panel — subset of opcodes this sim
- * actually runs. Two-pass with labels. Not a full assembler.
+ * actually runs. Two-pass with labels. Not a full commercial Z80ASM.
  *
  * Numbers: 0xNN, NNh, $NN, decimal, 'A'. Labels: `name:` then JR/JP/CALL/DW name.
  * Directives: DB/DEFB, DW/DEFW. Comments: `; ...` or `// ...`.
+ * Index: IX/IY, (IX+d)/(IY+d), IXH/IXL/IYH/IYL remap, DD/FD CB on (IX+d).
+ * CB bit/rot and common ED (blocks, ADC/SBC HL, NEG, IM, RETI, …).
  */
 
 export interface AssembleResult {
@@ -41,6 +43,17 @@ const ALU: Record<string, number> = {
 };
 const JR_CC: Record<string, number> = { nz: 0, z: 1, nc: 2, c: 3 };
 
+/** CB x=00 rotates/shifts (y). */
+const CB_ROT: Record<string, number> = {
+  rlc: 0,
+  rrc: 1,
+  rl: 2,
+  rr: 3,
+  sla: 4,
+  sra: 5,
+  srl: 7,
+};
+
 type Emit =
   | { kind: 'bytes'; data: number[]; text: string; line: number }
   | { kind: 'rel'; op: number; target: string; text: string; line: number }
@@ -52,6 +65,17 @@ interface LineTok {
   mnemonic?: string;
   args: string[];
   raw: string;
+}
+
+interface IndexDisp {
+  pref: 0xdd | 0xfd;
+  d: number;
+}
+
+/** Remapped H/L under DD/FD: IXH/IXL/IYH/IYL. */
+interface IndexHalf {
+  pref: 0xdd | 0xfd;
+  r: 4 | 5; // H or L slot
 }
 
 export function assemble(source: string, origin = 0): AssembleResult {
@@ -214,22 +238,51 @@ function encode(ln: LineTok): Emit {
     return { kind: 'bytes', data, text, line };
   }
 
-  const simple: Record<string, number> = {
-    nop: 0x00,
-    halt: 0x76,
-    di: 0xf3,
-    ei: 0xfb,
-    exx: 0xd9,
-    rlca: 0x07,
-    rrca: 0x0f,
-    rla: 0x17,
-    rra: 0x1f,
-    daa: 0x27,
-    cpl: 0x2f,
-    scf: 0x37,
-    ccf: 0x3f,
+  const simple: Record<string, number[]> = {
+    nop: [0x00],
+    halt: [0x76],
+    di: [0xf3],
+    ei: [0xfb],
+    exx: [0xd9],
+    rlca: [0x07],
+    rrca: [0x0f],
+    rla: [0x17],
+    rra: [0x1f],
+    daa: [0x27],
+    cpl: [0x2f],
+    scf: [0x37],
+    ccf: [0x3f],
+    neg: [0xed, 0x44],
+    reti: [0xed, 0x4d],
+    retn: [0xed, 0x45],
+    ldi: [0xed, 0xa0],
+    ldd: [0xed, 0xa8],
+    ldir: [0xed, 0xb0],
+    lddr: [0xed, 0xb8],
+    cpi: [0xed, 0xa1],
+    cpd: [0xed, 0xa9],
+    cpir: [0xed, 0xb1],
+    cpdr: [0xed, 0xb9],
+    ini: [0xed, 0xa2],
+    ind: [0xed, 0xaa],
+    inir: [0xed, 0xb2],
+    indr: [0xed, 0xba],
+    outi: [0xed, 0xa3],
+    outd: [0xed, 0xab],
+    otir: [0xed, 0xb3],
+    otdr: [0xed, 0xbb],
+    rld: [0xed, 0x6f],
+    rrd: [0xed, 0x67],
   };
-  if (m in simple && a.length === 0) return immBytes([simple[m]!], text, line);
+  if (m in simple && a.length === 0) return immBytes(simple[m]!, text, line);
+
+  if (m === 'im') {
+    const n = parseImm(a[0] ?? '');
+    if (n === 0) return immBytes([0xed, 0x46], text, line);
+    if (n === 1) return immBytes([0xed, 0x56], text, line);
+    if (n === 2) return immBytes([0xed, 0x5e], text, line);
+    throw new Error('IM 0/1/2');
+  }
 
   if (m === 'ex') {
     const x = norm(a[0] ?? '');
@@ -237,6 +290,8 @@ function encode(ln: LineTok): Emit {
     if (x === 'de' && y === 'hl') return immBytes([0xeb], text, line);
     if (x === 'af' && (y === "af'" || y === 'af')) return immBytes([0x08], text, line);
     if (x === '(sp)' && y === 'hl') return immBytes([0xe3], text, line);
+    if (x === '(sp)' && y === 'ix') return immBytes([0xdd, 0xe3], text, line);
+    if (x === '(sp)' && y === 'iy') return immBytes([0xfd, 0xe3], text, line);
     throw new Error(`unsupported EX ${a.join(',')}`);
   }
 
@@ -254,7 +309,10 @@ function encode(ln: LineTok): Emit {
   }
 
   if (m === 'push' || m === 'pop') {
-    const qq = QQ[norm(a[0] ?? '')];
+    const q = norm(a[0] ?? '');
+    if (q === 'ix') return immBytes([0xdd, m === 'push' ? 0xe5 : 0xe1], text, line);
+    if (q === 'iy') return immBytes([0xfd, m === 'push' ? 0xe5 : 0xe1], text, line);
+    const qq = QQ[q];
     if (qq === undefined) throw new Error(`bad ${m.toUpperCase()} '${a[0]}'`);
     return immBytes([(m === 'push' ? 0xc5 : 0xc1) | (qq << 4)], text, line);
   }
@@ -276,7 +334,10 @@ function encode(ln: LineTok): Emit {
 
   if (m === 'jp') {
     if (a.length === 1) {
-      if (norm(a[0]!) === '(hl)') return immBytes([0xe9], text, line);
+      const t = norm(a[0]!);
+      if (t === '(hl)') return immBytes([0xe9], text, line);
+      if (t === '(ix)') return immBytes([0xdd, 0xe9], text, line);
+      if (t === '(iy)') return immBytes([0xfd, 0xe9], text, line);
       return { kind: 'abs', opcode: [0xc3], target: a[0]!, text, line };
     }
     if (a.length === 2) {
@@ -303,7 +364,12 @@ function encode(ln: LineTok): Emit {
       if (n === null || n > 0xff) throw new Error('bad IN port');
       return immBytes([0xdb, n], text, line);
     }
-    throw new Error('only IN A,(n) supported');
+    if (a.length === 2 && isParen(a[1]!) && norm(stripParens(a[1]!)) === 'c') {
+      const r = parseR8(a[0]!);
+      if (r === null || r === HLMEM) throw new Error('IN r,(C)');
+      return immBytes([0xed, 0x40 | (r << 3)], text, line);
+    }
+    throw new Error('only IN A,(n) / IN r,(C) supported');
   }
   if (m === 'out') {
     if (a.length === 2 && isParen(a[0]!) && norm(a[1]!) === 'a') {
@@ -311,18 +377,56 @@ function encode(ln: LineTok): Emit {
       if (n === null || n > 0xff) throw new Error('bad OUT port');
       return immBytes([0xd3, n], text, line);
     }
-    throw new Error('only OUT (n),A supported');
+    if (a.length === 2 && isParen(a[0]!) && norm(stripParens(a[0]!)) === 'c') {
+      const r = parseR8(a[1]!);
+      if (r === null || r === HLMEM) throw new Error('OUT (C),r');
+      return immBytes([0xed, 0x41 | (r << 3)], text, line);
+    }
+    throw new Error('only OUT (n),A / OUT (C),r supported');
+  }
+
+  // CB: BIT / SET / RES / rotates
+  if (m === 'bit' || m === 'set' || m === 'res') {
+    if (a.length !== 2) throw new Error(`${m.toUpperCase()} bit,op`);
+    const bit = parseImm(a[0]!);
+    if (bit === null || bit < 0 || bit > 7) throw new Error('bit 0..7');
+    const x = m === 'bit' ? 1 : m === 'res' ? 2 : 3;
+    const op = (x << 6) | (bit << 3);
+    return encodeCbOp(op, a[1]!, text, line);
+  }
+  if (m in CB_ROT) {
+    if (a.length !== 1) throw new Error(`${m.toUpperCase()} op`);
+    const op = (CB_ROT[m]! << 3);
+    return encodeCbOp(op, a[0]!, text, line);
   }
 
   if (m in ALU) {
     const y = ALU[m]!;
-    if (m === 'add' && a.length === 2 && norm(a[0]!) === 'hl') {
+    if (m === 'add' && a.length === 2) {
+      const d0 = norm(a[0]!);
+      if (d0 === 'hl') {
+        const dd = DD[norm(a[1]!)];
+        if (dd === undefined) throw new Error('ADD HL,rr');
+        return immBytes([0x09 | (dd << 4)], text, line);
+      }
+      if (d0 === 'ix' || d0 === 'iy') {
+        const pref = d0 === 'ix' ? 0xdd : 0xfd;
+        const rr = indexPairRr(a[1]!, d0);
+        return immBytes([pref, 0x09 | (rr << 4)], text, line);
+      }
+    }
+    if ((m === 'adc' || m === 'sbc') && a.length === 2 && norm(a[0]!) === 'hl') {
       const dd = DD[norm(a[1]!)];
-      if (dd === undefined) throw new Error('ADD HL,rr');
-      return immBytes([0x09 | (dd << 4)], text, line);
+      if (dd === undefined) throw new Error(`${m.toUpperCase()} HL,rr`);
+      const base = m === 'adc' ? 0x4a : 0x42;
+      return immBytes([0xed, base | (dd << 4)], text, line);
     }
     const op = a.length === 2 && norm(a[0]!) === 'a' ? a[1]! : a.length === 1 ? a[0]! : null;
     if (!op) throw new Error(`${m.toUpperCase()} syntax`);
+    const idx = parseIndexDisp(op);
+    if (idx) return immBytes([idx.pref, 0x80 | (y << 3) | HLMEM, idx.d], text, line);
+    const half = parseIndexHalf(op);
+    if (half) return immBytes([half.pref, 0x80 | (y << 3) | half.r], text, line);
     const r = parseR8(op);
     if (r !== null) return immBytes([0x80 | (y << 3) | r], text, line);
     const n = parseImm(op);
@@ -333,7 +437,14 @@ function encode(ln: LineTok): Emit {
   if (m === 'inc' || m === 'dec') {
     if (a.length !== 1) throw new Error(`${m.toUpperCase()} needs one operand`);
     const inc = m === 'inc';
-    const dd = DD[norm(a[0]!)];
+    const t = norm(a[0]!);
+    if (t === 'ix') return immBytes([0xdd, inc ? 0x23 : 0x2b], text, line);
+    if (t === 'iy') return immBytes([0xfd, inc ? 0x23 : 0x2b], text, line);
+    const idx = parseIndexDisp(a[0]!);
+    if (idx) return immBytes([idx.pref, inc ? 0x34 : 0x35, idx.d], text, line);
+    const half = parseIndexHalf(a[0]!);
+    if (half) return immBytes([half.pref, (inc ? 0x04 : 0x05) | (half.r << 3)], text, line);
+    const dd = DD[t];
     if (dd !== undefined) return immBytes([(inc ? 0x03 : 0x0b) | (dd << 4)], text, line);
     const r = parseR8(a[0]!);
     if (r !== null) return immBytes([(inc ? 0x04 : 0x05) | (r << 3)], text, line);
@@ -348,14 +459,53 @@ function encode(ln: LineTok): Emit {
   throw new Error(`unsupported mnemonic '${m}'`);
 }
 
+function encodeCbOp(opBase: number, operand: string, text: string, line: number): Emit {
+  const idx = parseIndexDisp(operand);
+  if (idx) {
+    // DD/FD CB d (op|6) — only (IX+d)/(IY+d) form in this sim's documented slice
+    return immBytes([idx.pref, 0xcb, idx.d, opBase | HLMEM], text, line);
+  }
+  const r = parseR8(operand);
+  if (r === null) throw new Error(`bad CB operand '${operand}'`);
+  return immBytes([0xcb, opBase | r], text, line);
+}
+
 function encodeLd(dst: string, src: string, text: string, line: number): Emit {
   const d = norm(dst);
   const s = norm(src);
 
+  // I / R
+  if (d === 'a' && s === 'i') return immBytes([0xed, 0x57], text, line);
+  if (d === 'a' && s === 'r') return immBytes([0xed, 0x5f], text, line);
+  if (d === 'i' && s === 'a') return immBytes([0xed, 0x47], text, line);
+  if (d === 'r' && s === 'a') return immBytes([0xed, 0x4f], text, line);
+
   if (d === 'sp' && s === 'hl') return immBytes([0xf9], text, line);
+  if (d === 'sp' && s === 'ix') return immBytes([0xdd, 0xf9], text, line);
+  if (d === 'sp' && s === 'iy') return immBytes([0xfd, 0xf9], text, line);
+
+  // IX / IY as 16-bit
+  if (d === 'ix' || d === 'iy') {
+    const pref = d === 'ix' ? 0xdd : 0xfd;
+    if (isAbsMem(src)) return { kind: 'abs', opcode: [pref, 0x2a], target: stripParens(src), text, line };
+    if (parseImm(src) !== null) {
+      const n = parseImm(src)!;
+      return immBytes([pref, 0x21, n & 0xff, (n >> 8) & 0xff], text, line);
+    }
+    return { kind: 'abs', opcode: [pref, 0x21], target: src, text, line };
+  }
+  if ((s === 'ix' || s === 'iy') && isAbsMem(dst)) {
+    const pref = s === 'ix' ? 0xdd : 0xfd;
+    return { kind: 'abs', opcode: [pref, 0x22], target: stripParens(dst), text, line };
+  }
 
   const dd = DD[d];
   if (dd !== undefined && !isParen(dst)) {
+    if (isAbsMem(src)) {
+      // ED LD dd,(nn) — not for HL (uses 2A)
+      if (d === 'hl') return { kind: 'abs', opcode: [0x2a], target: stripParens(src), text, line };
+      return { kind: 'abs', opcode: [0xed, 0x4b | (dd << 4)], target: stripParens(src), text, line };
+    }
     if (parseImm(src) !== null) {
       const n = parseImm(src)!;
       return immBytes([0x01 | (dd << 4), n & 0xff, (n >> 8) & 0xff], text, line);
@@ -363,8 +513,14 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
     return { kind: 'abs', opcode: [0x01 | (dd << 4)], target: src, text, line };
   }
 
-  if (isAbsMem(dst) && s === 'hl') return { kind: 'abs', opcode: [0x22], target: stripParens(dst), text, line };
-  if (d === 'hl' && isAbsMem(src)) return { kind: 'abs', opcode: [0x2a], target: stripParens(src), text, line };
+  if (isAbsMem(dst) && !isParen(src)) {
+    const ss = DD[s];
+    if (ss !== undefined) {
+      if (s === 'hl') return { kind: 'abs', opcode: [0x22], target: stripParens(dst), text, line };
+      return { kind: 'abs', opcode: [0xed, 0x43 | (ss << 4)], target: stripParens(dst), text, line };
+    }
+  }
+
   if (isAbsMem(dst) && s === 'a') return { kind: 'abs', opcode: [0x32], target: stripParens(dst), text, line };
   if (d === 'a' && isAbsMem(src)) return { kind: 'abs', opcode: [0x3a], target: stripParens(src), text, line };
 
@@ -372,6 +528,23 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
   if (d === 'a' && s === '(bc)') return immBytes([0x0a], text, line);
   if (d === '(de)' && s === 'a') return immBytes([0x12], text, line);
   if (d === 'a' && s === '(de)') return immBytes([0x1a], text, line);
+
+  // (IX+d) / (IY+d)
+  const dstIdx = parseIndexDisp(dst);
+  const srcIdx = parseIndexDisp(src);
+  if (dstIdx && srcIdx) throw new Error('LD (IX+d),(IY+d) illegal');
+  if (dstIdx) {
+    const n = parseImm(src);
+    if (n !== null && n <= 0xff) return immBytes([dstIdx.pref, 0x36, dstIdx.d, n], text, line);
+    const r = parseR8(src);
+    if (r !== null && r !== HLMEM) return immBytes([dstIdx.pref, 0x70 | r, dstIdx.d], text, line);
+    throw new Error('LD (IX+d),op');
+  }
+  if (srcIdx) {
+    const r = parseR8(dst);
+    if (r !== null && r !== HLMEM) return immBytes([srcIdx.pref, 0x40 | (r << 3) | HLMEM, srcIdx.d], text, line);
+    throw new Error('LD r,(IX+d)');
+  }
 
   if (d === '(hl)') {
     const n = parseImm(src);
@@ -385,6 +558,26 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
     if (r !== null && r !== HLMEM) return immBytes([0x40 | (r << 3) | HLMEM], text, line);
   }
 
+  // IXH/IXL/IYH/IYL remap
+  const dh = parseIndexHalf(dst);
+  const sh = parseIndexHalf(src);
+  if (dh || sh) {
+    const pref = (dh ?? sh)!.pref;
+    if (dh && sh && dh.pref !== sh.pref) throw new Error('mixed IX/IY halves');
+    if (dh && sh) return immBytes([pref, 0x40 | (dh.r << 3) | sh.r], text, line);
+    if (dh) {
+      const n = parseImm(src);
+      if (n !== null && n <= 0xff) return immBytes([pref, 0x06 | (dh.r << 3), n], text, line);
+      const rs = parseR8(src);
+      if (rs !== null && rs !== HLMEM) return immBytes([pref, 0x40 | (dh.r << 3) | rs], text, line);
+    }
+    if (sh) {
+      const rd = parseR8(dst);
+      if (rd !== null && rd !== HLMEM) return immBytes([pref, 0x40 | (rd << 3) | sh.r], text, line);
+    }
+    throw new Error(`unsupported LD ${dst},${src}`);
+  }
+
   const rd = parseR8(dst);
   if (rd !== null && rd !== HLMEM) {
     const n = parseImm(src);
@@ -394,6 +587,43 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
   }
 
   throw new Error(`unsupported LD ${dst},${src}`);
+}
+
+/** ADD IX,rr — rr is BC/DE/IX/SP (IY for ADD IY). */
+function indexPairRr(arg: string, self: 'ix' | 'iy'): number {
+  const t = norm(arg);
+  if (t === 'bc') return 0;
+  if (t === 'de') return 1;
+  if (t === self) return 2; // IX/IY in HL slot
+  if (t === 'sp') return 3;
+  throw new Error(`ADD ${self.toUpperCase()},rr`);
+}
+
+function parseIndexHalf(s: string): IndexHalf | null {
+  const n = norm(s);
+  if (n === 'ixh') return { pref: 0xdd, r: 4 };
+  if (n === 'ixl') return { pref: 0xdd, r: 5 };
+  if (n === 'iyh') return { pref: 0xfd, r: 4 };
+  if (n === 'iyl') return { pref: 0xfd, r: 5 };
+  return null;
+}
+
+/** Parse (IX+d) / (IY-d) / (IX) / (IY). */
+function parseIndexDisp(s: string): IndexDisp | null {
+  if (!isParen(s)) return null;
+  const inner = stripParens(s);
+  const m = /^(ix|iy)\s*([+-]\s*.+)?$/i.exec(inner);
+  if (!m) return null;
+  const pref: 0xdd | 0xfd = m[1]!.toLowerCase() === 'ix' ? 0xdd : 0xfd;
+  if (!m[2]) return { pref, d: 0 };
+  const expr = m[2].replace(/\s+/g, '');
+  const sign = expr[0] === '-' ? -1 : 1;
+  const num = parseImm(expr.slice(1));
+  if (num === null || num > 0xff) throw new Error(`bad displacement '${s}'`);
+  let d = sign * num;
+  if (d < -128 || d > 127) throw new Error(`displacement out of range '${s}'`);
+  if (d < 0) d += 256;
+  return { pref, d };
 }
 
 function immBytes(data: number[], text: string, line: number): Emit {
@@ -429,7 +659,8 @@ function isParen(s: string): boolean {
 function isAbsMem(s: string): boolean {
   if (!isParen(s)) return false;
   const inner = stripParens(s);
-  if (['hl', 'bc', 'de', 'ix', 'iy', 'sp'].includes(norm(inner))) return false;
+  if (/^(ix|iy)\b/i.test(inner.trim())) return false;
+  if (['hl', 'bc', 'de', 'sp'].includes(norm(inner))) return false;
   return parseImm(inner) !== null || /^[A-Za-z_][\w]*$/.test(inner.trim());
 }
 

@@ -63,4 +63,68 @@ describe('mini assembler', () => {
     expect(far.ok).toBe(false);
     expect(far.errors.some((e) => /out of range/i.test(e))).toBe(true);
   });
+
+  it('assembles IX/IY load, stack, and (IX+d) mem', () => {
+    const r = assemble(
+      `
+      LD IX,0x1234
+      PUSH IX
+      POP IY
+      LD A,(IX+2)
+      LD (IY-1),B
+      LD (IX+0),0x55
+      INC (IX+3)
+      ADD A,(IY+4)
+      ADD IX,BC
+      JP (IX)
+      `,
+    );
+    expect(r.errors).toEqual([]);
+    expect([...r.bytes]).toEqual([
+      0xdd, 0x21, 0x34, 0x12, // LD IX,1234h
+      0xdd, 0xe5, // PUSH IX
+      0xfd, 0xe1, // POP IY
+      0xdd, 0x7e, 0x02, // LD A,(IX+2)
+      0xfd, 0x70, 0xff, // LD (IY-1),B
+      0xdd, 0x36, 0x00, 0x55, // LD (IX+0),55h
+      0xdd, 0x34, 0x03, // INC (IX+3)
+      0xfd, 0x86, 0x04, // ADD A,(IY+4)
+      0xdd, 0x09, // ADD IX,BC
+      0xdd, 0xe9, // JP (IX)
+    ]);
+  });
+
+  it('assembles IXH remap, CB, DD CB, and ED', () => {
+    const r = assemble(
+      `
+      LD IXH,0xAB
+      LD B,IXL
+      BIT 7,(HL)
+      SET 0,A
+      RLC B
+      BIT 3,(IX+1)
+      RES 2,(IY-2)
+      LDIR
+      ADC HL,DE
+      NEG
+      IM 1
+      RETI
+      `,
+    );
+    expect(r.errors).toEqual([]);
+    expect([...r.bytes]).toEqual([
+      0xdd, 0x26, 0xab, // LD IXH,ABh
+      0xdd, 0x45, // LD B,IXL
+      0xcb, 0x7e, // BIT 7,(HL)
+      0xcb, 0xc7, // SET 0,A
+      0xcb, 0x00, // RLC B
+      0xdd, 0xcb, 0x01, 0x5e, // BIT 3,(IX+1)
+      0xfd, 0xcb, 0xfe, 0x96, // RES 2,(IY-2)
+      0xed, 0xb0, // LDIR
+      0xed, 0x5a, // ADC HL,DE
+      0xed, 0x44, // NEG
+      0xed, 0x56, // IM 1
+      0xed, 0x4d, // RETI
+    ]);
+  });
 });

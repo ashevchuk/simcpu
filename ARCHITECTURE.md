@@ -158,7 +158,8 @@ src/machine/    Soft machine map over RamComponent (not transistor devices).
   tty.ts          paintCell / injectKey helpers for tests and the panel.
   monitor.ts      Soft echo monitor opcode image (poll keys, CR/BS, wrap).
   softConsole.ts  Panel command line: M/W/G/R/H + loadHexAt (JS, not Z80).
-  assembler.ts    Mini two-pass Z80 subset assembler (labels, DB/DW).
+  assembler.ts    Mini two-pass Z80 subset assembler (labels, DB/DW,
+                   IX/IY/(IX+d), CB, common ED).
   MachineRunner.ts Auto-wires Input clocks/reset/seeds and pulses them
                    (throttled Run / Step / speed) — not a transistor
                    oscillator.
@@ -233,7 +234,8 @@ test/monitor.test.ts     Soft monitor opcode image shape + loadMonitor.
 test/machine-monitor.test.ts Echo monitor on addrBits=12: prompt + key
                           echo into FB, KEY_STATUS cleared.
 test/softConsole.test.ts Soft M/W/G/R/H commands + loadHexAt.
-test/assembler.test.ts   Mini assembler: LD/JR/labels/DB + error cases.
+test/assembler.test.ts   Mini assembler: LD/JR/labels/DB, IX/IY/CB/ED,
+                          + error cases.
 test/fold-z80.test.ts    foldZ80CpuLeavingRam: RAM outside, top-level
                           component count collapses; clocks still tick.
 test/serialize.test.ts   Project round-trip through a real JSON.stringify/
@@ -949,10 +951,13 @@ still feeds the Z80 echo monitor via KEY_*.
 
 `src/machine/assembler.ts` is a two-pass subset assembler (labels,
 `DB`/`DW`, common unprefixed ops this CPU runs — `LD`/`JR`/`JP`/`CALL`/
-ALU/`INC`/`DEC`/stack/EX/…). The panel **Assemble → Load @** uses the
-Load-address box as origin, writes bytes into RAM, and fills the hex box;
-**Assemble + Go** also patches `JP` at `0000` and reboots. Not a full
-Z80ASM — no IX/IY/`CB`/`ED` yet.
+ALU/`INC`/`DEC`/stack/EX/… — plus `IX`/`IY`, `(IX+d)`/`(IY+d)`,
+`IXH`/`IXL` remap, `CB` BIT/SET/RES/rot, `DD`/`FD CB` on `(IX+d)`, and
+common `ED` blocks / `ADC`/`SBC HL` / `NEG` / `IM` / `RETI`). The panel
+**Assemble → Load @** uses the Load-address box as origin, writes bytes
+into RAM, and fills the hex box; **Assemble + Go** also patches `JP` at
+`0000` and reboots. Still not a full commercial Z80ASM (undocumented
+`DD CB` `z≠6`, every `ED`/`CB` corner, etc.).
 
 ### MachineRunner auto-clock
 
@@ -984,7 +989,7 @@ the full transistor guts. Unit tests continue to use the unfolded
 
 ### Explicitly later
 
-Full Z80ASM (IX/IY/CB/ED) / BASIC; port-I/O TTY (`OUT`/`IN` devices);
+Full commercial Z80ASM / BASIC; port-I/O TTY (`OUT`/`IN` devices);
 clear-on-read keyboard in the solver; bitmap graphics beyond text cells;
 drawing glyphs on the transistor canvas itself; free-running unthrottled
 clocks; Z80-native command ROM (vs soft Cmd); namespaced labels so
@@ -4831,9 +4836,9 @@ section's own success story.
   IRQ" above). `CB` is closed for `BIT`/`SET`/`RES`/rotates (see above).
   `DD` has an index-register slice (`IX`, `LD IX,nn`, `PUSH IX`,
   `POP IX`, plus HL-clone ADD/INC/DEC/JP/LD SP/EX and `(IX+d)` LD /
-  INC/DEC / ALU `A,(IX+d)` — see "DD: IX" above); `FD` has the matching
-  IY slice (see "FD: IY" above); `DD`/`FD CB` and H→IXH remap remain
-  later.
+  INC/DEC / ALU `A,(IX+d)`, `DD CB` BIT/SET/RES/rot, and H→IXH remap —
+  see "DD: IX" above); `FD` has the matching IY slice (see "FD: IY"
+  above).
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
