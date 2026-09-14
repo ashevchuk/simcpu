@@ -3,8 +3,8 @@ import { makeZ80Harness } from './z80Harness.js';
 
 /**
  * FD/IY — first slice (LD/PUSH/POP) plus HL-clone slice (ADD/INC/DEC/
- * JP/LD SP/EX). Prefixed bodies start at PHASE4. See "FD: IY" in
- * ARCHITECTURE.md.
+ * JP/LD SP/EX) plus (IY+d) LD. Prefixed bodies start at PHASE4. See
+ * "FD: IY" in ARCHITECTURE.md.
  */
 describe('buildZ80Cpu — FD: LD IY,nn / PUSH IY / POP IY', () => {
   const ADDR_BITS = 7;
@@ -192,6 +192,90 @@ describe('buildZ80Cpu — FD: HL-clone ops (ADD/INC/DEC/JP/LD SP/EX)', () => {
 
     h.runInstruction(); // NOP at 0x40
     expect(h.readReg(h.cpu.pc)).toBe(0x41);
+    expectHlIxUntouched(h);
+  });
+});
+
+describe('buildZ80Cpu — FD: (IY+d) LD r/(IY+d),r/(IY+d),n', () => {
+  /**
+   * Mirror of the DD (IX+d) LD program with 0xFD / IY. HL and IX must stay
+   * untouched under FD. ADDR_BITS=8; IY=0x0040 so (IY+2) stays past the
+   * instruction stream (same self-modify trap as the DD test).
+   */
+  const ADDR_BITS = 8;
+  const HL_H = 0x55;
+  const HL_L = 0xaa;
+  const IX_H = 0x66;
+  const IX_L = 0xbb;
+  const PROGRAM = (() => {
+    const bytes = new Uint8Array(256);
+    bytes.set([0xfd, 0x21, 0x40, 0x00], 0);
+    bytes.set([0x3e, 0xaa], 4);
+    bytes.set([0xfd, 0x77, 0x02], 6);
+    bytes.set([0xaf], 9);
+    bytes.set([0xfd, 0x7e, 0x02], 10);
+    bytes.set([0xfd, 0x36, 0x02, 0x55], 13);
+    bytes.set([0xfd, 0x46, 0x02], 17);
+    return bytes;
+  })();
+
+  const expectHlIxUntouched = (h: ReturnType<typeof makeZ80Harness>) => {
+    expect(h.readReg(h.cpu.rH.q)).toBe(HL_H);
+    expect(h.readReg(h.cpu.rL.q)).toBe(HL_L);
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(IX_H);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(IX_L);
+  };
+
+  it('loads through (IY+d) without clobbering HL or IX', () => {
+    const h = makeZ80Harness(PROGRAM, ADDR_BITS, (cpu, seedReg) => {
+      seedReg(cpu.rB, 0);
+      seedReg(cpu.rC, 0);
+      seedReg(cpu.rD, 0);
+      seedReg(cpu.rE, 0);
+      seedReg(cpu.rH, HL_H);
+      seedReg(cpu.rL, HL_L);
+      seedReg(cpu.rIXH, IX_H);
+      seedReg(cpu.rIXL, IX_L);
+      seedReg(cpu.rIYH, 0);
+      seedReg(cpu.rIYL, 0);
+      seedReg(cpu.sp, 0, ADDR_BITS);
+      seedReg(cpu.aP, 0);
+      seedReg(cpu.fP, 0);
+      seedReg(cpu.bP, 0);
+      seedReg(cpu.cP, 0);
+      seedReg(cpu.dP, 0);
+      seedReg(cpu.eP, 0);
+      seedReg(cpu.hP, 0);
+      seedReg(cpu.lP, 0);
+    });
+
+    h.runInstruction(); // LD IY,0x0040
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(0x00);
+    expect(h.readReg(h.cpu.rIYL.q)).toBe(0x40);
+    expectHlIxUntouched(h);
+
+    h.runInstruction(); // LD A,0xAA
+    expect(h.readReg(h.cpu.a)).toBe(0xaa);
+
+    h.runInstruction(); // LD (IY+2),A
+    expect(h.cpu.ram.bytes[0x42]).toBe(0xaa);
+    expect(h.readReg(h.cpu.rIYL.q)).toBe(0x40);
+    expectHlIxUntouched(h);
+
+    h.runInstruction(); // XOR A
+    expect(h.readReg(h.cpu.a)).toBe(0);
+
+    h.runInstruction(); // LD A,(IY+2)
+    expect(h.readReg(h.cpu.a)).toBe(0xaa);
+    expectHlIxUntouched(h);
+
+    h.runInstruction(); // LD (IY+2),0x55
+    expect(h.cpu.ram.bytes[0x42]).toBe(0x55);
+    expectHlIxUntouched(h);
+
+    h.runInstruction(); // LD B,(IY+2)
+    expect(h.readReg(h.cpu.rB.q)).toBe(0x55);
+    expect(h.readReg(h.cpu.a)).toBe(0xaa);
     expectHlIxUntouched(h);
   });
 });

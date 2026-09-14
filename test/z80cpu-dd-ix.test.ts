@@ -3,8 +3,8 @@ import { makeZ80Harness } from './z80Harness.js';
 
 /**
  * DD/IX — first slice (LD/PUSH/POP) plus HL-clone slice (ADD/INC/DEC/
- * JP/LD SP/EX). Prefixed bodies start at PHASE4. See "DD: IX" in
- * ARCHITECTURE.md.
+ * JP/LD SP/EX) plus (IX+d) LD. Prefixed bodies start at PHASE4. See
+ * "DD: IX" in ARCHITECTURE.md.
  */
 describe('buildZ80Cpu — DD: LD IX,nn / PUSH IX / POP IX', () => {
   const ADDR_BITS = 7;
@@ -207,6 +207,98 @@ describe('buildZ80Cpu — DD: HL-clone ops (ADD/INC/DEC/JP/LD SP/EX)', () => {
 
     h.runInstruction(); // NOP at 0x40
     expect(h.readReg(h.cpu.pc)).toBe(0x41);
+    expectHlIyUntouched(h);
+  });
+});
+
+describe('buildZ80Cpu — DD: (IX+d) LD r/(IX+d),r/(IX+d),n', () => {
+  /**
+   *  0: DD 21 40 00   LD IX,0x0040   (target RAM[0x42] — past this program)
+   *  4: 3E AA         LD A,0xAA
+   *  6: DD 77 02      LD (IX+2),A      ; RAM[0x42]=0xAA
+   *  9: AF            XOR A
+   * 10: DD 7E 02      LD A,(IX+2)      ; A=0xAA
+   * 13: DD 36 02 55   LD (IX+2),0x55
+   * 17: DD 46 02      LD B,(IX+2)      ; B=0x55
+   *
+   * ADDR_BITS=8 so IX+d uses a full low byte. HL and IY must stay untouched.
+   * IX base must keep (IX+d) out of the instruction stream (0x12 would
+   * overwrite the LD B opcode at PC=18).
+   */
+  const ADDR_BITS = 8;
+  const HL_H = 0x55;
+  const HL_L = 0xaa;
+  const IY_H = 0x66;
+  const IY_L = 0xbb;
+  const PROGRAM = (() => {
+    const bytes = new Uint8Array(256);
+    bytes.set([0xdd, 0x21, 0x40, 0x00], 0);
+    bytes.set([0x3e, 0xaa], 4);
+    bytes.set([0xdd, 0x77, 0x02], 6);
+    bytes.set([0xaf], 9);
+    bytes.set([0xdd, 0x7e, 0x02], 10);
+    bytes.set([0xdd, 0x36, 0x02, 0x55], 13);
+    bytes.set([0xdd, 0x46, 0x02], 17);
+    return bytes;
+  })();
+
+  const expectHlIyUntouched = (h: ReturnType<typeof makeZ80Harness>) => {
+    expect(h.readReg(h.cpu.rH.q)).toBe(HL_H);
+    expect(h.readReg(h.cpu.rL.q)).toBe(HL_L);
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(IY_H);
+    expect(h.readReg(h.cpu.rIYL.q)).toBe(IY_L);
+  };
+
+  it('loads through (IX+d) without clobbering HL or IY', () => {
+    const h = makeZ80Harness(PROGRAM, ADDR_BITS, (cpu, seedReg) => {
+      seedReg(cpu.rB, 0);
+      seedReg(cpu.rC, 0);
+      seedReg(cpu.rD, 0);
+      seedReg(cpu.rE, 0);
+      seedReg(cpu.rH, HL_H);
+      seedReg(cpu.rL, HL_L);
+      seedReg(cpu.rIXH, 0);
+      seedReg(cpu.rIXL, 0);
+      seedReg(cpu.rIYH, IY_H);
+      seedReg(cpu.rIYL, IY_L);
+      seedReg(cpu.sp, 0, ADDR_BITS);
+      seedReg(cpu.aP, 0);
+      seedReg(cpu.fP, 0);
+      seedReg(cpu.bP, 0);
+      seedReg(cpu.cP, 0);
+      seedReg(cpu.dP, 0);
+      seedReg(cpu.eP, 0);
+      seedReg(cpu.hP, 0);
+      seedReg(cpu.lP, 0);
+    });
+
+    h.runInstruction(); // LD IX,0x0040
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x00);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x40);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD A,0xAA
+    expect(h.readReg(h.cpu.a)).toBe(0xaa);
+
+    h.runInstruction(); // LD (IX+2),A
+    expect(h.cpu.ram.bytes[0x42]).toBe(0xaa);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x40);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // XOR A
+    expect(h.readReg(h.cpu.a)).toBe(0);
+
+    h.runInstruction(); // LD A,(IX+2)
+    expect(h.readReg(h.cpu.a)).toBe(0xaa);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD (IX+2),0x55
+    expect(h.cpu.ram.bytes[0x42]).toBe(0x55);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD B,(IX+2)
+    expect(h.readReg(h.cpu.rB.q)).toBe(0x55);
+    expect(h.readReg(h.cpu.a)).toBe(0xaa);
     expectHlIyUntouched(h);
   });
 });
