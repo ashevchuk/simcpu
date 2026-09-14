@@ -15,6 +15,8 @@ import { initialState, step } from './sim/solver.js';
 import { seedStandardCells } from './sim/stdcells.js';
 import type { ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
 import { MACHINE_ADDR_BITS } from './machine/memoryMap.js';
+import { MachineRunner } from './machine/MachineRunner.js';
+import { monitorHexPrompt } from './machine/monitor.js';
 import { Camera, type Bounds } from './ui/Camera.js';
 import { showAlert, showConfirm, showPrompt } from './ui/Dialog.js';
 import { Editor, type Tool } from './ui/Editor.js';
@@ -30,6 +32,8 @@ if (!ctx) throw new Error('2D canvas context is not available');
 const machinePanelHost = document.getElementById('machine-panel');
 if (!machinePanelHost) throw new Error('#machine-panel is missing from index.html');
 const machinePanel = new MachinePanel(machinePanelHost);
+const machineRunner = new MachineRunner();
+machinePanel.bindRunner(machineRunner);
 
 const library = new ChipLibrary();
 seedStandardCells(library); // NOT/NAND/AND/NOR/OR/XOR/MUX2/MUX4/FULL_ADDER/D_LATCH/D_FF, ready to drag out
@@ -220,11 +224,14 @@ setTool({ kind: 'select' });
 
 document.getElementById('clear')?.addEventListener('click', async () => {
   if (!(await showConfirm('Clear this level of the circuit?'))) return;
+  if (navStack.length === 1) {
+    machineRunner.detach();
+    machinePanel.detach();
+  }
   editor.circuit.components.clear();
   editor.circuit.wires.clear();
   editor.clearSelection();
   editor.cancelWire();
-  if (navStack.length === 1) machinePanel.detach();
 });
 
 document.getElementById('fold')?.addEventListener('click', () => void foldSelection());
@@ -368,16 +375,15 @@ document.getElementById('add-cpu')?.addEventListener('click', async () => {
 });
 
 /**
- * Default demo: write "Hi!" into the memory-mapped framebuffer at 0xE00
- * (needs addrBits ≥ 12), then spin. Real Z80: LD A,n / LD (nn),A / JR e.
+ * Default demo: soft echo monitor (poll KEY_*, write FB @ 0xE00). Needs addrBits ≥ 12.
  */
-const Z80_TTY_DEMO_HEX = '3e,48,32,00,0e,3e,69,32,01,0e,3e,21,32,02,0e,18,fe';
+const Z80_MONITOR_HEX = monitorHexPrompt();
 
-/** Same shape as promptProgramBytes(), defaulted to the TTY demo (or paste any real Z80 opcodes). */
+/** Same shape as promptProgramBytes(), defaulted to the soft monitor. */
 async function promptZ80ProgramBytes(): Promise<Uint8Array | null> {
   const raw = await showPrompt(
-    'Program bytes, comma-separated hex — default writes "Hi!" to FB @ 0xE00 (needs 12-bit RAM). Real Z80 opcodes OK; see ARCHITECTURE.md:',
-    Z80_TTY_DEMO_HEX,
+    'Program bytes, comma-separated hex — default is the soft echo monitor (FB @ 0xE00, keys @ 0xF00; needs 12-bit RAM):',
+    Z80_MONITOR_HEX,
   );
   if (!raw) return null;
   const bytes = raw
@@ -395,10 +401,28 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
   const program = await promptZ80ProgramBytes();
   if (program === null) return;
   const pos = snap(camera.screenToWorld({ x: vw() / 2, y: vh() / 2 }, vw(), vh()));
+  machineRunner.detach();
   const cpu = buildZ80Cpu(editor.circuit, library, addrBits, program, pos);
   refreshChipPalette();
-  if (addrBits >= MACHINE_ADDR_BITS) machinePanel.attach(cpu.ram);
-  else machinePanel.detach();
+  if (addrBits >= MACHINE_ADDR_BITS) {
+    const simTick = () => {
+      const flat = flatten(topCircuit, library);
+      const flatNetMap = flat.computeNets();
+      simState = step(flat, flatNetMap, simState);
+      uiDirty = true;
+    };
+    machinePanel.attach(cpu.ram);
+    machinePanel.bindRunner(machineRunner);
+    machineRunner.attach(editor.circuit, library, cpu, simTick);
+    // Boot blocks on first flatten — status hint already warns.
+    machineRunner.boot();
+    machineRunner.setRunning(true);
+    machinePanel.refreshControls();
+    machinePanel.draw();
+  } else {
+    machinePanel.detach();
+    machineRunner.detach();
+  }
 });
 
 // --- Project & chip file I/O ------------------------------------------------
@@ -455,6 +479,7 @@ importProjectInput.addEventListener('change', async () => {
       renderBreadcrumb();
       refreshChipPalette();
       camera.centerOn(centroid(circuitBounds(topCircuit)), 1);
+      machineRunner.detach();
       machinePanel.detach(); // re-attach via + Z80CPU with addrBits ≥ 12
     })
     .catch((err: unknown) => {
@@ -672,6 +697,11 @@ const statusEl = document.getElementById('status') as HTMLDivElement;
  * every frame regardless of `uiDirty`, exactly as before this change.
  */
 function frame(): void {
+  // Throttled soft auto-clock before the normal sim/draw pass.
+  if (machineRunner.running) {
+    machineRunner.tickBudget(2);
+    uiDirty = true;
+  }
   if (uiDirty || !simState.settled) {
     const flat = flatten(topCircuit, library);
     const flatNetMap = flat.computeNets();
@@ -688,7 +718,8 @@ function frame(): void {
     zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
     statusEl.textContent =
       `${navStack.map((f) => f.label).join('/')} | flat nets: ${flatNetMap.pinsOf.size} | ` +
-      `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}`;
+      `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}` +
+      (machineRunner.running ? ' | machine: run' : machineRunner.attached ? ' | machine: pause' : '');
     uiDirty = false;
   }
   // Soft TTY samples ram.bytes independently of the transistor canvas.

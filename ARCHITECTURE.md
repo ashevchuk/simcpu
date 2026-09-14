@@ -15,9 +15,10 @@ slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY`, HL-clone
 `INC`/`DEC` / ALU `A,(IX+d)`, nested `DD CB`/`FD CB` BIT / SET/RES / rot
 on `(IX+d)`/`(IY+d)`, and H→IXH / L→IXL (IYH/IYL) 8-bit register remap
 for LD / LD n / INC/DEC / ALU `A,IXH/IXL`). A soft memory-mapped text TTY
-(framebuffer + keyboard over `RamComponent.bytes`, canvas side panel) is
+(framebuffer + keyboard over `RamComponent.bytes`, canvas side panel), a
+soft echo monitor in RAM, and a throttled MachineRunner auto-clock are
 the first machine-facing I/O layer — see "Memory-mapped TTY (behavioral)".
-Monitor ROM, BASIC, and the assembler remain later phases.
+Richer monitor commands, BASIC, and the assembler remain later phases.
 
 ## Layout
 
@@ -144,14 +145,17 @@ src/ui/         Canvas editor — thin layer on top of src/sim, swappable.
                    N/P letter are still there too, so type is legible at a
                    glance from any one of three independent visual cues.
   MachinePanel.ts Soft text TTY: samples `ram.bytes[FB_BASE..]` onto a
-                   side-panel canvas and injects keydowns into
-                   KEY_STATUS/KEY_DATA — see "Memory-mapped TTY
-                   (behavioral)".
+                   side-panel canvas, injects keydowns into
+                   KEY_STATUS/KEY_DATA, and exposes Run/Pause/Step for
+                   MachineRunner — see "Memory-mapped TTY (behavioral)".
 
 src/machine/    Soft machine map over RamComponent (not transistor devices).
   memoryMap.ts    Locked 12-bit demo layout: FB @ 0xE00 (32×8), keys @
                    0xF00/0xF01.
   tty.ts          paintCell / injectKey helpers for tests and the panel.
+  monitor.ts      Soft echo monitor opcode image (poll keys, CR/BS, wrap).
+  MachineRunner.ts Auto-wires Input clocks/reset/seeds and pulses them
+                   (throttled Run / Step) — not a transistor oscillator.
 
 src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 demo, owns the hierarchy navigation stack (dive in/out,
@@ -161,11 +165,12 @@ src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 (built from each toolbar button's own `data-key` in
                 index.html, so the key and its on-screen hint can't drift
                 apart), arrow-key nudge for the current selection, and runs
-                the requestAnimationFrame loop: flatten the *top* circuit ->
-                step solver -> draw the *currently viewed* level -> sample
-                the soft TTY panel when a 12-bit Z80 RAM is attached ->
-                repeat. `+ Z80CPU` defaults to 12-bit address space and a
-                tiny "Hi!" framebuffer demo program.
+                the requestAnimationFrame loop: optional MachineRunner
+                phase budget -> flatten the *top* circuit -> step solver ->
+                draw the *currently viewed* level -> sample the soft TTY
+                panel when a 12-bit Z80 RAM is attached -> repeat.
+                `+ Z80CPU` defaults to 12-bit address space, the soft
+                echo monitor program, and auto-run after boot.
 
 test/solver.test.ts      Engine correctness: NOT/NAND/AND truth tables, an
                           SR latch's feedback-held state, and short detection
@@ -217,6 +222,9 @@ test/memoryMap.test.ts   Soft machine-map constants + paintCell / keyboard
 test/machine-tty.test.ts Z80 program with addrBits=12 writes FB via
                           LD (nn),A and clears soft KEY_STATUS after a
                           poll of KEY_DATA.
+test/monitor.test.ts     Soft monitor opcode image shape + loadMonitor.
+test/machine-monitor.test.ts Echo monitor on addrBits=12: prompt + key
+                          echo into FB, KEY_STATUS cleared.
 test/serialize.test.ts   Project round-trip through a real JSON.stringify/
                           parse cycle, including a folded chip instance
                           still simulating correctly after reload; the id
@@ -906,17 +914,32 @@ used) — previously only the low register participated.
 focused, printable keys plus Enter/Backspace/Tab write `KEY_DATA` and set
 `KEY_STATUS=1` (overwrite if unread — documented in the panel hint). Z80
 code polls and clears status with a store. Clear-on-read MMIO can come
-later if a monitor needs it.
+later if a richer monitor needs it.
 
-`+ Z80CPU` defaults to 12-bit RAM and seeds a tiny program that writes
-`"Hi!"` into `0xE00` then spins (`JR -2`), so the panel lights up once
-clocks are wired and stepped.
+### Soft echo monitor
+
+`src/machine/monitor.ts` holds `MONITOR_BYTES` — real Z80 opcodes at
+`0x000`. Boot writes `>` at `0xE00`, then polls `KEY_STATUS` / `KEY_DATA`,
+clears status, and handles printable echo, `CR` (next 32-col row), and
+`BS` (rub out), wrapping at the framebuffer end. This is the default
+`+ Z80CPU` program prompt (still overridable with pasted hex).
+
+### MachineRunner auto-clock
+
+`MachineRunner` wires `Input` drivers for `clk` / `phaseClk` / `reset` /
+`aReset` / FSM seed / register zero-seeds (parked far above the CPU),
+boots like the test harness, then advances the ring under UI control:
+**Run** (~2 FSM phases per animation frame), **Pause**, **Step** (one
+full 10-phase instruction). Not a transistor oscillator — same soft
+trade-off as Real RAM / the TTY panel. First boot after place still pays
+a multi-second `flatten()`; later ticks hit the flatten cache.
 
 ### Explicitly later
 
-Full monitor / BASIC / assembler; port-I/O TTY (`OUT`/`IN`); clear-on-read
-keyboard in the solver; bitmap graphics beyond text cells; drawing glyphs
-on the transistor canvas itself.
+Full monitor commands / BASIC / assembler; port-I/O TTY (`OUT`/`IN`);
+clear-on-read keyboard in the solver; bitmap graphics beyond text cells;
+drawing glyphs on the transistor canvas itself; free-running full-speed
+clocks.
 
 ## Decode and execute: a tiny working CPU
 

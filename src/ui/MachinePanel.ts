@@ -1,4 +1,5 @@
 import type { RamComponent } from '../sim/types.js';
+import type { MachineRunner } from '../machine/MachineRunner.js';
 import {
   FB_BASE,
   FB_COLS,
@@ -16,14 +17,20 @@ const PAD = 8;
 
 /**
  * Side-panel text TTY: samples the soft framebuffer in `ram.bytes` and
- * injects keystrokes into KEY_STATUS/KEY_DATA. Not a transistor device.
+ * injects keystrokes into KEY_STATUS/KEY_DATA. Run/Pause/Step drive a
+ * MachineRunner auto-clock. Not a transistor device.
  */
 export class MachinePanel {
   readonly root: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly hint: HTMLElement;
+  private readonly statusEl: HTMLElement;
+  private readonly btnRun: HTMLButtonElement;
+  private readonly btnPause: HTMLButtonElement;
+  private readonly btnStep: HTMLButtonElement;
   private ram: RamComponent | null = null;
+  private runner: MachineRunner | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(host: HTMLElement) {
@@ -32,13 +39,23 @@ export class MachinePanel {
     this.root.innerHTML = `
       <div class="machine-panel-header">
         <span class="machine-panel-title">TTY</span>
-        <span class="machine-panel-meta">32×8 · MMIO</span>
+        <span class="machine-panel-meta">32×8 · monitor</span>
+      </div>
+      <div class="machine-panel-controls">
+        <button type="button" data-act="run" title="Auto-clock (~2 FSM phases/frame)">Run</button>
+        <button type="button" data-act="pause" title="Pause auto-clock">Pause</button>
+        <button type="button" data-act="step" title="One full instruction (10 phases)">Step</button>
+        <span class="machine-panel-status">idle</span>
       </div>
       <canvas class="machine-panel-canvas" tabindex="0" title="Click to focus; type to inject keys"></canvas>
-      <div class="machine-panel-hint">Click panel, then type. Keys overwrite if unread.</div>
+      <div class="machine-panel-hint">Place + Z80CPU (12-bit). First boot is slow; then Run and type here.</div>
     `;
     this.canvas = this.root.querySelector('canvas')!;
     this.hint = this.root.querySelector('.machine-panel-hint')!;
+    this.statusEl = this.root.querySelector('.machine-panel-status')!;
+    this.btnRun = this.root.querySelector('[data-act="run"]')!;
+    this.btnPause = this.root.querySelector('[data-act="pause"]')!;
+    this.btnStep = this.root.querySelector('[data-act="step"]')!;
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context is not available for MachinePanel');
     this.ctx = ctx;
@@ -50,6 +67,19 @@ export class MachinePanel {
     this.resizeBackingStore();
 
     this.canvas.addEventListener('click', () => this.canvas.focus());
+    this.btnRun.addEventListener('click', () => {
+      this.runner?.setRunning(true);
+      this.refreshControls();
+    });
+    this.btnPause.addEventListener('click', () => {
+      this.runner?.setRunning(false);
+      this.refreshControls();
+    });
+    this.btnStep.addEventListener('click', () => {
+      this.runner?.stepInstruction();
+      this.draw();
+      this.refreshControls();
+    });
     this.setVisible(false);
   }
 
@@ -62,28 +92,42 @@ export class MachinePanel {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
+  bindRunner(runner: MachineRunner | null): void {
+    this.runner = runner;
+    this.refreshControls();
+  }
+
   attach(ram: RamComponent): void {
-    this.detach();
+    this.detachRamOnly();
     if (!requiresMachineMap(ram.addrBits)) {
       this.hint.textContent = `Need addrBits ≥ 12 (got ${ram.addrBits}).`;
       this.setVisible(true);
+      this.refreshControls();
       return;
     }
     this.ram = ram;
     this.keyHandler = (e: KeyboardEvent) => this.onKeyDown(e);
     this.canvas.addEventListener('keydown', this.keyHandler);
-    this.hint.textContent = 'Click panel, then type. Keys overwrite if unread.';
+    this.hint.textContent =
+      'Click canvas, then type. Keys overwrite if unread. Run = throttled auto-clock; first boot after place is slow.';
     this.setVisible(true);
     this.draw();
+    this.refreshControls();
   }
 
-  detach(): void {
+  private detachRamOnly(): void {
     if (this.keyHandler) {
       this.canvas.removeEventListener('keydown', this.keyHandler);
       this.keyHandler = null;
     }
     this.ram = null;
+  }
+
+  detach(): void {
+    this.detachRamOnly();
+    this.runner = null;
     this.setVisible(false);
+    this.refreshControls();
   }
 
   get attached(): boolean {
@@ -92,6 +136,20 @@ export class MachinePanel {
 
   setVisible(show: boolean): void {
     this.root.hidden = !show;
+  }
+
+  refreshControls(): void {
+    const has = this.runner?.attached ?? false;
+    this.btnRun.disabled = !has;
+    this.btnPause.disabled = !has;
+    this.btnStep.disabled = !has;
+    if (!has) {
+      this.statusEl.textContent = 'idle';
+      return;
+    }
+    this.statusEl.textContent = this.runner!.running ? 'running' : 'paused';
+    this.btnRun.classList.toggle('active', this.runner!.running);
+    this.btnPause.classList.toggle('active', !this.runner!.running);
   }
 
   draw(): void {

@@ -135,6 +135,23 @@
         border-color: var(--accent);
         box-shadow: 0 0 0 1px rgba(245, 197, 24, 0.35);
       }
+      .machine-panel-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .machine-panel-controls button.active {
+        background: var(--accent);
+        color: var(--accent-ink);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      .machine-panel-status {
+        margin-left: auto;
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+      }
       .machine-panel-hint {
         font: 11px ui-monospace, monospace;
         color: var(--text-dim);
