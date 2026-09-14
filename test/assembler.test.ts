@@ -127,4 +127,18 @@ describe('mini assembler', () => {
       0xed, 0x4d, // RETI
     ]);
   });
+
+  it('assembles SLL r / (HL) / (IX+d)', () => {
+    const r = assemble(`
+      SLL B
+      SLL (HL)
+      SLL (IX+2)
+    `);
+    expect(r.errors).toEqual([]);
+    expect([...r.bytes]).toEqual([
+      0xcb, 0x30, // SLL B
+      0xcb, 0x36, // SLL (HL)
+      0xdd, 0xcb, 0x02, 0x36, // SLL (IX+2)
+    ]);
+  });
 });

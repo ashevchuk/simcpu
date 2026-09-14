@@ -2,7 +2,7 @@ import type { Component, NetMap, Pin, Point, Wire } from './types.js';
 import { UnionFind } from './UnionFind.js';
 
 /** Names that always resolve to the same global net, regardless of wiring topology. */
-const GLOBAL_NET_NAMES = new Set(['VCC', 'GND']);
+export const GLOBAL_NET_NAMES = new Set(['VCC', 'GND']);
 
 let idCounter = 0;
 export function nextId(prefix: string): string {

@@ -723,36 +723,48 @@ function frame(): void {
   const needSimDraw = softRun ? uiDirty : uiDirty || !simState.settled || (machineRunner.running && machineWorked);
 
   if (needSimDraw) {
-    // Soft Run already mutated RAM; don't burn another full step unless
-    // uiDirty asked for a canvas refresh (pan/zoom/selection).
+    // Soft at top level: draw chip boxes without expanding ~200k components
+    // through flatten() — interactive TTY does not need pin levels. Dive-in
+    // (navStack depth > 1) or any Gates path still flattens as before.
+    const softTop = softRun && navStack.length === 1;
     if (!softRun || uiDirty) {
-      const flat = flatten(topCircuit, library);
-      const flatNetMap = flat.computeNets();
-      if (!softRun) {
-        simState = step(flat, flatNetMap, simState);
-      }
-
       const view = navStack[navStack.length - 1]!;
-      const resolve = (localPinId: string): { level: Level; contended: boolean } => {
-        const net = flatNetMap.netOf.get(view.pathPrefix + localPinId);
-        if (!net) return { level: 'Z', contended: false };
-        return { level: simState.levelOf.get(net) ?? 'Z', contended: simState.contended.has(net) };
-      };
+      if (softTop) {
+        const resolve = (_localPinId: string): { level: Level; contended: boolean } => ({
+          level: 'Z',
+          contended: false,
+        });
+        draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
+        zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
+        statusEl.textContent = `${navStack.map((f) => f.label).join('/')} | soft (flatten deferred) | machine: soft`;
+      } else {
+        const flat = flatten(topCircuit, library);
+        const flatNetMap = flat.computeNets();
+        if (!softRun) {
+          simState = step(flat, flatNetMap, simState);
+        }
 
-      draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
-      zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
-      const mode =
-        machineRunner.running && machineRunner.isSoft
-          ? 'machine: soft'
-          : machineRunner.running
-            ? 'machine: gates'
-            : machineRunner.attached
-              ? 'machine: pause'
-              : '';
-      statusEl.textContent =
-        `${navStack.map((f) => f.label).join('/')} | flat nets: ${flatNetMap.pinsOf.size} | ` +
-        `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}` +
-        (mode ? ` | ${mode}` : '');
+        const resolve = (localPinId: string): { level: Level; contended: boolean } => {
+          const net = flatNetMap.netOf.get(view.pathPrefix + localPinId);
+          if (!net) return { level: 'Z', contended: false };
+          return { level: simState.levelOf.get(net) ?? 'Z', contended: simState.contended.has(net) };
+        };
+
+        draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
+        zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
+        const mode =
+          machineRunner.running && machineRunner.isSoft
+            ? 'machine: soft'
+            : machineRunner.running
+              ? 'machine: gates'
+              : machineRunner.attached
+                ? 'machine: pause'
+                : '';
+        statusEl.textContent =
+          `${navStack.map((f) => f.label).join('/')} | flat nets: ${flatNetMap.pinsOf.size} | ` +
+          `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}` +
+          (mode ? ` | ${mode}` : '');
+      }
     }
     uiDirty = false;
   }

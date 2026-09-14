@@ -3,16 +3,17 @@ import type { Circuit } from '../sim/Circuit.js';
 import type { Z80Cpu } from '../sim/blocks.js';
 import { makeInput, wire } from '../sim/library.js';
 import type { InputComponent, Pin, RamComponent } from '../sim/types.js';
-import { createSoftZ80, softRun, softStep, type SoftZ80State } from './softZ80.js';
+import { createSoftDevices, type SoftDevices } from './softDevices.js';
+import { createSoftZ80, softRun, softStep, type SoftMemHooks, type SoftZ80State } from './softZ80.js';
 
 type TickFn = () => void;
 
 /**
  * Run modes:
  * - soft: behavioral interpreter on ram.bytes (default — usable TTY)
- * - slow/normal/turbo: transistor MachineRunner with a per-frame time budget
+ * - slow/normal/turbo/free: transistor MachineRunner with a per-frame time budget
  */
-export type RunSpeed = 'soft' | 'slow' | 'normal' | 'turbo';
+export type RunSpeed = 'soft' | 'slow' | 'normal' | 'turbo' | 'free';
 
 /** Soft interpreter instructions per animation frame. */
 export const SOFT_OPS_PER_FRAME = 8000;
@@ -20,11 +21,15 @@ export const SOFT_OPS_PER_FRAME = 8000;
 /** Max wall-clock ms of gate-level phases per animation frame. */
 export const GATE_BUDGET_MS = 12;
 
+/** Wider wall-clock budget for free-running gate speed (one frame may burn more CPU). */
+export const FREE_BUDGET_MS = 50;
+
 /** Cap on FSM phases per frame when using gate speeds (time budget usually hits first). */
 export const PHASES_PER_FRAME: Record<Exclude<RunSpeed, 'soft'>, number> = {
   slow: 2,
   normal: 10,
   turbo: 40,
+  free: 400,
 };
 
 /**
@@ -46,13 +51,36 @@ export class MachineRunner {
   private seedWes: InputComponent[] = [];
   private booted = false;
   private soft: SoftZ80State | null = null;
+  private devices: SoftDevices = createSoftDevices();
+  /** Gate FSM seed deferred while Soft is the active speed. */
+  private gateBootPending = false;
   /** True after soft Run has diverged from gate-level PC/regs. */
   softDesynced = false;
+  /** Last soft interpreter error (cleared on reboot/boot). */
+  softError: string | null = null;
   running = false;
   speed: RunSpeed = 'soft';
 
   get attached(): boolean {
     return this.circuit !== null && this.cpu !== null;
+  }
+
+  get softCpu(): SoftZ80State | null {
+    return this.soft;
+  }
+
+  get softDevices(): SoftDevices {
+    return this.devices;
+  }
+
+  private softHooks(): SoftMemHooks {
+    const ram = this.ram!;
+    const dev = this.devices;
+    return {
+      clearOnReadKeys: true,
+      portIn: (port) => dev.portIn(ram.bytes, port),
+      portOut: (port, val) => dev.portOut(ram.bytes, port, val),
+    };
   }
 
   get isSoft(): boolean {
@@ -65,7 +93,14 @@ export class MachineRunner {
   }
 
   setSpeed(speed: RunSpeed): void {
+    const prev = this.speed;
     this.speed = speed;
+    // Soft attach defers transistor boot — complete it the first time Gates is selected.
+    if (prev === 'soft' && speed !== 'soft' && this.gateBootPending) {
+      this.gateBootPending = false;
+      this.booted = false;
+      this.boot();
+    }
   }
 
   /**
@@ -128,14 +163,20 @@ export class MachineRunner {
     this.booted = false;
     this.running = false;
     this.soft = null;
+    this.devices = createSoftDevices();
     this.softDesynced = false;
+    this.softError = null;
+    this.gateBootPending = false;
   }
 
   detach(): void {
     this.running = false;
     this.booted = false;
     this.soft = null;
+    this.devices = createSoftDevices();
     this.softDesynced = false;
+    this.softError = null;
+    this.gateBootPending = false;
     if (this.circuit) {
       for (const id of this.inputIds) this.circuit.removeComponent(id);
     }
@@ -150,6 +191,19 @@ export class MachineRunner {
   /** Gate-level boot (FSM seed, reset, first fetch) + soft CPU reset. */
   boot(): void {
     if (!this.tick || !this.cpu || this.booted) return;
+
+    // Soft is the interactive default — skip multi-second flatten/step pulses
+    // until the user actually selects a Gates speed (see setSpeed).
+    if (this.isSoft) {
+      this.booted = true;
+      this.soft = createSoftZ80(0xdff);
+      this.devices = createSoftDevices();
+      this.softDesynced = false;
+      this.softError = null;
+      this.gateBootPending = true;
+      return;
+    }
+
     const tick = this.tick;
     const pulse = (sig: InputComponent) => {
       sig.value = 1;
@@ -168,7 +222,10 @@ export class MachineRunner {
     pulse(this.dataClk);
     this.booted = true;
     this.soft = createSoftZ80(0xdff);
+    this.devices = createSoftDevices();
     this.softDesynced = false;
+    this.softError = null;
+    this.gateBootPending = false;
   }
 
   reboot(): void {
@@ -205,8 +262,14 @@ export class MachineRunner {
   stepInstruction(): void {
     if (!this.booted) this.boot();
     if (this.isSoft && this.soft && this.ram) {
-      softStep(this.soft, this.ram.bytes);
-      this.softDesynced = true;
+      try {
+        softStep(this.soft, this.ram.bytes, this.softHooks());
+        this.softDesynced = true;
+      } catch (e) {
+        this.running = false;
+        this.softError = e instanceof Error ? e.message : String(e);
+        console.error(e);
+      }
       return;
     }
     for (let i = 0; i < 10; i++) this.stepPhase();
@@ -220,12 +283,19 @@ export class MachineRunner {
   tickBudget(): boolean {
     if (!this.running || !this.booted) return false;
     if (this.isSoft && this.soft && this.ram) {
-      softRun(this.soft, this.ram.bytes, SOFT_OPS_PER_FRAME);
-      this.softDesynced = true;
+      try {
+        softRun(this.soft, this.ram.bytes, SOFT_OPS_PER_FRAME, this.softHooks());
+        this.softDesynced = true;
+      } catch (e) {
+        this.running = false;
+        this.softError = e instanceof Error ? e.message : String(e);
+        console.error(e);
+      }
       return true;
     }
     const maxPhases = PHASES_PER_FRAME[this.speed as Exclude<RunSpeed, 'soft'>];
-    const deadline = performance.now() + GATE_BUDGET_MS;
+    const budgetMs = this.speed === 'free' ? FREE_BUDGET_MS : GATE_BUDGET_MS;
+    const deadline = performance.now() + budgetMs;
     let n = 0;
     while (n < maxPhases && performance.now() < deadline) {
       this.stepPhase();

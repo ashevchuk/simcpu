@@ -43,7 +43,7 @@ const ALU: Record<string, number> = {
 };
 const JR_CC: Record<string, number> = { nz: 0, z: 1, nc: 2, c: 3 };
 
-/** CB x=00 rotates/shifts (y). */
+/** CB x=00 rotates/shifts (y). SLL is undocumented (y=6, bit0 forced 1). */
 const CB_ROT: Record<string, number> = {
   rlc: 0,
   rrc: 1,
@@ -51,6 +51,7 @@ const CB_ROT: Record<string, number> = {
   rr: 3,
   sla: 4,
   sra: 5,
+  sll: 6,
   srl: 7,
 };
 

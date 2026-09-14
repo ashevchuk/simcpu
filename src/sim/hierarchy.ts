@@ -1,5 +1,5 @@
 import type { ChipDef, ChipLibrary } from './ChipLibrary.js';
-import { bumpStructureVersion, Circuit, currentStructureVersion, nextId } from './Circuit.js';
+import { bumpStructureVersion, Circuit, currentStructureVersion, GLOBAL_NET_NAMES, nextId } from './Circuit.js';
 import { makeChipInstance, makeInput, makePort, makeProbe, makeSource } from './library.js';
 import type { ChipInstanceComponent, Component, InputComponent, Pin, Point, SourceComponent } from './types.js';
 
@@ -349,6 +349,12 @@ function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string):
       outLiveValuePairs.push({ original: c, clone: clone as SourceComponent | InputComponent });
     }
     clone.id = nsPrefix + c.id;
+    // Named ties (CLK, BUS0, …) would otherwise short across chip instances
+    // after flatten — computeNets joins same-named labels. VCC/GND stay
+    // global on purpose. Top-level (empty nsPrefix) keeps names as authored.
+    if (clone.kind === 'label' && nsPrefix && !GLOBAL_NET_NAMES.has(clone.name)) {
+      clone.name = `${nsPrefix}${clone.name}`;
+    }
     // Every Component variant's `pins` is structurally a plain object of
     // Pin values regardless of its exact key set (fixed for primitives,
     // dynamic for chip instances) — Record<string, Pin> is a safe view for

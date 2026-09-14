@@ -989,11 +989,23 @@ transistor timing. Soft Run desyncs gate-level PC/regs; **Reboot**
 re-seeds both. Prefixed CB/ED/DD/FD throw in soft mode (use **Gates** +
 Step).
 
-**Gates slow/normal/turbo:** real circuit edges with a **~12ms wall-clock
-budget** per animation frame (phase cap 2/10/40). Folding does not shrink
-the ~57k-net `step()` cost — Soft exists because turbo-at-all-costs was
-unusable for interactive TTY. First place/boot still pays a multi-second
-`flatten()`.
+**Gates slow/normal/turbo/free:** real circuit edges with a wall-clock
+budget per animation frame (phase caps 2/10/40/400; free uses ~50ms).
+Folding does not shrink the ~57k-net `step()` cost — Soft exists because
+turbo-at-all-costs was unusable for interactive TTY. Soft at top level
+also **defers** `flatten()` (canvas draws chip boxes with Z levels) and
+defers gate FSM boot until a Gates speed is selected, so `+ Z80CPU` stays
+interactive. Dive-in or Gates still pays cold `flatten()` (~4s once, then
+cached).
+
+### Soft Z80 + TTY devices
+
+`softZ80.ts` covers unprefixed opcodes plus CB/ED/DD/FD (IX/IY, block
+moves, BIT/SET/RES/rot, …). Soft mem hooks: clear-on-read `KEY_DATA`,
+port I/O via `SoftDevices` (TTY OUT `0x01`, keys `0x02`/`0x03`, 128×64
+bitmap ports `0x20`–`0x22`). Mini BASIC (`basic.ts`) compiles a tiny
+subset to Z80 bytes for Load @. Panel status shows soft `PC=…`; leaving
+Soft while desynced auto-reboots.
 
 ### Folded Z80CPU placement (Canvas)
 
@@ -1006,18 +1018,17 @@ Top-level `draw()` then paints one chip box + RAM + a handful of Inputs
 instead of thousands of MUX/REG primitives — the Canvas 2D idle cost that
 previously dominated after place.
 
-**Single folded instance only** on a given top circuit: Z80 internals use
-global `tieToLabel` names (`CLK`, `BUS0`, …) that `flatten()` does not
-namespace; a second folded Z80 would short those nets. Dive-in still shows
-the full transistor guts. Unit tests continue to use the unfolded
-`buildZ80Cpu`.
+`flatten()` namespaces non-`VCC`/`GND` label names with the chip-instance
+prefix, so multiple folded chips no longer short `CLK`/`BUS*` nets. Dive-in
+still shows the full transistor guts. Unit tests continue to use the
+unfolded `buildZ80Cpu`.
 
 ### Explicitly later
 
-Full commercial Z80ASM / BASIC; port-I/O TTY (`OUT`/`IN` devices);
-clear-on-read keyboard in the solver; bitmap graphics beyond text cells;
-drawing glyphs on the transistor canvas itself; free-running unthrottled
-clocks; namespaced labels so multiple folded Z80 instances can coexist.
+Full commercial Z80ASM dialects (macros/EQU/listings); richer BASIC;
+clear-on-read keyboard in the **gate** solver (soft path done); drawing
+glyphs on the transistor canvas itself; further cold-`flatten()` clone
+cost (still ~4s the first time Gates/dive needs it).
 
 ## Decode and execute: a tiny working CPU
 

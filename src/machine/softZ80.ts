@@ -4,9 +4,10 @@
  * immediately. Not transistor-accurate timing; gate-level Step still uses
  * the real circuit.
  *
- * Covers the unprefixed subset the command ROM (and typical panel asm) needs.
- * Prefixed CB/ED/DD/FD: throws so a bad program fails loudly.
+ * Unprefixed subset for the command ROM, plus CB / ED / DD / FD prefixes.
  */
+
+import { KEY_DATA, KEY_STATUS } from './memoryMap.js';
 
 export interface SoftZ80State {
   a: number;
@@ -17,9 +18,30 @@ export interface SoftZ80State {
   e: number;
   h: number;
   l: number;
+  a2: number;
+  f2: number;
+  b2: number;
+  c2: number;
+  d2: number;
+  e2: number;
+  h2: number;
+  l2: number;
+  ix: number;
+  iy: number;
+  i: number;
+  r: number;
+  iff1: boolean;
+  iff2: boolean;
+  im: 0 | 1 | 2;
   sp: number;
   pc: number;
   halted: boolean;
+}
+
+export interface SoftMemHooks {
+  clearOnReadKeys?: boolean;
+  portIn?: (port: number) => number;
+  portOut?: (port: number, val: number) => void;
 }
 
 const FLAG_C = 0x01;
@@ -28,6 +50,8 @@ const FLAG_P = 0x04;
 const FLAG_H = 0x10;
 const FLAG_Z = 0x40;
 const FLAG_S = 0x80;
+
+type IndexReg = 'ix' | 'iy' | null;
 
 export function createSoftZ80(sp = 0xdff): SoftZ80State {
   return {
@@ -39,6 +63,21 @@ export function createSoftZ80(sp = 0xdff): SoftZ80State {
     e: 0,
     h: 0,
     l: 0,
+    a2: 0,
+    f2: 0,
+    b2: 0,
+    c2: 0,
+    d2: 0,
+    e2: 0,
+    h2: 0,
+    l2: 0,
+    ix: 0,
+    iy: 0,
+    i: 0,
+    r: 0,
+    iff1: false,
+    iff2: false,
+    im: 0,
     sp: sp & 0xffff,
     pc: 0,
     halted: false,
@@ -69,15 +108,28 @@ function setSZP(f: number, n: number): number {
   return f;
 }
 
-function read16(ram: Uint8Array, addr: number): number {
-  return ram[addr & 0xffff]! | (ram[(addr + 1) & 0xffff]! << 8);
-}
-function write16(ram: Uint8Array, addr: number, v: number): void {
-  ram[addr & 0xffff] = v & 0xff;
-  ram[(addr + 1) & 0xffff] = (v >> 8) & 0xff;
+function memRead(ram: Uint8Array, addr: number, hooks?: SoftMemHooks): number {
+  addr = addr & 0xffff;
+  const v = ram[addr]! & 0xff;
+  if (hooks?.clearOnReadKeys && addr === KEY_DATA) {
+    ram[KEY_STATUS] = 0;
+  }
+  return v;
 }
 
-function getR(cpu: SoftZ80State, r: number): number {
+function memWrite(ram: Uint8Array, addr: number, v: number): void {
+  ram[addr & 0xffff] = v & 0xff;
+}
+
+function read16(ram: Uint8Array, addr: number, hooks?: SoftMemHooks): number {
+  return memRead(ram, addr, hooks) | (memRead(ram, addr + 1, hooks) << 8);
+}
+function write16(ram: Uint8Array, addr: number, v: number): void {
+  memWrite(ram, addr, v & 0xff);
+  memWrite(ram, addr + 1, (v >> 8) & 0xff);
+}
+
+function getR(cpu: SoftZ80State, r: number, idx: IndexReg = null): number {
   switch (r) {
     case 0:
       return cpu.b;
@@ -88,8 +140,12 @@ function getR(cpu: SoftZ80State, r: number): number {
     case 3:
       return cpu.e;
     case 4:
+      if (idx === 'ix') return (cpu.ix >> 8) & 0xff;
+      if (idx === 'iy') return (cpu.iy >> 8) & 0xff;
       return cpu.h;
     case 5:
+      if (idx === 'ix') return cpu.ix & 0xff;
+      if (idx === 'iy') return cpu.iy & 0xff;
       return cpu.l;
     case 7:
       return cpu.a;
@@ -97,7 +153,7 @@ function getR(cpu: SoftZ80State, r: number): number {
       throw new Error('getR (HL)');
   }
 }
-function setR(cpu: SoftZ80State, r: number, v: number): void {
+function setR(cpu: SoftZ80State, r: number, v: number, idx: IndexReg = null): void {
   v = u8(v);
   switch (r) {
     case 0:
@@ -113,10 +169,14 @@ function setR(cpu: SoftZ80State, r: number, v: number): void {
       cpu.e = v;
       break;
     case 4:
-      cpu.h = v;
+      if (idx === 'ix') cpu.ix = (cpu.ix & 0x00ff) | (v << 8);
+      else if (idx === 'iy') cpu.iy = (cpu.iy & 0x00ff) | (v << 8);
+      else cpu.h = v;
       break;
     case 5:
-      cpu.l = v;
+      if (idx === 'ix') cpu.ix = (cpu.ix & 0xff00) | v;
+      else if (idx === 'iy') cpu.iy = (cpu.iy & 0xff00) | v;
+      else cpu.l = v;
       break;
     case 7:
       cpu.a = v;
@@ -151,12 +211,24 @@ function setDe(cpu: SoftZ80State, v: number): void {
   cpu.e = v & 0xff;
 }
 
+function indexAddr(cpu: SoftZ80State, idx: IndexReg): number {
+  if (idx === 'ix') return cpu.ix;
+  if (idx === 'iy') return cpu.iy;
+  return hl(cpu);
+}
+function setIndex(cpu: SoftZ80State, idx: IndexReg, v: number): void {
+  v = u16(v);
+  if (idx === 'ix') cpu.ix = v;
+  else if (idx === 'iy') cpu.iy = v;
+  else setHl(cpu, v);
+}
+
 function push(cpu: SoftZ80State, ram: Uint8Array, v: number): void {
   cpu.sp = u16(cpu.sp - 2);
   write16(ram, cpu.sp, v);
 }
-function pop(cpu: SoftZ80State, ram: Uint8Array): number {
-  const v = read16(ram, cpu.sp);
+function pop(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): number {
+  const v = read16(ram, cpu.sp, hooks);
   cpu.sp = u16(cpu.sp + 2);
   return v;
 }
@@ -170,6 +242,18 @@ function fetch16(cpu: SoftZ80State, ram: Uint8Array): number {
   const lo = fetch(cpu, ram);
   const hi = fetch(cpu, ram);
   return lo | (hi << 8);
+}
+
+function bumpR(cpu: SoftZ80State): void {
+  cpu.r = (cpu.r & 0x80) | ((cpu.r + 1) & 0x7f);
+}
+
+function portIn(port: number, hooks?: SoftMemHooks): number {
+  if (hooks?.portIn) return hooks.portIn(port) & 0xff;
+  return 0xff;
+}
+function portOut(port: number, val: number, hooks?: SoftMemHooks): void {
+  hooks?.portOut?.(port, val & 0xff);
 }
 
 function cond(cpu: SoftZ80State, cc: number): boolean {
@@ -202,14 +286,12 @@ function aluOp(cpu: SoftZ80State, y: number, val: number): void {
   let f = cpu.f;
   switch (y) {
     case 0: {
-      // ADD
       const r = a + val;
       res = u8(r);
       f = (f & ~(FLAG_C | FLAG_N | FLAG_H)) | (r > 0xff ? FLAG_C : 0) | (((a & 0xf) + (val & 0xf)) > 0xf ? FLAG_H : 0);
       break;
     }
     case 1: {
-      // ADC
       const c = f & FLAG_C ? 1 : 0;
       const r = a + val + c;
       res = u8(r);
@@ -217,36 +299,33 @@ function aluOp(cpu: SoftZ80State, y: number, val: number): void {
       break;
     }
     case 2: {
-      // SUB
       const r = a - val;
       res = u8(r);
       f = (f & ~(FLAG_C | FLAG_H)) | FLAG_N | (r < 0 ? FLAG_C : 0) | (((a & 0xf) - (val & 0xf)) < 0 ? FLAG_H : 0);
       break;
     }
     case 3: {
-      // SBC
       const c = f & FLAG_C ? 1 : 0;
       const r = a - val - c;
       res = u8(r);
       f = (f & ~(FLAG_C | FLAG_H)) | FLAG_N | (r < 0 ? FLAG_C : 0) | (((a & 0xf) - (val & 0xf) - c) < 0 ? FLAG_H : 0);
       break;
     }
-    case 4: // AND
+    case 4:
       res = a & val;
       f = (f & ~(FLAG_C | FLAG_N)) | FLAG_H;
       break;
-    case 5: // XOR
+    case 5:
       res = a ^ val;
       f = f & ~(FLAG_C | FLAG_N | FLAG_H);
       break;
-    case 6: // OR
+    case 6:
       res = a | val;
       f = f & ~(FLAG_C | FLAG_N | FLAG_H);
       break;
     case 7: {
-      // CP
       const r = a - val;
-      res = a; // A unchanged
+      res = a;
       f = (f & ~(FLAG_C | FLAG_H)) | FLAG_N | (r < 0 ? FLAG_C : 0) | (((a & 0xf) - (val & 0xf)) < 0 ? FLAG_H : 0);
       f = setSZP(f, u8(r));
       cpu.f = f;
@@ -257,29 +336,414 @@ function aluOp(cpu: SoftZ80State, y: number, val: number): void {
   cpu.f = setSZP(f, res);
 }
 
-/** Execute one instruction. Returns false if halted / unsupported. */
-export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
-  if (cpu.halted) return false;
-  const op = fetch(cpu, ram);
-
-  if (op === 0xcb || op === 0xed || op === 0xdd || op === 0xfd) {
-    throw new Error(`soft Z80: prefix 0x${op.toString(16)} not implemented — use gate Step`);
+function rotOp(op: number, v: number, f: number): { v: number; f: number } {
+  const y = (op >> 3) & 7;
+  let c = 0;
+  let res = 0;
+  const oldC = f & FLAG_C ? 1 : 0;
+  switch (y) {
+    case 0: // RLC
+      c = (v >> 7) & 1;
+      res = u8((v << 1) | c);
+      break;
+    case 1: // RRC
+      c = v & 1;
+      res = u8((v >> 1) | (c << 7));
+      break;
+    case 2: // RL
+      c = (v >> 7) & 1;
+      res = u8((v << 1) | oldC);
+      break;
+    case 3: // RR
+      c = v & 1;
+      res = u8((v >> 1) | (oldC << 7));
+      break;
+    case 4: // SLA
+      c = (v >> 7) & 1;
+      res = u8(v << 1);
+      break;
+    case 5: // SRA
+      c = v & 1;
+      res = u8((v >> 1) | (v & 0x80));
+      break;
+    case 6: // SLL (undocumented)
+      c = (v >> 7) & 1;
+      res = u8((v << 1) | 1);
+      break;
+    case 7: // SRL
+      c = v & 1;
+      res = u8(v >> 1);
+      break;
   }
+  f = setSZP(f & ~(FLAG_C | FLAG_N | FLAG_H), res);
+  f = (f & ~FLAG_C) | (c ? FLAG_C : 0);
+  return { v: res, f };
+}
+
+function execCb(cpu: SoftZ80State, ram: Uint8Array, op: number, ea: number | null, hooks?: SoftMemHooks): void {
+  const z = op & 7;
+  const y = (op >> 3) & 7;
+  const x = (op >> 6) & 3;
+  const val = ea !== null ? memRead(ram, ea, hooks) : getR(cpu, z);
+
+  if (x === 0) {
+    const { v, f } = rotOp(op, val, cpu.f);
+    cpu.f = f;
+    if (ea !== null) memWrite(ram, ea, v);
+    else setR(cpu, z, v);
+    return;
+  }
+  if (x === 1) {
+    // BIT y,r
+    const bit = (val >> y) & 1;
+    let f = cpu.f & FLAG_C;
+    f |= FLAG_H;
+    f &= ~FLAG_N;
+    f = (f & ~(FLAG_Z | FLAG_S | FLAG_P)) | (bit === 0 ? FLAG_Z | FLAG_P : 0) | (y === 7 && bit ? FLAG_S : 0);
+    cpu.f = f;
+    return;
+  }
+  if (x === 2) {
+    // RES
+    const nv = val & ~(1 << y);
+    if (ea !== null) memWrite(ram, ea, nv);
+    else setR(cpu, z, nv);
+    return;
+  }
+  // SET
+  const nv = val | (1 << y);
+  if (ea !== null) memWrite(ram, ea, nv);
+  else setR(cpu, z, nv);
+}
+
+function blockLd(cpu: SoftZ80State, ram: Uint8Array, dir: 1 | -1, repeat: boolean, hooks?: SoftMemHooks): void {
+  for (;;) {
+    const v = memRead(ram, hl(cpu), hooks);
+    memWrite(ram, de(cpu), v);
+    setHl(cpu, hl(cpu) + dir);
+    setDe(cpu, de(cpu) + dir);
+    setBc(cpu, bc(cpu) - 1);
+    let f = cpu.f & ~(FLAG_H | FLAG_N | FLAG_P);
+    if (bc(cpu) !== 0) f |= FLAG_P;
+    cpu.f = f;
+    if (!repeat || bc(cpu) === 0) break;
+  }
+}
+
+function blockCp(cpu: SoftZ80State, ram: Uint8Array, dir: 1 | -1, repeat: boolean, hooks?: SoftMemHooks): void {
+  for (;;) {
+    const v = memRead(ram, hl(cpu), hooks);
+    const r = u8(cpu.a - v);
+    setHl(cpu, hl(cpu) + dir);
+    setBc(cpu, bc(cpu) - 1);
+    let f = (cpu.f & FLAG_C) | FLAG_N;
+    f = setSZP(f, r);
+    f = (f & ~FLAG_H) | (((cpu.a & 0xf) - (v & 0xf)) < 0 ? FLAG_H : 0);
+    f = (f & ~FLAG_P) | (bc(cpu) !== 0 ? FLAG_P : 0);
+    cpu.f = f;
+    if (!repeat || bc(cpu) === 0 || (f & FLAG_Z)) break;
+  }
+}
+
+function adcSbcHl(cpu: SoftZ80State, addend: number, adc: boolean): void {
+  const c = cpu.f & FLAG_C ? 1 : 0;
+  const a = hl(cpu);
+  let r: number;
+  let f: number;
+  if (adc) {
+    r = a + addend + c;
+    f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (r > 0xffff ? FLAG_C : 0);
+    f = (f & ~FLAG_H) | (((a & 0xfff) + (addend & 0xfff) + c) > 0xfff ? FLAG_H : 0);
+  } else {
+    r = a - addend - c;
+    f = (cpu.f & ~(FLAG_C | FLAG_H)) | FLAG_N | (r < 0 ? FLAG_C : 0);
+    f = (f & ~FLAG_H) | (((a & 0xfff) - (addend & 0xfff) - c) < 0 ? FLAG_H : 0);
+  }
+  const res = u16(r);
+  setHl(cpu, res);
+  f = (f & ~(FLAG_S | FLAG_Z | FLAG_P)) | (res & 0x8000 ? FLAG_S : 0) | (res === 0 ? FLAG_Z : 0);
+  // rough overflow into P
+  const overflow = adc
+    ? ((a ^ res) & (addend ^ res) & 0x8000) !== 0
+    : ((a ^ addend) & (a ^ res) & 0x8000) !== 0;
+  f = (f & ~FLAG_P) | (overflow ? FLAG_P : 0);
+  cpu.f = f;
+}
+
+function execEd(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): void {
+  const op = fetch(cpu, ram);
+  bumpR(cpu);
+
+  // IN r,(C) / OUT (C),r — r≠6; also IN A,(C)/OUT (C),A as r=7
+  if ((op & 0xc7) === 0x40) {
+    const y = (op >> 3) & 7;
+    if (y === 6) throw new Error(`soft Z80: ED 0x${op.toString(16)} unsupported`);
+    const v = portIn(bc(cpu), hooks);
+    setR(cpu, y, v);
+    cpu.f = setSZP(cpu.f & ~(FLAG_N | FLAG_H), v);
+    return;
+  }
+  if ((op & 0xc7) === 0x41) {
+    const y = (op >> 3) & 7;
+    if (y === 6) throw new Error(`soft Z80: ED 0x${op.toString(16)} unsupported`);
+    portOut(bc(cpu), getR(cpu, y), hooks);
+    return;
+  }
+
+  // SBC/ADC HL,rr
+  if ((op & 0xcf) === 0x42) {
+    const p = (op >> 4) & 3;
+    const addend = p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? hl(cpu) : cpu.sp;
+    adcSbcHl(cpu, addend, false);
+    return;
+  }
+  if ((op & 0xcf) === 0x4a) {
+    const p = (op >> 4) & 3;
+    const addend = p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? hl(cpu) : cpu.sp;
+    adcSbcHl(cpu, addend, true);
+    return;
+  }
+
+  // LD (nn),dd / LD dd,(nn)
+  if ((op & 0xcf) === 0x43) {
+    const nn = fetch16(cpu, ram);
+    const p = (op >> 4) & 3;
+    const v = p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? hl(cpu) : cpu.sp;
+    write16(ram, nn, v);
+    return;
+  }
+  if ((op & 0xcf) === 0x4b) {
+    const nn = fetch16(cpu, ram);
+    const v = read16(ram, nn, hooks);
+    const p = (op >> 4) & 3;
+    if (p === 0) setBc(cpu, v);
+    else if (p === 1) setDe(cpu, v);
+    else if (p === 2) setHl(cpu, v);
+    else cpu.sp = v;
+    return;
+  }
+
+  // NEG (and undocumented aliases)
+  if ((op & 0xc7) === 0x44) {
+    const a = cpu.a;
+    const r = u8(-a);
+    cpu.a = r;
+    let f = FLAG_N | (a !== 0 ? FLAG_C : 0) | ((a & 0xf) !== 0 ? FLAG_H : 0);
+    f = setSZP(f, r);
+    f = (f & ~FLAG_P) | (a === 0x80 ? FLAG_P : 0);
+    cpu.f = f;
+    return;
+  }
+
+  // RETN (45/55/65/75) — restore IFF1 from IFF2
+  if ((op & 0xc7) === 0x45) {
+    cpu.pc = pop(cpu, ram, hooks);
+    cpu.iff1 = cpu.iff2;
+    return;
+  }
+  // RETI (4D/5D/6D/7D)
+  if ((op & 0xc7) === 0x4d) {
+    cpu.pc = pop(cpu, ram, hooks);
+    return;
+  }
+
+  // IM 0/1/2
+  if (op === 0x46 || op === 0x66) {
+    cpu.im = 0;
+    return;
+  }
+  if (op === 0x56 || op === 0x76) {
+    cpu.im = 1;
+    return;
+  }
+  if (op === 0x5e || op === 0x7e) {
+    cpu.im = 2;
+    return;
+  }
+
+  // LD I,A / LD R,A / LD A,I / LD A,R
+  if (op === 0x47) {
+    cpu.i = cpu.a;
+    return;
+  }
+  if (op === 0x4f) {
+    cpu.r = cpu.a;
+    return;
+  }
+  if (op === 0x57) {
+    cpu.a = cpu.i;
+    let f = cpu.f & FLAG_C;
+    f = setSZP(f, cpu.a);
+    f &= ~(FLAG_H | FLAG_N);
+    f = (f & ~FLAG_P) | (cpu.iff2 ? FLAG_P : 0);
+    cpu.f = f;
+    return;
+  }
+  if (op === 0x5f) {
+    cpu.a = cpu.r;
+    let f = cpu.f & FLAG_C;
+    f = setSZP(f, cpu.a);
+    f &= ~(FLAG_H | FLAG_N);
+    f = (f & ~FLAG_P) | (cpu.iff2 ? FLAG_P : 0);
+    cpu.f = f;
+    return;
+  }
+
+  // RRD / RLD
+  if (op === 0x67) {
+    const addr = hl(cpu);
+    const m = memRead(ram, addr, hooks);
+    const a = cpu.a;
+    memWrite(ram, addr, ((a & 0x0f) << 4) | (m >> 4));
+    cpu.a = (a & 0xf0) | (m & 0x0f);
+    cpu.f = setSZP(cpu.f & ~(FLAG_H | FLAG_N), cpu.a);
+    return;
+  }
+  if (op === 0x6f) {
+    const addr = hl(cpu);
+    const m = memRead(ram, addr, hooks);
+    const a = cpu.a;
+    memWrite(ram, addr, ((m << 4) & 0xf0) | (a & 0x0f));
+    cpu.a = (a & 0xf0) | ((m >> 4) & 0x0f);
+    cpu.f = setSZP(cpu.f & ~(FLAG_H | FLAG_N), cpu.a);
+    return;
+  }
+
+  // Block transfers / compares
+  if (op === 0xa0) {
+    blockLd(cpu, ram, 1, false, hooks);
+    return;
+  }
+  if (op === 0xa8) {
+    blockLd(cpu, ram, -1, false, hooks);
+    return;
+  }
+  if (op === 0xb0) {
+    blockLd(cpu, ram, 1, true, hooks);
+    return;
+  }
+  if (op === 0xb8) {
+    blockLd(cpu, ram, -1, true, hooks);
+    return;
+  }
+  if (op === 0xa1) {
+    blockCp(cpu, ram, 1, false, hooks);
+    return;
+  }
+  if (op === 0xa9) {
+    blockCp(cpu, ram, -1, false, hooks);
+    return;
+  }
+  if (op === 0xb1) {
+    blockCp(cpu, ram, 1, true, hooks);
+    return;
+  }
+  if (op === 0xb9) {
+    blockCp(cpu, ram, -1, true, hooks);
+    return;
+  }
+
+  throw new Error(`soft Z80: unknown ED opcode 0x${op.toString(16)}`);
+}
+
+function needsIndexDisp(op: number): boolean {
+  if ((op & 0xc7) === 0x06 && ((op >> 3) & 7) === 6) return true; // LD (HL),n
+  if ((op & 0xc0) === 0x40 && op !== 0x76) {
+    const y = (op >> 3) & 7;
+    const z = op & 7;
+    if (y === 6 || z === 6) return true;
+  }
+  if ((op & 0xc0) === 0x80 && (op & 7) === 6) return true;
+  if (((op & 0xc7) === 0x04 || (op & 0xc7) === 0x05) && ((op >> 3) & 7) === 6) return true;
+  return false;
+}
+
+function execOpcode(
+  cpu: SoftZ80State,
+  ram: Uint8Array,
+  op: number,
+  hooks: SoftMemHooks | undefined,
+  idx: IndexReg,
+): boolean {
+  // After DD/FD, CB is handled by caller before this.
 
   // NOP
   if (op === 0x00) return true;
   if (op === 0x76) {
+    if (idx) throw new Error(`soft Z80: HALT after ${idx.toUpperCase()} prefix unsupported`);
     cpu.halted = true;
     return false;
   }
 
-  // LD r,r' / LD r,(HL) / LD (HL),r
+  // Prefixed: index register pair ops that replace HL
+  if (idx && (op & 0xcf) === 0x01 && ((op >> 4) & 3) === 2) {
+    setIndex(cpu, idx, fetch16(cpu, ram));
+    return true;
+  }
+  if (idx && op === 0x22) {
+    write16(ram, fetch16(cpu, ram), indexAddr(cpu, idx));
+    return true;
+  }
+  if (idx && op === 0x2a) {
+    setIndex(cpu, idx, read16(ram, fetch16(cpu, ram), hooks));
+    return true;
+  }
+  if (idx && (op === 0x23 || op === 0x2b)) {
+    const d = op === 0x23 ? 1 : -1;
+    setIndex(cpu, idx, indexAddr(cpu, idx) + d);
+    return true;
+  }
+  if (idx && (op & 0xcf) === 0x09) {
+    const p = (op >> 4) & 3;
+    const addend =
+      p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? indexAddr(cpu, idx) : cpu.sp;
+    const r = indexAddr(cpu, idx) + addend;
+    cpu.f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (r > 0xffff ? FLAG_C : 0);
+    setIndex(cpu, idx, r);
+    return true;
+  }
+  if (idx && op === 0xf9) {
+    cpu.sp = indexAddr(cpu, idx);
+    return true;
+  }
+  if (idx && op === 0xe9) {
+    cpu.pc = indexAddr(cpu, idx);
+    return true;
+  }
+  if (idx && (op === 0xe5 || op === 0xe1)) {
+    if (op === 0xe5) push(cpu, ram, indexAddr(cpu, idx));
+    else setIndex(cpu, idx, pop(cpu, ram, hooks));
+    return true;
+  }
+  if (idx && op === 0xe3) {
+    const t = read16(ram, cpu.sp, hooks);
+    write16(ram, cpu.sp, indexAddr(cpu, idx));
+    setIndex(cpu, idx, t);
+    return true;
+  }
+
+  // Displacement for (IX+d)/(IY+d)
+  let disp = 0;
+  let ea: number | null = null;
+  if (idx && needsIndexDisp(op)) {
+    disp = s8(fetch(cpu, ram));
+    ea = u16(indexAddr(cpu, idx) + disp);
+  }
+
+  // LD r,r' / LD r,(HL) / LD (HL),r — IXH/IXL remap only when neither side is (HL)
   if ((op & 0xc0) === 0x40 && op !== 0x76) {
     const y = (op >> 3) & 7;
     const z = op & 7;
-    const val = z === 6 ? ram[hl(cpu)]! : getR(cpu, z);
-    if (y === 6) ram[hl(cpu)] = u8(val);
-    else setR(cpu, y, val);
+    if (idx && (y === 6 || z === 6)) {
+      const val = z === 6 ? memRead(ram, ea!, hooks) : getR(cpu, z, null);
+      if (y === 6) memWrite(ram, ea!, val);
+      else setR(cpu, y, val, null);
+      return true;
+    }
+    const regIdx = idx;
+    const val = z === 6 ? memRead(ram, hl(cpu), hooks) : getR(cpu, z, regIdx);
+    if (y === 6) memWrite(ram, hl(cpu), val);
+    else setR(cpu, y, val, regIdx);
     return true;
   }
 
@@ -287,7 +751,7 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
   if ((op & 0xc0) === 0x80) {
     const y = (op >> 3) & 7;
     const z = op & 7;
-    const val = z === 6 ? ram[hl(cpu)]! : getR(cpu, z);
+    const val = z === 6 ? memRead(ram, idx ? ea! : hl(cpu), hooks) : getR(cpu, z, idx);
     aluOp(cpu, y, val);
     return true;
   }
@@ -301,9 +765,14 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
   // LD r,n
   if ((op & 0xc7) === 0x06) {
     const y = (op >> 3) & 7;
+    if (idx && y === 6) {
+      // LD (IX+d),n — n follows displacement already consumed
+      memWrite(ram, ea!, fetch(cpu, ram));
+      return true;
+    }
     const n = fetch(cpu, ram);
-    if (y === 6) ram[hl(cpu)] = n;
-    else setR(cpu, y, n);
+    if (y === 6) memWrite(ram, hl(cpu), n);
+    else setR(cpu, y, n, idx);
     return true;
   }
 
@@ -311,11 +780,11 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
   if ((op & 0xc7) === 0x04 || (op & 0xc7) === 0x05) {
     const y = (op >> 3) & 7;
     const inc = (op & 0xc7) === 0x04;
-    let v = y === 6 ? ram[hl(cpu)]! : getR(cpu, y);
+    let v = y === 6 ? memRead(ram, idx ? ea! : hl(cpu), hooks) : getR(cpu, y, idx);
     const old = v;
     v = u8(inc ? v + 1 : v - 1);
-    if (y === 6) ram[hl(cpu)] = v;
-    else setR(cpu, y, v);
+    if (y === 6) memWrite(ram, idx ? ea! : hl(cpu), v);
+    else setR(cpu, y, v, idx);
     let f = cpu.f & FLAG_C;
     f = setSZP(f, v);
     f = (f & ~FLAG_N) | (inc ? 0 : FLAG_N);
@@ -324,15 +793,17 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
     return true;
   }
 
-  // INC/DEC rr
+  // INC/DEC rr (unprefixed HL, or BC/DE/SP always)
   if ((op & 0xcf) === 0x03 || (op & 0xcf) === 0x0b) {
     const p = (op >> 4) & 3;
     const inc = (op & 0xcf) === 0x03;
     const d = inc ? 1 : -1;
     if (p === 0) setBc(cpu, bc(cpu) + d);
     else if (p === 1) setDe(cpu, de(cpu) + d);
-    else if (p === 2) setHl(cpu, hl(cpu) + d);
-    else cpu.sp = u16(cpu.sp + d);
+    else if (p === 2) {
+      if (idx) setIndex(cpu, idx, indexAddr(cpu, idx) + d);
+      else setHl(cpu, hl(cpu) + d);
+    } else cpu.sp = u16(cpu.sp + d);
     return true;
   }
 
@@ -342,12 +813,14 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
     const p = (op >> 4) & 3;
     if (p === 0) setBc(cpu, nn);
     else if (p === 1) setDe(cpu, nn);
-    else if (p === 2) setHl(cpu, nn);
-    else cpu.sp = nn;
+    else if (p === 2) {
+      if (idx) setIndex(cpu, idx, nn);
+      else setHl(cpu, nn);
+    } else cpu.sp = nn;
     return true;
   }
 
-  // ADD HL,rr
+  // ADD HL,rr (or ADD IX/IY,rr handled above for idx)
   if ((op & 0xcf) === 0x09) {
     const p = (op >> 4) & 3;
     const addend = p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? hl(cpu) : cpu.sp;
@@ -390,7 +863,7 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
 
   // RET / RET cc
   if (op === 0xc9 || (op & 0xc7) === 0xc0) {
-    if (op === 0xc9 || cond(cpu, (op >> 3) & 7)) cpu.pc = pop(cpu, ram);
+    if (op === 0xc9 || cond(cpu, (op >> 3) & 7)) cpu.pc = pop(cpu, ram, hooks);
     return true;
   }
 
@@ -399,14 +872,25 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
     const p = (op >> 4) & 3;
     const isPush = (op & 0xcf) === 0xc5;
     if (isPush) {
-      const v = p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? hl(cpu) : (cpu.a << 8) | cpu.f;
+      const v =
+        p === 0
+          ? bc(cpu)
+          : p === 1
+            ? de(cpu)
+            : p === 2
+              ? idx
+                ? indexAddr(cpu, idx)
+                : hl(cpu)
+              : (cpu.a << 8) | cpu.f;
       push(cpu, ram, v);
     } else {
-      const v = pop(cpu, ram);
+      const v = pop(cpu, ram, hooks);
       if (p === 0) setBc(cpu, v);
       else if (p === 1) setDe(cpu, v);
-      else if (p === 2) setHl(cpu, v);
-      else {
+      else if (p === 2) {
+        if (idx) setIndex(cpu, idx, v);
+        else setHl(cpu, v);
+      } else {
         cpu.a = v >> 8;
         cpu.f = v & 0xff;
       }
@@ -433,48 +917,85 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
   }
   // EX (SP),HL
   if (op === 0xe3) {
-    const t = read16(ram, cpu.sp);
+    const t = read16(ram, cpu.sp, hooks);
     write16(ram, cpu.sp, hl(cpu));
     setHl(cpu, t);
     return true;
   }
   // EXX
-  if (op === 0xd9) return true; // shadows not modeled — no-op for soft path
+  if (op === 0xd9) {
+    let t = cpu.b;
+    cpu.b = cpu.b2;
+    cpu.b2 = t;
+    t = cpu.c;
+    cpu.c = cpu.c2;
+    cpu.c2 = t;
+    t = cpu.d;
+    cpu.d = cpu.d2;
+    cpu.d2 = t;
+    t = cpu.e;
+    cpu.e = cpu.e2;
+    cpu.e2 = t;
+    t = cpu.h;
+    cpu.h = cpu.h2;
+    cpu.h2 = t;
+    t = cpu.l;
+    cpu.l = cpu.l2;
+    cpu.l2 = t;
+    return true;
+  }
   // EX AF,AF'
-  if (op === 0x08) return true;
+  if (op === 0x08) {
+    const ta = cpu.a;
+    const tf = cpu.f;
+    cpu.a = cpu.a2;
+    cpu.f = cpu.f2;
+    cpu.a2 = ta;
+    cpu.f2 = tf;
+    return true;
+  }
   // DI / EI
-  if (op === 0xf3 || op === 0xfb) return true;
+  if (op === 0xf3) {
+    cpu.iff1 = false;
+    cpu.iff2 = false;
+    return true;
+  }
+  if (op === 0xfb) {
+    cpu.iff1 = true;
+    cpu.iff2 = true;
+    return true;
+  }
 
   // LD A,(BC)/(DE) / LD (BC)/(DE),A
   if (op === 0x0a) {
-    cpu.a = ram[bc(cpu)]!;
+    cpu.a = memRead(ram, bc(cpu), hooks);
     return true;
   }
   if (op === 0x1a) {
-    cpu.a = ram[de(cpu)]!;
+    cpu.a = memRead(ram, de(cpu), hooks);
     return true;
   }
   if (op === 0x02) {
-    ram[bc(cpu)] = cpu.a;
+    memWrite(ram, bc(cpu), cpu.a);
     return true;
   }
   if (op === 0x12) {
-    ram[de(cpu)] = cpu.a;
+    memWrite(ram, de(cpu), cpu.a);
     return true;
   }
 
   // LD A,(nn) / LD (nn),A
   if (op === 0x3a) {
-    cpu.a = ram[fetch16(cpu, ram)]!;
+    cpu.a = memRead(ram, fetch16(cpu, ram), hooks);
     return true;
   }
   if (op === 0x32) {
-    ram[fetch16(cpu, ram)] = cpu.a;
+    memWrite(ram, fetch16(cpu, ram), cpu.a);
     return true;
   }
   // LD HL,(nn) / LD (nn),HL
   if (op === 0x2a) {
-    setHl(cpu, read16(ram, fetch16(cpu, ram)));
+    setHl(cpu, read16(ram, fetch16(cpu, ram), hooks));
     return true;
   }
   if (op === 0x22) {
@@ -510,7 +1031,7 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
     return true;
   }
 
-  // SCF / CCF / CPL / DAA (DAA simplified — enough for soft demos)
+  // SCF / CCF / CPL / DAA
   if (op === 0x37) {
     cpu.f = (cpu.f & ~(FLAG_N | FLAG_H)) | FLAG_C;
     return true;
@@ -533,25 +1054,84 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array): boolean {
     return true;
   }
 
-  // IN A,(n) / OUT (n),A — no soft I/O ports; absorb
+  // IN A,(n) / OUT (n),A
   if (op === 0xdb) {
-    fetch(cpu, ram);
-    cpu.a = 0xff;
+    const n = fetch(cpu, ram);
+    cpu.a = portIn((cpu.a << 8) | n, hooks);
     return true;
   }
   if (op === 0xd3) {
-    fetch(cpu, ram);
+    const n = fetch(cpu, ram);
+    portOut((cpu.a << 8) | n, cpu.a, hooks);
     return true;
   }
 
+  if (idx) {
+    throw new Error(
+      `soft Z80: unsupported ${idx.toUpperCase()} opcode 0x${op.toString(16)} — use gate Step`,
+    );
+  }
   throw new Error(`soft Z80: unimplemented opcode 0x${op.toString(16)} at PC`);
 }
 
+/** Execute one instruction. Returns false if halted / unsupported. */
+export function softStep(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): boolean {
+  if (cpu.halted) return false;
+  const op = fetch(cpu, ram);
+  bumpR(cpu);
+
+  if (op === 0xcb) {
+    const cb = fetch(cpu, ram);
+    bumpR(cpu);
+    const z = cb & 7;
+    const ea = z === 6 ? hl(cpu) : null;
+    execCb(cpu, ram, cb, ea, hooks);
+    return true;
+  }
+
+  if (op === 0xed) {
+    execEd(cpu, ram, hooks);
+    return true;
+  }
+
+  if (op === 0xdd || op === 0xfd) {
+    const idx: IndexReg = op === 0xdd ? 'ix' : 'iy';
+    const nop = fetch(cpu, ram);
+    bumpR(cpu);
+
+    if (nop === 0xcb) {
+      const d = s8(fetch(cpu, ram));
+      const cb = fetch(cpu, ram);
+      const ea = u16(indexAddr(cpu, idx) + d);
+      // Only (IX+d)/(IY+d) form (z=6); undocumented register forms unsupported
+      if ((cb & 7) !== 6) {
+        throw new Error(
+          `soft Z80: ${idx.toUpperCase()} CB 0x${cb.toString(16)} non-(I${idx === 'ix' ? 'X' : 'Y'}+d) unsupported`,
+        );
+      }
+      execCb(cpu, ram, cb, ea, hooks);
+      return true;
+    }
+
+    if (nop === 0xdd || nop === 0xfd || nop === 0xed) {
+      // Nested/ignored prefixes: treat as new prefix start by rewinding one and re-fetching
+      // Common soft approach: ignore and continue with latest — here throw clearly
+      throw new Error(
+        `soft Z80: nested prefix 0x${op.toString(16)} 0x${nop.toString(16)} unsupported`,
+      );
+    }
+
+    return execOpcode(cpu, ram, nop, hooks, idx);
+  }
+
+  return execOpcode(cpu, ram, op, hooks, null);
+}
+
 /** Run up to `max` instructions or until halted. Returns steps taken. */
-export function softRun(cpu: SoftZ80State, ram: Uint8Array, max: number): number {
+export function softRun(cpu: SoftZ80State, ram: Uint8Array, max: number, hooks?: SoftMemHooks): number {
   let n = 0;
   while (n < max && !cpu.halted) {
-    softStep(cpu, ram);
+    softStep(cpu, ram, hooks);
     n++;
   }
   return n;

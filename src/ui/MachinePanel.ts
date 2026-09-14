@@ -1,6 +1,8 @@
 import type { RamComponent } from '../sim/types.js';
 import type { MachineRunner, RunSpeed } from '../machine/MachineRunner.js';
 import {
+  BMP_HEIGHT,
+  BMP_WIDTH,
   FB_BASE,
   FB_COLS,
   FB_ROWS,
@@ -10,12 +12,15 @@ import {
   requiresMachineMap,
 } from '../machine/memoryMap.js';
 import { assemble, bytesToHexPrompt } from '../machine/assembler.js';
+import { compileBasic } from '../machine/basic.js';
 import { loadHexAt, parseHex, parseHexBlob, runSoftCommand } from '../machine/softConsole.js';
 import { injectKey } from '../machine/tty.js';
 
 const CELL_W = 10;
 const CELL_H = 16;
 const PAD = 8;
+const BMP_SCALE = 2;
+const BMP_GAP = 6;
 
 /**
  * Side-panel text TTY + soft command/load console. Run/Pause/Step drive a
@@ -41,13 +46,16 @@ export class MachinePanel {
   private runner: MachineRunner | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
 
+  private readonly bmpTmp: HTMLCanvasElement = document.createElement('canvas');
+  private bmpTmpCtx!: CanvasRenderingContext2D;
+
   constructor(host: HTMLElement) {
     this.root = host;
     this.root.classList.add('machine-panel');
     this.root.innerHTML = `
       <div class="machine-panel-header">
         <span class="machine-panel-title">TTY</span>
-        <span class="machine-panel-meta">32×8 · asm</span>
+        <span class="machine-panel-meta">32×8 · 128×64 bmp · asm/basic</span>
       </div>
       <div class="machine-panel-controls">
         <button type="button" data-act="run" title="Auto-clock">Run</button>
@@ -60,6 +68,7 @@ export class MachinePanel {
             <option value="slow">Gates slow</option>
             <option value="normal">Gates normal</option>
             <option value="turbo">Gates turbo</option>
+            <option value="free">Gates free</option>
           </select>
         </label>
         <span class="machine-panel-status">idle</span>
@@ -83,10 +92,11 @@ JR spin</textarea>
         <div class="machine-panel-asm-actions">
           <button type="button" data-act="asm">Assemble → Load @</button>
           <button type="button" data-act="asm-go" title="Assemble, load, G origin, reboot">Assemble + Go</button>
+          <button type="button" data-act="basic" title="Compile mini-BASIC from the text area">BASIC → Load @</button>
         </div>
       </div>
       <pre class="machine-panel-out"></pre>
-      <div class="machine-panel-hint">Soft Run = fast Z80 on RAM. Gates = transistor (slow). TTY H/M/W/G. First boot slow.</div>
+      <div class="machine-panel-hint">Soft Run = fast Z80 on RAM (+ports/bitmap). Gates = transistor. TTY H/M/W/G.</div>
     `;
     this.canvas = this.root.querySelector('canvas')!;
     this.hint = this.root.querySelector('.machine-panel-hint')!;
@@ -104,11 +114,11 @@ JR spin</textarea>
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context is not available for MachinePanel');
     this.ctx = ctx;
-
-    const cssW = FB_COLS * CELL_W + PAD * 2;
-    const cssH = FB_ROWS * CELL_H + PAD * 2;
-    this.canvas.style.width = `${cssW}px`;
-    this.canvas.style.height = `${cssH}px`;
+    this.bmpTmp.width = BMP_WIDTH;
+    this.bmpTmp.height = BMP_HEIGHT;
+    const bmpCtx = this.bmpTmp.getContext('2d');
+    if (!bmpCtx) throw new Error('2D canvas context is not available for bitmap blit');
+    this.bmpTmpCtx = bmpCtx;
     this.resizeBackingStore();
 
     this.canvas.addEventListener('click', () => this.canvas.focus());
@@ -132,8 +142,16 @@ JR spin</textarea>
       this.refreshControls();
     });
     this.speedSel.addEventListener('change', () => {
+      const prev = this.runner?.speed;
       const v = this.speedSel.value as RunSpeed;
       this.runner?.setSpeed(v);
+      // Soft Run diverges from gate PC/regs — reboot when leaving soft so
+      // transistor mode starts from a known seed instead of a desynced state.
+      if (prev === 'soft' && v !== 'soft' && this.runner?.softDesynced) {
+        this.runner.reboot();
+        this.log('reboot (resync after soft)');
+        this.draw();
+      }
       this.refreshControls();
     });
     this.root.querySelector('.machine-panel-cmd')!.addEventListener('submit', (e) => {
@@ -144,13 +162,21 @@ JR spin</textarea>
     this.root.querySelector('[data-act="load"]')!.addEventListener('click', () => this.doLoadHex());
     this.root.querySelector('[data-act="asm"]')!.addEventListener('click', () => this.doAssemble(false));
     this.root.querySelector('[data-act="asm-go"]')!.addEventListener('click', () => this.doAssemble(true));
+    this.root.querySelector('[data-act="basic"]')!.addEventListener('click', () => this.doBasic());
     this.setVisible(false);
+  }
+
+  private panelCssSize(): { cssW: number; cssH: number } {
+    const cssW = Math.max(FB_COLS * CELL_W, BMP_WIDTH * BMP_SCALE) + PAD * 2;
+    const cssH = FB_ROWS * CELL_H + PAD * 2 + BMP_GAP + BMP_HEIGHT * BMP_SCALE + PAD;
+    return { cssW, cssH };
   }
 
   private resizeBackingStore(): void {
     const dpr = window.devicePixelRatio || 1;
-    const cssW = FB_COLS * CELL_W + PAD * 2;
-    const cssH = FB_ROWS * CELL_H + PAD * 2;
+    const { cssW, cssH } = this.panelCssSize();
+    this.canvas.style.width = `${cssW}px`;
+    this.canvas.style.height = `${cssH}px`;
     this.canvas.width = Math.round(cssW * dpr);
     this.canvas.height = Math.round(cssH * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -194,6 +220,28 @@ JR spin</textarea>
     }
     this.draw();
     this.refreshControls();
+  }
+
+  private doBasic(): void {
+    if (!this.ram) {
+      this.log('no RAM attached');
+      return;
+    }
+    const addr = parseHex(this.loadAddr.value);
+    if (addr === null) {
+      this.log('! bad Load @ address (used as BASIC origin)');
+      return;
+    }
+    try {
+      const bytes = compileBasic(this.asmSource.value, addr);
+      this.loadHex.value = bytesToHexPrompt(bytes);
+      const loaded = loadHexAt(this.ram.bytes, addr, [...bytes]);
+      this.log(loaded.ok ? `BASIC ${bytes.length}B @ ${addr.toString(16)}` : `! ${loaded.message}`);
+      this.draw();
+      this.refreshControls();
+    } catch (e) {
+      this.log(`! ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   private runCommandLine(line: string): void {
@@ -297,7 +345,11 @@ JR spin</textarea>
     }
     const spd = this.runner!.speed;
     const desync = this.runner!.softDesynced && spd !== 'soft' ? ' · desync' : '';
-    this.statusEl.textContent = `${this.runner!.running ? 'run' : 'pause'} · ${spd}${desync}`;
+    const soft = this.runner!.softCpu;
+    const softPc =
+      spd === 'soft' && soft ? ` · PC=${soft.pc.toString(16).padStart(4, '0')}` : '';
+    const err = this.runner!.softError ? ` · !${this.runner!.softError.slice(0, 40)}` : '';
+    this.statusEl.textContent = `${this.runner!.running ? 'run' : 'pause'} · ${spd}${softPc}${desync}${err}`;
     this.btnRun.classList.toggle('active', this.runner!.running);
     this.btnPause.classList.toggle('active', !this.runner!.running);
   }
@@ -305,8 +357,8 @@ JR spin</textarea>
   draw(): void {
     if (!this.ram) return;
     const { ctx, canvas } = this;
-    const cssW = canvas.clientWidth || FB_COLS * CELL_W + PAD * 2;
-    const cssH = canvas.clientHeight || FB_ROWS * CELL_H + PAD * 2;
+    const { cssW, cssH } = this.panelCssSize();
+    if (canvas.clientWidth !== cssW || canvas.clientHeight !== cssH) this.resizeBackingStore();
 
     ctx.fillStyle = '#0a0c10';
     ctx.fillRect(0, 0, cssW, cssH);
@@ -328,10 +380,32 @@ JR spin</textarea>
       ctx.fillText(ch, x + 1, y + 2);
     }
 
+    const bmpY = PAD + FB_ROWS * CELL_H + BMP_GAP;
+    const bmp = this.runner?.softDevices.bitmap;
+    ctx.fillStyle = '#12151c';
+    ctx.fillRect(PAD, bmpY, BMP_WIDTH * BMP_SCALE, BMP_HEIGHT * BMP_SCALE);
+    if (bmp) {
+      const img = this.bmpTmpCtx.createImageData(BMP_WIDTH, BMP_HEIGHT);
+      for (let i = 0; i < BMP_WIDTH * BMP_HEIGHT; i++) {
+        const bit = (bmp[(i / 8) | 0]! >> (7 - (i & 7))) & 1;
+        const o = i * 4;
+        const v = bit ? 200 : 18;
+        img.data[o] = v;
+        img.data[o + 1] = bit ? 210 : 20;
+        img.data[o + 2] = bit ? 230 : 28;
+        img.data[o + 3] = 255;
+      }
+      this.bmpTmpCtx.putImageData(img, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(this.bmpTmp, PAD, bmpY, BMP_WIDTH * BMP_SCALE, BMP_HEIGHT * BMP_SCALE);
+    }
+
     const status = bytes[KEY_STATUS] ?? 0;
     const data = bytes[KEY_DATA] ?? 0;
     this.root.dataset.keyStatus = String(status);
     this.root.dataset.keyData = `0x${(data & 0xff).toString(16).padStart(2, '0')}`;
+    // Soft PC advances every frame while Run is on — keep the status line live.
+    if (this.runner?.isSoft) this.refreshControls();
   }
 
   private onKeyDown(e: KeyboardEvent): void {
