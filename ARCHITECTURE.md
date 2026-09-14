@@ -16,9 +16,9 @@ slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY`, HL-clone
 on `(IX+d)`/`(IY+d)`, and H→IXH / L→IXL (IYH/IYL) 8-bit register remap
 for LD / LD n / INC/DEC / ALU `A,IXH/IXL`). A soft memory-mapped text TTY
 (framebuffer + keyboard over `RamComponent.bytes`, canvas side panel), a
-soft echo monitor in RAM, and a throttled MachineRunner auto-clock are
-the first machine-facing I/O layer — see "Memory-mapped TTY (behavioral)".
-BASIC remains a later phase.
+Z80-native command ROM in RAM (TTY `H`/`M`/`W`/`G`), and a throttled
+MachineRunner auto-clock are the first machine-facing I/O layer — see
+"Memory-mapped TTY (behavioral)". BASIC remains a later phase.
 
 ## Layout
 
@@ -149,15 +149,18 @@ src/ui/         Canvas editor — thin layer on top of src/sim, swappable.
                    N/P letter are still there too, so type is legible at a
                    glance from any one of three independent visual cues.
   MachinePanel.ts Soft text TTY: samples `ram.bytes[FB_BASE..]`, injects
-                   keys, Run/Pause/Step/Reboot/speed, soft Cmd + Load hex
+                   keys, Run/Pause/Step/Reboot/speed, host Cmd + Load hex
                    + mini assembler — see "Memory-mapped TTY (behavioral)".
 
 src/machine/    Soft machine map over RamComponent (not transistor devices).
   memoryMap.ts    Locked 12-bit demo layout: FB @ 0xE00 (32×8), keys @
                    0xF00/0xF01.
   tty.ts          paintCell / injectKey helpers for tests and the panel.
-  monitor.ts      Soft echo monitor opcode image (poll keys, CR/BS, wrap).
-  softConsole.ts  Panel command line: M/W/G/R/H + loadHexAt (JS, not Z80).
+  monitor.ts      Legacy soft echo monitor opcode image (poll keys, CR/BS).
+  commandRom.ts   Default Z80 command ROM (TTY H/M/W/G), assembled from
+                   source via assembler.ts; line buf @ 0xD00, stack @ 0xDFF.
+  softConsole.ts  Host panel Cmd: M/W/G/R/H + loadHexAt (JS helper; R
+                   reloads command ROM).
   assembler.ts    Mini two-pass Z80 subset assembler (labels, DB/DW,
                    IX/IY/(IX+d), CB, common ED).
   MachineRunner.ts Auto-wires Input clocks/reset/seeds and pulses them
@@ -176,8 +179,8 @@ src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 phase budget -> flatten the *top* circuit -> step solver ->
                 draw the *currently viewed* level -> sample the soft TTY
                 panel when a 12-bit Z80 RAM is attached -> repeat.
-                `+ Z80CPU` defaults to 12-bit address space, the soft
-                echo monitor program, auto-run after boot, then folds the
+                `+ Z80CPU` defaults to 12-bit address space, the Z80
+                command ROM, auto-run after boot, then folds the
                 transistor guts into one `Z80CPU` chip (RAM stays outside).
 
 test/solver.test.ts      Engine correctness: NOT/NAND/AND truth tables, an
@@ -230,10 +233,11 @@ test/memoryMap.test.ts   Soft machine-map constants + paintCell / keyboard
 test/machine-tty.test.ts Z80 program with addrBits=12 writes FB via
                           LD (nn),A and clears soft KEY_STATUS after a
                           poll of KEY_DATA.
-test/monitor.test.ts     Soft monitor opcode image shape + loadMonitor.
+test/monitor.test.ts     Soft echo-monitor opcode image + loadMonitor.
 test/machine-monitor.test.ts Echo monitor on addrBits=12: prompt + key
                           echo into FB, KEY_STATUS cleared.
-test/softConsole.test.ts Soft M/W/G/R/H commands + loadHexAt.
+test/command-rom.test.ts Z80 command ROM assemble + TTY H on addrBits=12.
+test/softConsole.test.ts Host M/W/G/R/H + loadHexAt (R → command ROM).
 test/assembler.test.ts   Mini assembler: LD/JR/labels/DB, IX/IY/CB/ED,
                           + error cases.
 test/fold-z80.test.ts    foldZ80CpuLeavingRam: RAM outside, top-level
@@ -929,23 +933,33 @@ focused, printable keys plus Enter/Backspace/Tab write `KEY_DATA` and set
 code polls and clears status with a store. Clear-on-read MMIO can come
 later if a richer monitor needs it.
 
-### Soft echo monitor
+### Soft echo monitor (legacy)
 
-`src/machine/monitor.ts` holds `MONITOR_BYTES` — real Z80 opcodes at
-`0x000`. Boot writes `>` at `0xE00`, then polls `KEY_STATUS` / `KEY_DATA`,
-clears status, and handles printable echo, `CR` (next 32-col row), and
-`BS` (rub out), wrapping at the framebuffer end. This is the default
-`+ Z80CPU` program prompt (still overridable with pasted hex).
+`src/machine/monitor.ts` holds `MONITOR_BYTES` — a minimal poll/echo loop
+(prompt `>`, CR/BS, wrap). Kept for tests and as a tiny reference image;
+no longer the default `+ Z80CPU` program.
 
-### Soft command console (panel)
+### Z80 command ROM
 
-Richer inspect/edit is **JS on the panel**, not a second Z80 ROM:
-`src/machine/softConsole.ts` parses `H` / `M addr [len]` / `W addr bb…` /
-`G addr` (patches `JP nn` at `0000` and signals reboot) / `R` (reload
-echo monitor). The panel also has a **Load hex @ addr** box
-(`loadHexAt`) that refuses writes into `0xF00+` unless explicitly allowed.
-Output goes to a `<pre>` log under the TTY canvas. Typing on the canvas
-still feeds the Z80 echo monitor via KEY_*.
+`src/machine/commandRom.ts` is the default boot image: real Z80 opcodes
+assembled from `COMMAND_ROM_SOURCE` (via `assembler.ts`) at module load.
+Layout: code @ `0000`, line buffer @ `0xD00` (32 B), stack @ `0xDFF`, FB
+@ `0xE00`, keys @ `0xF00`. Typed on the **TTY canvas**:
+
+- **H** — help string
+- **M aaaa [n]** — hex dump (default 8, max 16 bytes)
+- **W aaaa bb…** — poke bytes
+- **G aaaa** — `JP aaaa` (leaves the monitor)
+
+User programs should load at **≥ `0x200`** so they sit above the ROM.
+
+### Host soft command console (panel)
+
+The panel **Cmd** box remains a **JS helper** (`softConsole.ts`) for the
+same H/M/W/G vocabulary when the Z80 is paused, plus **R** (reload
+command ROM) and **Load hex @ addr** (`loadHexAt`, refuses `0xF00+`
+unless allowed). Output goes to a `<pre>` under the TTY. Canvas keystrokes
+always feed the Z80 ROM via `KEY_*`.
 
 ### Mini assembler (panel)
 
@@ -992,8 +1006,7 @@ the full transistor guts. Unit tests continue to use the unfolded
 Full commercial Z80ASM / BASIC; port-I/O TTY (`OUT`/`IN` devices);
 clear-on-read keyboard in the solver; bitmap graphics beyond text cells;
 drawing glyphs on the transistor canvas itself; free-running unthrottled
-clocks; Z80-native command ROM (vs soft Cmd); namespaced labels so
-multiple folded Z80 instances can coexist.
+clocks; namespaced labels so multiple folded Z80 instances can coexist.
 
 ## Decode and execute: a tiny working CPU
 

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { FB_BASE, KEY_STATUS } from '../src/machine/memoryMap.js';
-import { MONITOR_BYTES } from '../src/machine/monitor.js';
+import { COMMAND_ROM_BYTES } from '../src/machine/commandRom.js';
 import { loadHexAt, parseHexBlob, runSoftCommand } from '../src/machine/softConsole.js';
 
 describe('softConsole', () => {
-  it('dumps, writes, reloads monitor, and patches JP for G', () => {
+  it('dumps, writes, reloads command ROM, and patches JP for G', () => {
     const ram = new Uint8Array(4096);
     ram[FB_BASE] = 0x3e;
 
@@ -20,7 +20,8 @@ describe('softConsole', () => {
 
     const help = runSoftCommand(ram, 'H');
     expect(help.ok).toBe(true);
-    expect(help.message.toLowerCase()).toContain('help');
+    expect(help.message.toLowerCase()).toContain('host');
+    expect(help.message).toContain('M addr');
 
     const go = runSoftCommand(ram, 'G 100');
     expect(go.ok).toBe(true);
@@ -31,7 +32,7 @@ describe('softConsole', () => {
 
     const rel = runSoftCommand(ram, 'R');
     expect(rel.ok).toBe(true);
-    expect(ram.subarray(0, 4)).toEqual(MONITOR_BYTES.subarray(0, 4));
+    expect(ram.subarray(0, 4)).toEqual(COMMAND_ROM_BYTES.subarray(0, 4));
   });
 
   it('parses hex blobs and loadHexAt refuses KEY region', () => {

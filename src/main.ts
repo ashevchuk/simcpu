@@ -17,7 +17,7 @@ import { seedStandardCells } from './sim/stdcells.js';
 import type { ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
 import { MACHINE_ADDR_BITS } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
-import { monitorHexPrompt } from './machine/monitor.js';
+import { commandRomHexPrompt } from './machine/commandRom.js';
 import { Camera, type Bounds } from './ui/Camera.js';
 import { showAlert, showConfirm, showPrompt } from './ui/Dialog.js';
 import { Editor, type Tool } from './ui/Editor.js';
@@ -376,14 +376,14 @@ document.getElementById('add-cpu')?.addEventListener('click', async () => {
 });
 
 /**
- * Default demo: soft echo monitor (poll KEY_*, write FB @ 0xE00). Needs addrBits ≥ 12.
+ * Default demo: Z80 command ROM (TTY H/M/W/G on FB @ 0xE00). Needs addrBits ≥ 12.
  */
-const Z80_MONITOR_HEX = monitorHexPrompt();
+const Z80_MONITOR_HEX = commandRomHexPrompt();
 
-/** Same shape as promptProgramBytes(), defaulted to the soft monitor. */
+/** Same shape as promptProgramBytes(), defaulted to the command ROM. */
 async function promptZ80ProgramBytes(): Promise<Uint8Array | null> {
   const raw = await showPrompt(
-    'Program bytes, comma-separated hex — default is the soft echo monitor (FB @ 0xE00, keys @ 0xF00; needs 12-bit RAM):',
+    'Program bytes, comma-separated hex — default is the Z80 command ROM (TTY H/M/W/G; FB @ 0xE00; needs 12-bit RAM):',
     Z80_MONITOR_HEX,
   );
   if (!raw) return null;

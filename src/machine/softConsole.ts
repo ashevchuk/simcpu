@@ -1,5 +1,5 @@
 import { FB_BASE, FB_END, MACHINE_RAM_SIZE } from './memoryMap.js';
-import { loadMonitor } from './monitor.js';
+import { loadCommandRom } from './commandRom.js';
 
 /** Result of a soft console command (JS-side machine helpers). */
 export interface SoftCommandResult {
@@ -10,13 +10,14 @@ export interface SoftCommandResult {
 }
 
 /**
- * Parse a one-line soft monitor command (panel / tests — not Z80).
+ * Host-side soft commands (panel log — not the Z80 TTY monitor).
+ * The canvas TTY runs the same H/M/W/G vocabulary in command ROM.
  *
  *   H              help
  *   M aaaa [nn]    dump nn bytes (default 16) from hex address
  *   W aaaa bb...   write bytes at address
  *   G aaaa         patch JP aaaa at 0x000 (sets reboot flag)
- *   R              reload echo-monitor image at 0x000
+ *   R              reload Z80 command ROM at 0x000
  */
 export function runSoftCommand(ram: Uint8Array, line: string): SoftCommandResult {
   const trimmed = line.trim();
@@ -29,13 +30,13 @@ export function runSoftCommand(ram: Uint8Array, line: string): SoftCommandResult
     return {
       ok: true,
       message:
-        'H help | M addr [len] dump | W addr bb.. write | G addr JP@0 + reboot | R reload monitor',
+        'host: H | M addr [len] | W addr bb.. | G addr JP@0+reboot | R reload cmd ROM — TTY canvas runs Z80 H/M/W/G',
     };
   }
 
   if (cmd === 'R' || cmd === 'RELOAD') {
-    loadMonitor(ram);
-    return { ok: true, message: 'monitor reloaded at 0000' };
+    loadCommandRom(ram);
+    return { ok: true, message: 'command ROM reloaded at 0000' };
   }
 
   if (cmd === 'M' || cmd === 'DUMP') {

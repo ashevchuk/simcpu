@@ -65,16 +65,16 @@ export class MachinePanel {
       </div>
       <canvas class="machine-panel-canvas" tabindex="0" title="Click to focus; type to inject keys"></canvas>
       <form class="machine-panel-cmd" autocomplete="off">
-        <label>Cmd <input name="cmd" spellcheck="false" placeholder="H | M e00 8 | W 100 3e 00 | G 100 | R" /></label>
+        <label>Cmd <input name="cmd" spellcheck="false" placeholder="host: H | M e00 8 | W 100 3e | G 200 | R" /></label>
         <button type="submit">Enter</button>
       </form>
       <div class="machine-panel-load">
-        <label>Load @ <input name="addr" spellcheck="false" value="0100" size="4" /></label>
+        <label>Load @ <input name="addr" spellcheck="false" value="0200" size="4" /></label>
         <textarea name="hex" rows="2" spellcheck="false" placeholder="hex: 3e,41,32,00,0e ..."></textarea>
         <button type="button" data-act="load">Load hex</button>
       </div>
       <div class="machine-panel-asm">
-        <textarea name="asm" rows="5" spellcheck="false">; origin = Load @
+        <textarea name="asm" rows="5" spellcheck="false">; origin = Load @ (try 0200)
 LD A,'A'
 LD (0xE00),A
 spin:
@@ -85,7 +85,7 @@ JR spin</textarea>
         </div>
       </div>
       <pre class="machine-panel-out"></pre>
-      <div class="machine-panel-hint">Asm subset → RAM. Canvas keys = Z80 echo. Cmd M/W/G/R. First boot slow.</div>
+      <div class="machine-panel-hint">TTY canvas = Z80 cmd ROM (H/M/W/G). Host Cmd = soft helper. First boot slow.</div>
     `;
     this.canvas = this.root.querySelector('canvas')!;
     this.hint = this.root.querySelector('.machine-panel-hint')!;
@@ -250,7 +250,7 @@ JR spin</textarea>
     this.keyHandler = (e: KeyboardEvent) => this.onKeyDown(e);
     this.canvas.addEventListener('keydown', this.keyHandler);
     this.hint.textContent =
-      'Asm → Load @. Canvas keys = Z80 echo. Cmd M/W/G/R. Speed = phases/frame; first boot slow.';
+      'TTY canvas = Z80 H/M/W/G. Host Cmd = soft helper. Asm → Load @ (≥200h). First boot slow.';
     this.setVisible(true);
     this.draw();
     this.refreshControls();
