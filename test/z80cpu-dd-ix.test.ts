@@ -3,8 +3,8 @@ import { makeZ80Harness } from './z80Harness.js';
 
 /**
  * DD/IX — first slice (LD/PUSH/POP) plus HL-clone slice (ADD/INC/DEC/
- * JP/LD SP/EX) plus (IX+d) LD. Prefixed bodies start at PHASE4. See
- * "DD: IX" in ARCHITECTURE.md.
+ * JP/LD SP/EX) plus (IX+d) LD / INC/DEC / ALU A,(IX+d). Prefixed bodies
+ * start at PHASE4. See "DD: IX" in ARCHITECTURE.md.
  */
 describe('buildZ80Cpu — DD: LD IX,nn / PUSH IX / POP IX', () => {
   const ADDR_BITS = 7;
@@ -299,6 +299,107 @@ describe('buildZ80Cpu — DD: (IX+d) LD r/(IX+d),r/(IX+d),n', () => {
     h.runInstruction(); // LD B,(IX+2)
     expect(h.readReg(h.cpu.rB.q)).toBe(0x55);
     expect(h.readReg(h.cpu.a)).toBe(0xaa);
+    expectHlIyUntouched(h);
+  });
+});
+
+describe('buildZ80Cpu — DD: (IX+d) INC/DEC and ALU A,(IX+d)', () => {
+  /**
+   *  0: DD 21 40 00   LD IX,0x0040
+   *  4: DD 36 02 10   LD (IX+2),0x10
+   *  8: DD 34 02      INC (IX+2)       ; RAM[0x42]=0x11
+   * 11: DD 35 02      DEC (IX+2)       ; RAM[0x42]=0x10
+   * 14: 3E 05         LD A,0x05
+   * 16: DD 86 02      ADD A,(IX+2)     ; A=0x15
+   * 19: DD BE 02      CP (IX+2)        ; A unchanged, Z=0 (0x15≠0x10)
+   * 22: DD 7E 02      LD A,(IX+2)      ; A=0x10 — round-trip read-back
+   *
+   * ADDR_BITS=8; IX=0x0040 keeps (IX+2) past the instruction stream.
+   * HL and IY must stay untouched under DD.
+   */
+  const ADDR_BITS = 8;
+  const HL_H = 0x55;
+  const HL_L = 0xaa;
+  const IY_H = 0x66;
+  const IY_L = 0xbb;
+  const PROGRAM = (() => {
+    const bytes = new Uint8Array(256);
+    bytes.set([0xdd, 0x21, 0x40, 0x00], 0);
+    bytes.set([0xdd, 0x36, 0x02, 0x10], 4);
+    bytes.set([0xdd, 0x34, 0x02], 8);
+    bytes.set([0xdd, 0x35, 0x02], 11);
+    bytes.set([0x3e, 0x05], 14);
+    bytes.set([0xdd, 0x86, 0x02], 16);
+    bytes.set([0xdd, 0xbe, 0x02], 19);
+    bytes.set([0xdd, 0x7e, 0x02], 22);
+    return bytes;
+  })();
+
+  const expectHlIyUntouched = (h: ReturnType<typeof makeZ80Harness>) => {
+    expect(h.readReg(h.cpu.rH.q)).toBe(HL_H);
+    expect(h.readReg(h.cpu.rL.q)).toBe(HL_L);
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(IY_H);
+    expect(h.readReg(h.cpu.rIYL.q)).toBe(IY_L);
+  };
+
+  it('INC/DEC (IX+d) and ALU A,(IX+d) without clobbering HL or IY', () => {
+    const h = makeZ80Harness(PROGRAM, ADDR_BITS, (cpu, seedReg) => {
+      seedReg(cpu.rB, 0);
+      seedReg(cpu.rC, 0);
+      seedReg(cpu.rD, 0);
+      seedReg(cpu.rE, 0);
+      seedReg(cpu.rH, HL_H);
+      seedReg(cpu.rL, HL_L);
+      seedReg(cpu.rIXH, 0);
+      seedReg(cpu.rIXL, 0);
+      seedReg(cpu.rIYH, IY_H);
+      seedReg(cpu.rIYL, IY_L);
+      seedReg(cpu.sp, 0, ADDR_BITS);
+      seedReg(cpu.aP, 0);
+      seedReg(cpu.fP, 0);
+      seedReg(cpu.bP, 0);
+      seedReg(cpu.cP, 0);
+      seedReg(cpu.dP, 0);
+      seedReg(cpu.eP, 0);
+      seedReg(cpu.hP, 0);
+      seedReg(cpu.lP, 0);
+    });
+
+    h.runInstruction(); // LD IX,0x0040
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x40);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD (IX+2),0x10
+    expect(h.cpu.ram.bytes[0x42]).toBe(0x10);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // INC (IX+2)
+    expect(h.cpu.ram.bytes[0x42]).toBe(0x11);
+    expect(h.readReg(h.cpu.f) & 0x40).toBe(0); // Z=0
+    expect(h.readReg(h.cpu.f) & 0x02).toBe(0); // N=0
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // DEC (IX+2)
+    expect(h.cpu.ram.bytes[0x42]).toBe(0x10);
+    expect(h.readReg(h.cpu.f) & 0x02).toBe(0x02); // N=1
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD A,0x05
+    expect(h.readReg(h.cpu.a)).toBe(0x05);
+
+    h.runInstruction(); // ADD A,(IX+2)
+    expect(h.readReg(h.cpu.a)).toBe(0x15);
+    expect(h.cpu.ram.bytes[0x42]).toBe(0x10);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // CP (IX+2)
+    expect(h.readReg(h.cpu.a)).toBe(0x15); // CP does not write A
+    expect(h.readReg(h.cpu.f) & 0x40).toBe(0); // Z=0 (unequal)
+    expect(h.readReg(h.cpu.f) & 0x02).toBe(0x02); // N=1
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD A,(IX+2)
+    expect(h.readReg(h.cpu.a)).toBe(0x10);
     expectHlIyUntouched(h);
   });
 });

@@ -12,9 +12,9 @@ prefix table, the `ED` prefix table including a thin IM1 IRQ layer
 (`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and first `DD`/`FD`
 slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY`, HL-clone
 `ADD`/`INC`/`DEC`/`JP`/`LD SP`/`EX (SP)`, plus `(IX+d)`/`(IY+d)` LD
-`r,(IX+d)` / `(IX+d),r` / `(IX+d),n` — `INC`/`DEC`/`ALU`/`DD CB` and
-H→IXH remap still later). Memory map, monitor, BASIC, and the
-assembler remain later phases.
+`r,(IX+d)` / `(IX+d),r` / `(IX+d),n`, `INC`/`DEC (IX+d)`, and ALU
+`A,(IX+d)` — `DD CB` and H→IXH remap still later). Memory map, monitor,
+BASIC, and the assembler remain later phases.
 
 ## Layout
 
@@ -95,9 +95,9 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    First `DD`/`FD` slices: `IX`/`IY` + `LD IX/IY,nn` /
                    `PUSH`/`POP IX/IY` plus HL-clone ADD/INC/DEC/JP/LD SP/EX
                    plus `(IX+d)`/`(IY+d)` LD (`r,(IX+d)`, `(IX+d),r`,
-                   `(IX+d),n`) — `INC`/`DEC`/`ALU`/`DD CB` still later —
-                   see "DD: IX" / "FD: IY" and the CB/ED/DD/FD prefix
-                   sections below).
+                   `(IX+d),n`), `INC`/`DEC (IX+d)`, and ALU `A,(IX+d)` —
+                   `DD CB` / H→IXH remap still later — see "DD: IX" /
+                   "FD: IY" and the CB/ED/DD/FD prefix sections below).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -2410,10 +2410,9 @@ closed them (see "Thin IM1 IRQ" below). The `CB`/`DD`/`ED`/`FD` prefix
 bytes were called permanent exceptions in this same push; that was true
 *then* — the prefix *mechanism*, the `ED` table, and the `CB` table landed
 in later passes (see "The CB/ED/DD/FD prefix mechanism" and the `ED`/`CB`
-sections below). `DD` now has a first IX slice (`LD IX,nn` / `PUSH IX` /
-`POP IX`, HL-clone, plus `(IX+d)` LD); `FD` has the matching IY slice
-(`LD IY,nn` / `PUSH IY` / `POP IY`, HL-clone, plus `(IY+d)` LD);
-`INC`/`DEC`/`ALU` `(IX+d)`/`(IY+d)` and `DD`/`FD CB` remain later.
+sections below). `DD` now has an IX slice (`LD IX,nn` / `PUSH IX` /
+`POP IX`, HL-clone, `(IX+d)` LD / INC/DEC / ALU `A,(IX+d)`); `FD` has
+the matching IY slice; `DD`/`FD CB` and H→IXH remap remain later.
 
 **`ADC`/`SBC`** turned out to be exactly the "smaller lift" the very first
 `x=10` doc comment predicted, back when this file had no flags register at
@@ -2950,12 +2949,12 @@ a dedicated branch — a real rollback point for a change this invasive to
 code that had never needed one before, this project having had no git
 history at all until this pass.
 
-### DD: IX (first slice + HL-clone + (IX+d) LD)
+### DD: IX (first slice + HL-clone + (IX+d) mem)
 
 Real Z80's `DD` prefix remaps many `HL` ops onto the `IX` index register.
 This project's DD body covers the `IX` register itself (`IXH`/`IXL`), the
-HL-pair shapes that need no `(IX+d)`, and the first displacement LD
-slice.
+HL-pair shapes that need no `(IX+d)`, and the displacement mem slice
+(LD / INC/DEC / ALU `A,(IX+d)`).
 
 **First slice** — load / stack:
 
@@ -2995,37 +2994,51 @@ PHASE2–3). Never reopen `isX0Group` / `isStackGroup`
   holding temps at first read (never drive bus from live `REGIX*`
   while committing IX). IX write-back from `SPLOTEMP`/`SPHITEMP`.
 
-**(IX+d) LD slice** — parallel decode, never reopen `isLdGroup` /
-`isX0Group`:
+**(IX+d) mem slice** — parallel decode, never reopen `isLdGroup` /
+`isX0Group` / `isAluGroup`:
 
 ```
 isDdMemLdRead  = isDdActive ∧ x[1] ∧ z[6] ∧ ¬y[6]   // LD r,(IX+d)
 isDdMemLdWrite = isDdActive ∧ x[1] ∧ y[6] ∧ ¬z[6]   // LD (IX+d),r
 isDdMemLdN     = isDdActive ∧ x[0] ∧ z[6] ∧ y[6]    // LD (IX+d),n
+isDdMemIncDec  = isDdActive ∧ x[0] ∧ (z[4]∨z[5]) ∧ y[6]  // INC/DEC (IX+d)
+isDdMemAlu     = isDdActive ∧ x[2] ∧ z[6]            // ALU A,(IX+d)
 ```
 
-- Shared `ixDisp` capture @ PHASE4 (`DDDISP_READ_NOW`); PHASE5 advances
-  PC past `d` (`DDDISP_ADVANCE_NOW`, excludes PHASE4).
+- Shared `isDdMemAny` widens d-fetch / advance for LD + INC/DEC + ALU:
+  `ixDisp` capture @ PHASE4 (`DDDISP_READ_NOW`); PHASE5 advances PC past
+  `d` (`DDDISP_ADVANCE_NOW`, excludes PHASE4).
 - Dedicated `ixDispAdder` (`a` = IX truncated to `addrBits`, `b` =
   sign-extend `d`) — not `jrOffsetAdder` (hardwired to PC).
 - `IXDISP_ADDR_NOW` gates the RAM addr mux **only** during mem R/W
-  phases (PHASE6 for r↔mem, PHASE7 for `(IX+d),n` write) — never during
-  d/n fetches @ PC (same phase-scope discipline as the
-  `IS_INCDEC_HLMEM` live bug).
+  phases (PHASE6 for r↔mem / INCDEC read / ALU read, PHASE7 for
+  `(IX+d),n` write and INCDEC write) — never during d/n fetches @ PC
+  (same phase-scope discipline as the `IS_INCDEC_HLMEM` live bug).
 - `LD r,(IX+d)` / `LD (IX+d),r`: PHASE6 mem R or W; register WE /
   bus sources use DD strobes ∧ `y`/`z` (cannot reuse dead `ldGroupNow`).
 - `LD (IX+d),n`: PHASE6 fetch `n` → `ldIxDNImm`; PHASE7 write @ IX+d
   and advance past `n` (excludes PHASE6).
+- **`INC`/`DEC (IX+d)`** (`DD 34 d` / `DD 35 d`): PHASE6 read @ IX+d
+  into shared `hlMemTemp`; PHASE7 write `R8RESULT` @ IX+d and commit F
+  (unprefixed `HLMEM_READ_NOW` @ PHASE2 / `INCDEC_HLMEM_NOW` @ PHASE3,
+  shifted +4). Shared `r8Adder` selects `HLMEM` via `y[6]`; DEC
+  direction ORs `DDMEM_IS_DEC` (`isDdMemIncDec ∧ z[5]`) into the dead
+  `isDecR8` path for `cin`/`b`/`R8_N`/`R8_H`. Far ORs: `hlMemTemp.we`,
+  `ram.oe`/`ram.we`, `R8RESULT` bus enable, `INCDEC_R8_NOW`.
+- **ALU `A,(IX+d)`** (`DD 86/8E/96/9E/A6/AE/B6/BE d`): PHASE6 read @
+  IX+d onto `BUS`; widen `aluAnyGroupNow` (dead `aluGroupNow` under
+  prefix) so A/F commit like unprefixed ALU. Operand already comes from
+  `BUS` when `ram.oe` drives it; `IXDISP_ADDR_NOW` + `ram.oe` OR PHASE6.
 
-`INC`/`DEC (IX+d)`, ALU `A,(IX+d)`, `DD CB`, and H→IXH remap remain
-later. Verified by `z80cpu-dd-ix.test.ts` (load/push/pop, HL-clone
-program, and `(IX+d)` LD program; asserts HL and IY unchanged).
+`DD CB` and H→IXH remap remain later. Verified by `z80cpu-dd-ix.test.ts`
+(load/push/pop, HL-clone, `(IX+d)` LD, and INC/DEC + ALU programs;
+asserts HL and IY unchanged).
 
-### FD: IY (first slice + HL-clone + (IY+d) LD)
+### FD: IY (first slice + HL-clone + (IY+d) mem)
 
 Mechanical mirror of "DD: IX" above, gated on `isFdActive` (`0xFD`)
 instead of `isDdActive`. Same register shape (`IYH`/`IYL`), same
-PHASE4–7 / PHASE4–5 / PHASE4 bodies, plus the `(IY+d)` LD mirror
+PHASE4–7 / PHASE4–5 / PHASE4 bodies, plus the `(IY+d)` mem mirror
 (`iyDisp` / `iyDispAdder` / `ldIyDNImm` / `IYDISP_ADDR_NOW`):
 
 - **`LD IY,nn`** / **`PUSH IY`** / **`POP IY`** — as in the first
@@ -3033,12 +3046,12 @@ PHASE4–7 / PHASE4–5 / PHASE4 bodies, plus the `(IY+d)` LD mirror
 - **`ADD IY,rr`** / **`INC/DEC IY`** / **`JP (IY)`** / **`LD SP,IY`** /
   **`EX (SP),IY`** — same HL-clone wiring with `ADDIY_NOW`,
   `IYADD`, `JPIY_NOW`, `LDSPIY_NOW`, `EXSPIY_*`.
-- **`LD r,(IY+d)`** / **`LD (IY+d),r`** / **`LD (IY+d),n`** — FD
-  mirror of the DD displacement LD slice.
+- **`LD r,(IY+d)`** / **`LD (IY+d),r`** / **`LD (IY+d),n`** /
+  **`INC`/`DEC (IY+d)`** / **ALU `A,(IY+d)`** — FD mirror of the DD
+  displacement mem slice.
 
-`(IY+d)` INC/DEC/ALU and `FD CB` remain later. Verified by
-`z80cpu-fd-iy.test.ts` (mirror programs; asserts HL and IX unchanged
-under FD).
+`FD CB` remains later. Verified by `z80cpu-fd-iy.test.ts` (mirror
+programs; asserts HL and IX unchanged under FD).
 
 ### x=10, z=0: LDI/LDD/LDIR/LDDR
 
@@ -4559,12 +4572,11 @@ section's own success story.
   than propagating the same gap into a seventeenth gate. `ED` also has
   thin IM1 IRQ (`IM 1`/`RETI`, plus unprefixed `EI`/`DI` — see "Thin IM1
   IRQ" above). `CB` is closed for `BIT`/`SET`/`RES`/rotates (see above).
-  `DD` has a first index-register slice (`IX`, `LD IX,nn`, `PUSH IX`,
-  `POP IX`, plus HL-clone ADD/INC/DEC/JP/LD SP/EX and `(IX+d)` LD —
-  see "DD: IX" above); `FD` has the matching IY slice (`IY`, `LD IY,nn`,
-  `PUSH IY`, `POP IY`, plus the same HL-clone set and `(IY+d)` LD —
-  see "FD: IY" above); `INC`/`DEC`/`ALU` `(IX+d)`/`(IY+d)` and
-  `DD`/`FD CB` remain later.
+  `DD` has an index-register slice (`IX`, `LD IX,nn`, `PUSH IX`,
+  `POP IX`, plus HL-clone ADD/INC/DEC/JP/LD SP/EX and `(IX+d)` LD /
+  INC/DEC / ALU `A,(IX+d)` — see "DD: IX" above); `FD` has the matching
+  IY slice (see "FD: IY" above); `DD`/`FD CB` and H→IXH remap remain
+  later.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
