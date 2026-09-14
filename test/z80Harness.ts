@@ -101,6 +101,8 @@ export function makeZ80Harness(
     seedReg(cpu.rL, 0);
     seedReg(cpu.rIXH, 0);
     seedReg(cpu.rIXL, 0);
+    seedReg(cpu.rIYH, 0);
+    seedReg(cpu.rIYL, 0);
     seedReg(cpu.sp, 0, addrBits);
     seedReg(cpu.aP, 0);
     seedReg(cpu.fP, 0);

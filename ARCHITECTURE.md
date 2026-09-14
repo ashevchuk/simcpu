@@ -9,10 +9,10 @@ This document covers what exists today: the simulation engine, hierarchy/
 chip-folding, a canvas editor, and a transistor-level Z80-like CPU
 (`buildZ80Cpu`) that executes the unprefixed opcode table, the `CB`
 prefix table, the `ED` prefix table including a thin IM1 IRQ layer
-(`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and a first `DD`
-slice (`IX` register, `LD IX,nn`, `PUSH IX`, `POP IX` — IY and `(IX+d)`
-still later). Memory map, monitor, BASIC, and the assembler remain
-later phases.
+(`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and first `DD`/`FD`
+slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY` —
+`(IX+d)`/`(IY+d)` still later). Memory map, monitor, BASIC, and the
+assembler remain later phases.
 
 ## Layout
 
@@ -90,9 +90,10 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN r,(C)`/`OUT (C),r`,
                    `LD I/R`, and thin IM1 IRQ — `IM 1`/`RETI`/`EI`/`DI`)
                    and the `CB` table (`BIT`, `SET`/`RES`, rotates/shifts).
-                   First `DD` slice: `IX` + `LD IX,nn` / `PUSH IX` /
-                   `POP IX` (IY and `(IX+d)` still later) — see "DD: IX"
-                   and the CB/ED/DD/FD prefix sections below).
+                   First `DD`/`FD` slices: `IX`/`IY` + `LD IX/IY,nn` /
+                   `PUSH`/`POP IX/IY` (`(IX+d)`/`(IY+d)` still later) — see
+                   "DD: IX" / "FD: IY" and the CB/ED/DD/FD prefix sections
+                   below).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -2406,7 +2407,8 @@ bytes were called permanent exceptions in this same push; that was true
 *then* — the prefix *mechanism*, the `ED` table, and the `CB` table landed
 in later passes (see "The CB/ED/DD/FD prefix mechanism" and the `ED`/`CB`
 sections below). `DD` now has a first IX slice (`LD IX,nn` / `PUSH IX` /
-`POP IX`); `FD`/IY and `(IX+d)` remain later.
+`POP IX`); `FD` has the matching IY slice (`LD IY,nn` / `PUSH IY` /
+`POP IY`); `(IX+d)`/`(IY+d)` remain later.
 
 **`ADC`/`SBC`** turned out to be exactly the "smaller lift" the very first
 `x=10` doc comment predicted, back when this file had no flags register at
@@ -2836,7 +2838,7 @@ passes built on. The non-interrupt half of `ED` is now wired (block
 column, `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN`/`OUT
 (C)`, `LD I/R`); CB has `BIT`, `SET`/`RES`, and rotates/shifts
 (register + `(HL)`); `DD` has a first IX slice (see "DD: IX" below);
-`FD`/IY bodies remain inert by design.
+`FD` has the matching IY slice (see "FD: IY" below).
 
 **Finding the four prefix bytes needed no new decode table at all.** Real
 Z80 puts all four in `x=11`'s own `z=3`/`z=5` columns — `CB`=0xCB sits at
@@ -2923,7 +2925,7 @@ which real hardware treats as a restart) — this project's one-shot
 appearing where the real opcode was expected. `isEdActive` was the first
 of the four prefix bits to get a label (LDI); `isCbActive` followed for
 `BIT`; `isDdActive` is now labeled for the IX slice below. `isFdActive`
-stays unlabeled until IY lands.
+is labeled for the IY slice below.
 
 Verified against the two existing test files most likely to catch a
 retrofit mistake in the four base group gates (`blocks.test.ts`,
@@ -2968,9 +2970,29 @@ PHASE2–3:
 Unprefixed `LD HL,nn` / `PUSH HL` / `POP HL` stay quiet under DD because
 `NOT_PREFIX_ACTIVE` already gates those group decode paths — the DD
 bodies are a parallel decode, not a remapping of the HL gates.
-Displacement addressing (`(IX+d)`) and the entire `FD`/`IY` table remain
-later. Verified by `z80cpu-dd-ix.test.ts` (one program: load, push,
-corrupt, pop).
+Displacement addressing (`(IX+d)`) remains later. Verified by
+`z80cpu-dd-ix.test.ts` (one program: load, push, corrupt, pop).
+
+### FD: IY (first slice)
+
+Mechanical mirror of "DD: IX" above, gated on `isFdActive` (`0xFD`)
+instead of `isDdActive`. Same register shape (`IYH`/`IYL`, seed-path
+contract like `IXH`/`IXL`), same PHASE4–7 / PHASE4–5 bodies:
+
+- **`LD IY,nn`** (`FD 21 nn nn`) — decode `isFdActive ∧ dec.x[0] ∧
+  dec.z[1] ∧ dec.y[4]`. PHASE4→`IYL`, PHASE5 advance, PHASE6→`IYH`,
+  PHASE7 advance. `ram.oe` / `pcHold` widen with the IY strobes
+  (side-folded with IX so neither OR input floats); write-back is
+  `wrapWithPairCommit` from `BUS`.
+- **`PUSH IY`** (`FD E5`) / **`POP IY`** (`FD E1`) — decode
+  `isFdActive ∧ dec.x[3]` with PUSH `z[5]∧y[4]` and POP `z[1]∧y[4]`.
+  Same high-then-low / low-then-high phase shape as PUSH/POP IX.
+  `stackWriteNow` / `readNow` widen for the FD phases; tri-buf banks
+  drive `REGIYH`/`REGIYL` onto `BUS` for PUSH; another
+  `wrapWithPairCommit` layer commits POP from `BUS`.
+
+`(IY+d)` remains later. Verified by `z80cpu-fd-iy.test.ts` (mirror of
+the IX program with `0xFD`).
 
 ### x=10, z=0: LDI/LDD/LDIR/LDDR
 
@@ -4492,8 +4514,9 @@ section's own success story.
   thin IM1 IRQ (`IM 1`/`RETI`, plus unprefixed `EI`/`DI` — see "Thin IM1
   IRQ" above). `CB` is closed for `BIT`/`SET`/`RES`/rotates (see above).
   `DD` has a first index-register slice (`IX`, `LD IX,nn`, `PUSH IX`,
-  `POP IX` — see "DD: IX" above); IY and `(IX+d)` remain later, as does
-  the entire `FD` table.
+  `POP IX` — see "DD: IX" above); `FD` has the matching IY slice
+  (`IY`, `LD IY,nn`, `PUSH IY`, `POP IY` — see "FD: IY" above);
+  `(IX+d)`/`(IY+d)` remain later.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
