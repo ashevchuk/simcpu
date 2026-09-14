@@ -2230,14 +2230,12 @@ export function buildZ80Cpu(
   tieToLabel('PHASE3', prefixAdvanceNow.b, { x: pos.x + 9150, y: pos.y - 6450 });
   tieToLabel('PREFIX_ADVANCE_NOW', prefixAdvanceNow.out, { x: pos.x + 9350, y: pos.y - 6450 }); // anchor — PC's own advance (far) reads this
   // `isCbActive`/`isDdActive`/`isFdActive` are real, correct, individually
-  // addressable signals — still deliberately not `tieToLabel`ed to
-  // anything, since no CB/DD/FD-table instruction is wired up yet (this
-  // file's own labeling discipline treats a label with no real consumer as
-  // an island to avoid, not a convenience to pre-publish). `isEdActive` is
-  // the first of the four to get one — LDI (see "x=10, y=4, z=0: LDI"
-  // below) is real Z80's own simplest, most self-contained ED-table
-  // instruction, this project's first actual consumer.
+  // addressable signals. `isEdActive` was the first labeled (LDI); CB's
+  // own first consumer is register-only `BIT y,r` (see below), so
+  // `isCbActive` gets a label too. DD/FD stay unlabeled until they have
+  // a real body.
   tieToLabel('IS_ED_ACTIVE', isEdActive, { x: pos.x + 9100, y: pos.y - 6350 }); // anchor — LDI's own decode (far) reads this
+  tieToLabel('IS_CB_ACTIVE', isCbActive, { x: pos.x + 9100, y: pos.y - 6330 }); // anchor — BIT y,r (near) reads this
 
   // `isEdX2Active`/`isEdX1Active`: `isEdActive` alone says only "the
   // recaptured byte follows a real `0xED`" — it says nothing about that
@@ -2263,6 +2261,80 @@ export function buildZ80Cpu(
   const isEdX1Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6370 });
   wire(parent, isEdActive, isEdX1Active.a);
   wire(parent, dec.x[1]!, isEdX1Active.b);
+  // CB x=01 is the BIT family — same "prefix ∧ this table's x" shape ED uses.
+  const isCbX1Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6380 });
+  wire(parent, isCbActive, isCbX1Active.a);
+  wire(parent, dec.x[1]!, isCbX1Active.b);
+
+  // x=01 (CB): BIT y,r — register form only (z≠6). First CB-table body
+  // in this project: flags-only, single PHASE4 after the prefix, no RAM
+  // and no register write. `BIT y,(HL)` and the rotate/SET/RES columns
+  // come later. Collides with unprefixed `LD r,r'` the same way every
+  // other prefixed `x=01` body does — `NOT_PREFIX_ACTIVE` keeps that quiet.
+  const notCbBitHl = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7400 });
+  wire(parent, dec.z[6]!, notCbBitHl.in);
+  const isBitRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7400 });
+  wire(parent, isCbX1Active.out, isBitRegNow.a);
+  wire(parent, notCbBitHl.out, isBitRegNow.b);
+  tieToLabel('IS_BIT_REG_NOW', isBitRegNow.out, { x: pos.x + 9300, y: pos.y - 7400 });
+  const bitRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7420 });
+  wire(parent, isBitRegNow.out, bitRegNow.a);
+  tieToLabel('PHASE4', bitRegNow.b, { x: pos.x + 9250, y: pos.y - 7420 });
+  tieToLabel('BIT_REG_NOW', bitRegNow.out, { x: pos.x + 9450, y: pos.y - 7420 }); // anchor — F we/layer
+
+  // One-hot z picks B/C/D/E/H/L/A (no (HL)); y picks which bit to test.
+  const bitRegSelect: { reg: Pin[]; z: Pin }[] = [
+    { reg: rB.q, z: dec.z[0]! },
+    { reg: rC.q, z: dec.z[1]! },
+    { reg: rD.q, z: dec.z[2]! },
+    { reg: rE.q, z: dec.z[3]! },
+    { reg: rH.q, z: dec.z[4]! },
+    { reg: rL.q, z: dec.z[5]! },
+    { reg: a.q, z: dec.z[7]! },
+  ];
+  const bitRegByte: Pin[] = [];
+  for (let i = 0; i < 8; i++) {
+    let term: Pin | null = null;
+    for (let ri = 0; ri < bitRegSelect.length; ri++) {
+      const { reg, z } = bitRegSelect[ri]!;
+      const andGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7600 + i * 80 + ri * 10 });
+      wire(parent, reg[i]!, andGate.a);
+      wire(parent, z, andGate.b);
+      if (term === null) {
+        term = andGate.out;
+      } else {
+        const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y - 7600 + i * 80 + ri * 10 });
+        wire(parent, term, orGate.a);
+        wire(parent, andGate.out, orGate.b);
+        term = orGate.out;
+      }
+    }
+    bitRegByte.push(term!);
+  }
+  let bitTest: Pin | null = null;
+  for (let yi = 0; yi < 8; yi++) {
+    const andGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 7600 + yi * 20 });
+    wire(parent, bitRegByte[yi]!, andGate.a);
+    wire(parent, dec.y[yi]!, andGate.b);
+    if (bitTest === null) {
+      bitTest = andGate.out;
+    } else {
+      const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9650, y: pos.y - 7600 + yi * 20 });
+      wire(parent, bitTest, orGate.a);
+      wire(parent, andGate.out, orGate.b);
+      bitTest = orGate.out;
+    }
+  }
+  const bitZBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 7420 });
+  wire(parent, bitTest!, bitZBit.in);
+  // S is bit 7 of (r AND mask) — nonzero only when testing bit 7 and it is set.
+  const bitSBit = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 7400 });
+  wire(parent, bitTest!, bitSBit.a);
+  wire(parent, dec.y[7]!, bitSBit.b);
+  // P/V mirrors Z on BIT (undocumented-but-stable real Z80 behavior).
+  const bitPBit = bitZBit.out;
+  const bitXBit = bitRegByte[3]!;
+  const bitYBit = bitRegByte[5]!;
 
   // x=10, z=0: LDI/LDD/LDIR/LDDR (real 0xED 0xA0/0xA8/0xB0/0xB8) — real
   // Z80's own block-move family, `y=4..7` selecting which of the four:
@@ -7620,6 +7692,25 @@ export function buildZ80Cpu(
       wire(parent, ldAIrFreshBit[i]!, ldAIrFMux.pins[muxDef.ports[2]!]!);
       cLayerIn = ldAIrFMux.pins[muxDef.ports[3]!]!;
     }
+    // BIT y,r (CB x=01, register form — see decode near isCbX1Active):
+    // every bit but C. H=1, N=0, Z/P from the tested bit, S only when
+    // testing bit 7, X/Y from the source register's bits 3/5.
+    if (i !== 0) {
+      const bitFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8384, y: pos.y + 2228 + i * 100 });
+      tieToLabel('BIT_REG_NOW', bitFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8284, y: pos.y + 2228 + i * 100 });
+      wire(parent, cLayerIn, bitFMux.pins[muxDef.ports[1]!]!);
+      const bitFreshBit: Record<number, Pin> = {
+        1: gnd4,
+        2: bitPBit,
+        3: bitXBit,
+        4: vcc4,
+        5: bitYBit,
+        6: bitZBit.out,
+        7: bitSBit.out,
+      };
+      wire(parent, bitFreshBit[i]!, bitFMux.pins[muxDef.ports[2]!]!);
+      cLayerIn = bitFMux.pins[muxDef.ports[3]!]!;
+    }
     // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) swaps the
     // *whole* byte, not just one or two bits — this layer runs for every
     // `i` that reaches this point (all eight, now that H and the two
@@ -7705,7 +7796,10 @@ export function buildZ80Cpu(
   const fWeFinal9 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9670, y: pos.y + 2340 });
   wire(parent, fWeFinal8.out, fWeFinal9.a);
   tieToLabel('LDAIR_NOW', fWeFinal9.b, { x: pos.x + 9570, y: pos.y + 2340 });
-  wire(parent, fWeFinal9.out, f.we);
+  const fWeFinal10 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9770, y: pos.y + 2350 });
+  wire(parent, fWeFinal9.out, fWeFinal10.a);
+  tieToLabel('BIT_REG_NOW', fWeFinal10.b, { x: pos.x + 9670, y: pos.y + 2350 });
+  wire(parent, fWeFinal10.out, f.we);
 
   // SP: same external-seed contract as B..L above — `sp.d`/`sp.we` here
   // are the caller's own sink pins, muxed ahead of the raw register the

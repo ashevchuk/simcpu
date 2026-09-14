@@ -87,7 +87,8 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`,
                    `IN r,(C)`/`OUT (C),r`, `LD I/R` — see "A real Z80
                    decoder" and the CB/ED/DD/FD prefix sections below.
-                   `CB`/`DD`/`FD` tables and IRQ ops are still inert).
+                   `CB` has register-only `BIT y,r` so far; `DD`/`FD` and
+                   IRQ ops are still inert).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -2828,7 +2829,8 @@ if it had arrived unprefixed. At the moment this mechanism landed, no
 prefixed instruction body executed yet — the foundation the next several
 passes built on. The non-interrupt half of `ED` is now wired (block
 column, `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN`/`OUT
-(C)`, `LD I/R`); `CB`/`DD`/`FD` bodies remain inert by design.
+(C)`, `LD I/R`); CB has register-only `BIT y,r` so far; `DD`/`FD` bodies
+remain inert by design.
 
 **Finding the four prefix bytes needed no new decode table at all.** Real
 Z80 puts all four in `x=11`'s own `z=3`/`z=5` columns — `CB`=0xCB sits at
@@ -3582,6 +3584,25 @@ Verified with one dedicated round-trip test (`z80cpu-ld-i-r.test.ts`) —
 before the full suite. With this column, every non-interrupt `ED`
 opcode this project can meaningfully execute is closed; `RETN`/`RETI`/
 `IM` wait on IRQ machinery (Known Simplifications).
+
+### CB x=01: BIT y,r (register form)
+
+First CB-table body. Real `0xCB 0x40`–`0xCB 0x7F` excluding the
+`z=6` `(HL)` forms. Prefix mechanism already spent `PHASE2`/`PHASE3`
+recapturing `ir` and advancing `pc`; the bit test commits on a single
+`PHASE4`. `isCbActive` is now labeled (alongside `isEdActive`);
+`isCbX1Active = AND(isCbActive, dec.x[1])` gates this column.
+
+**Flags:** `Z` ← tested bit is 0; `H=1`; `N=0`; `C` held; `P/V` mirrors
+`Z` (stable undocumented real-Z80 behavior); `S` is set only when testing
+bit 7 and it is set; `X`/`Y` mirror the source register's bits 3/5.
+Registers are never written.
+
+`BIT y,(HL)`, the CB rotate/shift column (`x=00`), and `RES`/`SET`
+(`x=10`/`x=11`) are the next CB slices — deferred so this pass only
+proves the CB latch path end to end.
+
+Verified with `z80cpu-bit.test.ts` — before the full suite.
 
 ### Solver hot-path rewrite: indexed nets
 
@@ -4379,8 +4400,10 @@ section's own success story.
   matching sections above). That is the entire non-interrupt `ED` table
   this project can observe without IRQ machinery. `RETN`/`RETI`/`IM` (and
   `IFF1`/`IFF2`, auto-increment of `R` on `M1`, and `P/V←IFF2` on
-  `LD A,I`/`LD A,R`) wait until an interrupt line exists; `CB`/`DD`/`FD`
-  instruction bodies remain the next large unlock, deliberately untouched.
+  `LD A,I`/`LD A,R`) wait until an interrupt line exists; CB is being
+  filled column by column (register-only `BIT y,r` first — see above);
+  `DD`/`FD` instruction bodies remain deliberately untouched until CB is
+  further along.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
