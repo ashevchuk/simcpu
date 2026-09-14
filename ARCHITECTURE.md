@@ -11,10 +11,10 @@ chip-folding, a canvas editor, and a transistor-level Z80-like CPU
 prefix table, the `ED` prefix table including a thin IM1 IRQ layer
 (`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and first `DD`/`FD`
 slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY`, HL-clone
-`ADD`/`INC`/`DEC`/`JP`/`LD SP`/`EX (SP)`, plus `(IX+d)`/`(IY+d)` LD
-`r,(IX+d)` / `(IX+d),r` / `(IX+d),n`, `INC`/`DEC (IX+d)`, ALU
-`A,(IX+d)`, and nested `DD CB`/`FD CB` **BIT** `y,(IX+d)`/`(IY+d)` —
-SET/RES/rot and H→IXH remap still later). Memory map, monitor,
+`ADD`/`INC`/`DEC`/`JP`/`LD SP`/`EX (SP)`, `(IX+d)`/`(IY+d)` LD /
+`INC`/`DEC` / ALU `A,(IX+d)`, nested `DD CB`/`FD CB` BIT / SET/RES / rot
+on `(IX+d)`/`(IY+d)`, and H→IXH / L→IXL (IYH/IYL) 8-bit register remap
+for LD / LD n / INC/DEC / ALU `A,IXH/IXL`). Memory map, monitor,
 BASIC, and the assembler remain later phases.
 
 ## Layout
@@ -2951,7 +2951,7 @@ a dedicated branch — a real rollback point for a change this invasive to
 code that had never needed one before, this project having had no git
 history at all until this pass.
 
-### DD: IX (first slice + HL-clone + (IX+d) mem)
+### DD: IX (first slice + HL-clone + (IX+d) mem + H→IXH)
 
 Real Z80's `DD` prefix remaps many `HL` ops onto the `IX` index register.
 This project's DD body covers the `IX` register itself (`IXH`/`IXL`), the
@@ -3033,9 +3033,47 @@ isDdMemAlu     = isDdActive ∧ x[2] ∧ z[6]            // ALU A,(IX+d)
   `BUS` when `ram.oe` drives it; `IXDISP_ADDR_NOW` + `ram.oe` OR PHASE6.
 
 `DD CB` / `FD CB` BIT / SET/RES / rot on `(IX+d)`/`(IY+d)` are below;
-H→IXH remap remains later. Verified by
+H→IXH remap is in the next subsection. Verified by
 `z80cpu-dd-ix.test.ts` (load/push/pop, HL-clone, `(IX+d)` LD, INC/DEC +
 ALU, and DD CB BIT / SET/RES/rot programs; asserts HL and IY unchanged).
+
+### DD: H→IXH / L→IXL 8-bit remap
+
+Real Z80 remaps the 8-bit `H`/`L` slots (not `(HL)` / `y=6` / `z=6`) onto
+`IXH`/`IXL` under `DD` (and `IYH`/`IYL` under `FD`). `NOT_PREFIX_ACTIVE`
+kills `isLdGroup` / `isX0Group` / `isAluGroup` under DD, so this is
+parallel decode only — never reopen those gates:
+
+```
+isDdHl8Ld  = isDdActive ∧ ¬ddCbMode ∧ x[1] ∧ ¬y[6] ∧ ¬z[6] ∧ (y[4]∨y[5]∨z[4]∨z[5])
+isDdHl8Imm = isDdActive ∧ ¬ddCbMode ∧ x[0] ∧ z[6] ∧ (y[4]∨y[5])
+isDdHl8Inc = isDdActive ∧ ¬ddCbMode ∧ x[0] ∧ (z[4]∨z[5]) ∧ (y[4]∨y[5])
+isDdHl8Alu = isDdActive ∧ ¬ddCbMode ∧ x[2] ∧ (z[4]∨z[5])
+```
+
+Bodies @ **PHASE4** (prefix burns 2–3). Imm: PHASE4 read `n`, PHASE5
+advance (adjacent exclude). Skip under `ddCbMode` / `fdCbMode`
+(undocumented DD CB `z≠6` stays out of scope).
+
+**Wiring:**
+
+- Source→BUS: B/C/D/E/A use the existing tri-buf banks with
+  `DDIX_HL8_LD_NOW` widening `srcActive`; H/L under HL8 use dedicated
+  `REGIXH`/`REGIXL` banks (`DDIX_HL8_SRC_IXH/IXL_NOW`, also OR'd for ALU).
+  Never enable `REGH`/`REGL` for remapped sources.
+- Dest WE: B/C/D/E/A via `DDIX_HL8_WE_*`; IXH/IXL via
+  `wrapWithPairCommit` (`DDIXH_BUS_NOW` / `DDIXL_BUS_NOW` from BUS for
+  LD+imm; `DDIXH_INC_NOW` / `DDIXL_INC_NOW` from `R8RESULT`). Never
+  assert remapped dest onto `rH`/`rL` WE — `DDMEMLD_WE_H` still writes
+  real H for `LD H,(IX+d)`.
+- INC/DEC: feed `r8Adder` from `REGIXH`/`REGIXL` (`DDIXH_INC_NOW` select);
+  suppress `REGH`/`REGL` select while HL8 INC active; DEC direction OR
+  `DDIX_HL8_IS_DEC` into `isDecR8Any`; F via `INCDEC_R8_NOW` widen.
+- ALU `A,IXH/IXL`: same PHASE4 bus drive + `aluAnyGroupNow` widen.
+
+FD mirrors (`FDIY_*` / `IYH`/`IYL`). Verified by HL8 describes in
+`z80cpu-dd-ix.test.ts` / `z80cpu-fd-iy.test.ts` (including negative
+`LD H,(IX+2)` still writing H).
 
 ### DD CB / FD CB (BIT / SET/RES / rot on (IX+d)/(IY+d))
 
@@ -3098,7 +3136,7 @@ z≠6 register write-back still skipped):
   `IXDISP_ADDR`, `SETRESRESULT` / `CBROTRESULT` bus drive; rot ORs into
   `CBROT_NOW` for F. Commit unions: `SETRES_MEM_WRITE_ANY`,
   `CBROT_MEM_WRITE_ANY`.
-- FD mirrors (`*_IY_*`). H→IXH remap still later.
+- FD mirrors (`*_IY_*`). H→IXH remap is a separate subsection above.
 
 | Phase | Action |
 |-------|--------|
@@ -3113,7 +3151,7 @@ z≠6 register write-back still skipped):
 Verified by DD/FD BIT + SET/RES/rot describes in
 `z80cpu-dd-ix.test.ts` / `z80cpu-fd-iy.test.ts`.
 
-### FD: IY (first slice + HL-clone + (IY+d) mem)
+### FD: IY (first slice + HL-clone + (IY+d) mem + H→IYH)
 
 Mechanical mirror of "DD: IX" above, gated on `isFdActive` (`0xFD`)
 instead of `isDdActive`. Same register shape (`IYH`/`IYL`), same
@@ -3129,9 +3167,11 @@ PHASE4–7 / PHASE4–5 / PHASE4 bodies, plus the `(IY+d)` mem mirror
   **`INC`/`DEC (IY+d)`** / **ALU `A,(IY+d)`** — FD mirror of the DD
   displacement mem slice.
 
-`FD CB` BIT / SET/RES / rot are above (shared "DD CB / FD CB" section);
-H→IXH remap remains later. Verified by `z80cpu-fd-iy.test.ts` (mirror
-programs; asserts HL and IX unchanged under FD).
+- `FD CB` BIT / SET/RES / rot are above (shared "DD CB / FD CB" section);
+- H→IYH / L→IYL 8-bit remap mirrors "DD: H→IXH / L→IXL" above.
+
+Verified by `z80cpu-fd-iy.test.ts` (mirror programs; asserts HL and IX
+unchanged under FD).
 
 ### x=10, z=0: LDI/LDD/LDIR/LDDR
 

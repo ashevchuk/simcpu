@@ -589,3 +589,100 @@ describe('buildZ80Cpu — DD CB: SET/RES/rot (IX+d)', () => {
     expectHlIyUntouched(h);
   });
 });
+
+describe('buildZ80Cpu — DD: H→IXH / L→IXL 8-bit remap', () => {
+  /**
+   *  0: DD 44        LD B,H      ; B←IXH=0xAA; H stays 0x11
+   *  2: DD 60        LD H,B      ; IXH←B; H stays 0x11
+   *  4: DD 26 99     LD H,n      ; IXH←0x99; H untouched
+   *  7: DD 2C        INC L       ; INC IXL
+   *  9: DD 25        DEC H       ; DEC IXH
+   * 11: DD 66 02     LD H,(IX+2) ; still writes H not IXH (negative)
+   *
+   * Seed: IX=0xAABB, HL=0x1122, B=0, IY untouched. ADDR_BITS=8.
+   */
+  const ADDR_BITS = 8;
+  const HL_H = 0x11;
+  const HL_L = 0x22;
+  const IY_H = 0x66;
+  const IY_L = 0x77;
+  const IX0_H = 0xaa;
+  const IX0_L = 0xbb;
+
+  const PROGRAM = (() => {
+    const bytes = new Uint8Array(256);
+    bytes.set([0xdd, 0x44], 0);
+    bytes.set([0xdd, 0x60], 2);
+    bytes.set([0xdd, 0x26, 0x99], 4);
+    bytes.set([0xdd, 0x2c], 7);
+    bytes.set([0xdd, 0x25], 9);
+    bytes.set([0xdd, 0x66, 0x02], 11);
+    // IX after DEC is 0x98 / IXL after INC is 0xBC → (IX+2)=0x?? depend on
+    // final IX. After sequence: IXH=0x98, IXL=0xBC → IX=0x98BC; +2 → 0x98BE.
+    // Put a distinctive byte there for the negative LD H,(IX+2) check.
+    bytes[0xbe] = 0x5a;
+    return bytes;
+  })();
+
+  const expectHlIyUntouched = (h: ReturnType<typeof makeZ80Harness>) => {
+    expect(h.readReg(h.cpu.rH.q)).toBe(HL_H);
+    expect(h.readReg(h.cpu.rL.q)).toBe(HL_L);
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(IY_H);
+    expect(h.readReg(h.cpu.rIYL.q)).toBe(IY_L);
+  };
+
+  it('remaps LD/imm/INC/DEC onto IXH/IXL and leaves HL/IY alone', () => {
+    const h = makeZ80Harness(PROGRAM, ADDR_BITS, (cpu, seedReg) => {
+      seedReg(cpu.rB, 0);
+      seedReg(cpu.rC, 0);
+      seedReg(cpu.rD, 0);
+      seedReg(cpu.rE, 0);
+      seedReg(cpu.rH, HL_H);
+      seedReg(cpu.rL, HL_L);
+      seedReg(cpu.rIXH, IX0_H);
+      seedReg(cpu.rIXL, IX0_L);
+      seedReg(cpu.rIYH, IY_H);
+      seedReg(cpu.rIYL, IY_L);
+      seedReg(cpu.sp, 0, ADDR_BITS);
+      seedReg(cpu.aP, 0);
+      seedReg(cpu.fP, 0);
+      seedReg(cpu.bP, 0);
+      seedReg(cpu.cP, 0);
+      seedReg(cpu.dP, 0);
+      seedReg(cpu.eP, 0);
+      seedReg(cpu.hP, 0);
+      seedReg(cpu.lP, 0);
+    });
+
+    h.runInstruction(); // LD B,H → B=IXH
+    expect(h.readReg(h.cpu.rB.q)).toBe(IX0_H);
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(IX0_H);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD H,B → IXH=B
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(IX0_H);
+    expect(h.readReg(h.cpu.rB.q)).toBe(IX0_H);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD H,n → IXH=0x99
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x99);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // INC L → INC IXL
+    expect(h.readReg(h.cpu.rIXL.q)).toBe((IX0_L + 1) & 0xff);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // DEC H → DEC IXH
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x98);
+    expectHlIyUntouched(h);
+
+    // Negative: LD H,(IX+2) still writes real H, not IXH.
+    const ixhBefore = h.readReg(h.cpu.rIXH.q);
+    h.runInstruction();
+    expect(h.readReg(h.cpu.rH.q)).toBe(0x5a);
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(ixhBefore);
+    expect(h.readReg(h.cpu.rL.q)).toBe(HL_L);
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(IY_H);
+    expect(h.readReg(h.cpu.rIYL.q)).toBe(IY_L);
+  });
+});

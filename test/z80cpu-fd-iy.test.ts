@@ -547,3 +547,89 @@ describe('buildZ80Cpu — FD CB: SET/RES/rot (IY+d)', () => {
     expectHlIxUntouched(h);
   });
 });
+
+describe('buildZ80Cpu — FD: H→IYH / L→IYL 8-bit remap', () => {
+  /**
+   * FD mirror of DD H→IXH remap. Seed IY=0xAABB, HL=0x1122, B=0; IX/HL
+   * must stay untouched under FD.
+   */
+  const ADDR_BITS = 8;
+  const HL_H = 0x11;
+  const HL_L = 0x22;
+  const IX_H = 0x66;
+  const IX_L = 0x77;
+  const IY0_H = 0xaa;
+  const IY0_L = 0xbb;
+
+  const PROGRAM = (() => {
+    const bytes = new Uint8Array(256);
+    bytes.set([0xfd, 0x44], 0);
+    bytes.set([0xfd, 0x60], 2);
+    bytes.set([0xfd, 0x26, 0x99], 4);
+    bytes.set([0xfd, 0x2c], 7);
+    bytes.set([0xfd, 0x25], 9);
+    bytes.set([0xfd, 0x66, 0x02], 11);
+    bytes[0xbe] = 0x5a;
+    return bytes;
+  })();
+
+  const expectHlIxUntouched = (h: ReturnType<typeof makeZ80Harness>) => {
+    expect(h.readReg(h.cpu.rH.q)).toBe(HL_H);
+    expect(h.readReg(h.cpu.rL.q)).toBe(HL_L);
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(IX_H);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(IX_L);
+  };
+
+  it('remaps LD/imm/INC/DEC onto IYH/IYL and leaves HL/IX alone', () => {
+    const h = makeZ80Harness(PROGRAM, ADDR_BITS, (cpu, seedReg) => {
+      seedReg(cpu.rB, 0);
+      seedReg(cpu.rC, 0);
+      seedReg(cpu.rD, 0);
+      seedReg(cpu.rE, 0);
+      seedReg(cpu.rH, HL_H);
+      seedReg(cpu.rL, HL_L);
+      seedReg(cpu.rIXH, IX_H);
+      seedReg(cpu.rIXL, IX_L);
+      seedReg(cpu.rIYH, IY0_H);
+      seedReg(cpu.rIYL, IY0_L);
+      seedReg(cpu.sp, 0, ADDR_BITS);
+      seedReg(cpu.aP, 0);
+      seedReg(cpu.fP, 0);
+      seedReg(cpu.bP, 0);
+      seedReg(cpu.cP, 0);
+      seedReg(cpu.dP, 0);
+      seedReg(cpu.eP, 0);
+      seedReg(cpu.hP, 0);
+      seedReg(cpu.lP, 0);
+    });
+
+    h.runInstruction(); // LD B,H → B=IYH
+    expect(h.readReg(h.cpu.rB.q)).toBe(IY0_H);
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(IY0_H);
+    expectHlIxUntouched(h);
+
+    h.runInstruction(); // LD H,B → IYH=B
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(IY0_H);
+    expectHlIxUntouched(h);
+
+    h.runInstruction(); // LD H,n → IYH=0x99
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(0x99);
+    expectHlIxUntouched(h);
+
+    h.runInstruction(); // INC L → INC IYL
+    expect(h.readReg(h.cpu.rIYL.q)).toBe((IY0_L + 1) & 0xff);
+    expectHlIxUntouched(h);
+
+    h.runInstruction(); // DEC H → DEC IYH
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(0x98);
+    expectHlIxUntouched(h);
+
+    const iyhBefore = h.readReg(h.cpu.rIYH.q);
+    h.runInstruction(); // LD H,(IY+2) still writes H
+    expect(h.readReg(h.cpu.rH.q)).toBe(0x5a);
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(iyhBefore);
+    expect(h.readReg(h.cpu.rL.q)).toBe(HL_L);
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(IX_H);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(IX_L);
+  });
+});
