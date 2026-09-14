@@ -415,14 +415,15 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
       const flat = flatten(topCircuit, library);
       const flatNetMap = flat.computeNets();
       simState = step(flat, flatNetMap, simState);
-      uiDirty = true;
+      // Do not set uiDirty here — tickBudget used to force a redraw every
+      // clock edge and doubled work with frame()'s own step+draw.
     };
     machinePanel.attach(cpu.ram);
     machinePanel.bindRunner(machineRunner);
     // Wire Inputs *before* fold so clocks/seeds become chip ports.
     machineRunner.attach(editor.circuit, library, cpu, simTick);
     machineRunner.boot();
-    machineRunner.setSpeed('normal');
+    machineRunner.setSpeed('soft');
     machineRunner.setRunning(true);
     machinePanel.refreshControls();
     machinePanel.draw();
@@ -707,29 +708,52 @@ const statusEl = document.getElementById('status') as HTMLDivElement;
  * every frame regardless of `uiDirty`, exactly as before this change.
  */
 function frame(): void {
-  // Throttled soft auto-clock before the normal sim/draw pass.
+  // Soft Run advances the interpreter only; gate Run spends a time-budgeted
+  // slice of transistor phases. Either way we avoid the old pattern of
+  // 160 full step()s *plus* another step+draw in the same rAF.
+  let machineWorked = false;
   if (machineRunner.running) {
-    machineRunner.tickBudget();
-    uiDirty = true;
+    machineWorked = machineRunner.tickBudget();
   }
-  if (uiDirty || !simState.settled) {
-    const flat = flatten(topCircuit, library);
-    const flatNetMap = flat.computeNets();
-    simState = step(flat, flatNetMap, simState);
 
-    const view = navStack[navStack.length - 1]!;
-    const resolve = (localPinId: string): { level: Level; contended: boolean } => {
-      const net = flatNetMap.netOf.get(view.pathPrefix + localPinId);
-      if (!net) return { level: 'Z', contended: false };
-      return { level: simState.levelOf.get(net) ?? 'Z', contended: simState.contended.has(net) };
-    };
+  const softRun = machineRunner.running && machineRunner.isSoft;
+  // Soft Run: skip transistor step/canvas every frame (TTY samples RAM).
+  // Gate Run / idle / edits: normal path. Soft still redraws canvas when
+  // the user pans/zooms (uiDirty from camera handlers).
+  const needSimDraw = softRun ? uiDirty : uiDirty || !simState.settled || (machineRunner.running && machineWorked);
 
-    draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
-    zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
-    statusEl.textContent =
-      `${navStack.map((f) => f.label).join('/')} | flat nets: ${flatNetMap.pinsOf.size} | ` +
-      `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}` +
-      (machineRunner.running ? ' | machine: run' : machineRunner.attached ? ' | machine: pause' : '');
+  if (needSimDraw) {
+    // Soft Run already mutated RAM; don't burn another full step unless
+    // uiDirty asked for a canvas refresh (pan/zoom/selection).
+    if (!softRun || uiDirty) {
+      const flat = flatten(topCircuit, library);
+      const flatNetMap = flat.computeNets();
+      if (!softRun) {
+        simState = step(flat, flatNetMap, simState);
+      }
+
+      const view = navStack[navStack.length - 1]!;
+      const resolve = (localPinId: string): { level: Level; contended: boolean } => {
+        const net = flatNetMap.netOf.get(view.pathPrefix + localPinId);
+        if (!net) return { level: 'Z', contended: false };
+        return { level: simState.levelOf.get(net) ?? 'Z', contended: simState.contended.has(net) };
+      };
+
+      draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
+      zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
+      const mode =
+        machineRunner.running && machineRunner.isSoft
+          ? 'machine: soft'
+          : machineRunner.running
+            ? 'machine: gates'
+            : machineRunner.attached
+              ? 'machine: pause'
+              : '';
+      statusEl.textContent =
+        `${navStack.map((f) => f.label).join('/')} | flat nets: ${flatNetMap.pinsOf.size} | ` +
+        `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}` +
+        (mode ? ` | ${mode}` : '');
+    }
     uiDirty = false;
   }
   // Soft TTY samples ram.bytes independently of the transistor canvas.

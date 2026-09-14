@@ -2,29 +2,40 @@ import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import type { Z80Cpu } from '../sim/blocks.js';
 import { makeInput, wire } from '../sim/library.js';
-import type { InputComponent, Pin } from '../sim/types.js';
+import type { InputComponent, Pin, RamComponent } from '../sim/types.js';
+import { createSoftZ80, softRun, softStep, type SoftZ80State } from './softZ80.js';
 
 type TickFn = () => void;
 
-export type RunSpeed = 'slow' | 'normal' | 'turbo';
+/**
+ * Run modes:
+ * - soft: behavioral interpreter on ram.bytes (default — usable TTY)
+ * - slow/normal/turbo: transistor MachineRunner with a per-frame time budget
+ */
+export type RunSpeed = 'soft' | 'slow' | 'normal' | 'turbo';
 
-/** FSM phases advanced per animation frame while running. */
-export const PHASES_PER_FRAME: Record<RunSpeed, number> = {
+/** Soft interpreter instructions per animation frame. */
+export const SOFT_OPS_PER_FRAME = 8000;
+
+/** Max wall-clock ms of gate-level phases per animation frame. */
+export const GATE_BUDGET_MS = 12;
+
+/** Cap on FSM phases per frame when using gate speeds (time budget usually hits first). */
+export const PHASES_PER_FRAME: Record<Exclude<RunSpeed, 'soft'>, number> = {
   slow: 2,
   normal: 10,
   turbo: 40,
 };
 
 /**
- * Soft auto-clock for a placed Z80CPU: wires Input drivers (like the test
- * harness) and pulses them. Not a transistor oscillator.
- *
- * Seeds only B–L + SP (enough for the echo monitor). IX/IY/shadows stay
- * uninitialized until a program writes them — keeps the Input clutter down.
+ * Soft auto-clock / soft interpreter for a placed Z80CPU.
+ * Gate path wires Input drivers like the test harness; soft path runs
+ * softZ80 against the shared RamComponent.bytes.
  */
 export class MachineRunner {
   private circuit: Circuit | null = null;
   private cpu: Z80Cpu | null = null;
+  private ram: RamComponent | null = null;
   private tick: TickFn | null = null;
   private inputIds: string[] = [];
   private reset!: InputComponent;
@@ -34,14 +45,22 @@ export class MachineRunner {
   private fsmLoad!: InputComponent;
   private seedWes: InputComponent[] = [];
   private booted = false;
+  private soft: SoftZ80State | null = null;
+  /** True after soft Run has diverged from gate-level PC/regs. */
+  softDesynced = false;
   running = false;
-  speed: RunSpeed = 'normal';
+  speed: RunSpeed = 'soft';
 
   get attached(): boolean {
     return this.circuit !== null && this.cpu !== null;
   }
 
+  get isSoft(): boolean {
+    return this.speed === 'soft';
+  }
+
   get phasesPerFrame(): number {
+    if (this.speed === 'soft') return SOFT_OPS_PER_FRAME;
     return PHASES_PER_FRAME[this.speed];
   }
 
@@ -57,6 +76,7 @@ export class MachineRunner {
     this.detach();
     this.circuit = circuit;
     this.cpu = cpu;
+    this.ram = cpu.ram;
     this.tick = tick;
 
     const base = { x: cpu.ram.pos.x - 200, y: cpu.ram.pos.y - 12000 };
@@ -97,7 +117,6 @@ export class MachineRunner {
       }
     };
 
-    // Lean set — echo monitor needs HL/A/B; SP for any stack use.
     seedReg(cpu.rB);
     seedReg(cpu.rC);
     seedReg(cpu.rD);
@@ -108,11 +127,15 @@ export class MachineRunner {
 
     this.booted = false;
     this.running = false;
+    this.soft = null;
+    this.softDesynced = false;
   }
 
   detach(): void {
     this.running = false;
     this.booted = false;
+    this.soft = null;
+    this.softDesynced = false;
     if (this.circuit) {
       for (const id of this.inputIds) this.circuit.removeComponent(id);
     }
@@ -120,10 +143,11 @@ export class MachineRunner {
     this.seedWes = [];
     this.circuit = null;
     this.cpu = null;
+    this.ram = null;
     this.tick = null;
   }
 
-  /** Mirror test/z80Harness boot: FSM seed, reset/seed registers, first fetch. */
+  /** Gate-level boot (FSM seed, reset, first fetch) + soft CPU reset. */
   boot(): void {
     if (!this.tick || !this.cpu || this.booted) return;
     const tick = this.tick;
@@ -143,12 +167,10 @@ export class MachineRunner {
     for (const we of this.seedWes) we.value = 0;
     pulse(this.dataClk);
     this.booted = true;
+    this.soft = createSoftZ80(0xdff);
+    this.softDesynced = false;
   }
 
-  /**
-   * Force PC back through reset + re-seed + first fetch.
-   * Used after soft `G addr` patches JP at 0000.
-   */
   reboot(): void {
     if (!this.tick || !this.cpu) return;
     const wasRunning = this.running;
@@ -172,19 +194,44 @@ export class MachineRunner {
     this.tick();
   }
 
+  /** One FSM phase on the transistor circuit (4 edges). */
   stepPhase(): void {
     if (!this.booted) this.boot();
     this.pulse(this.phaseClk);
     this.pulse(this.dataClk);
   }
 
+  /** One full instruction: soft if speed=soft, else 10 gate phases. */
   stepInstruction(): void {
+    if (!this.booted) this.boot();
+    if (this.isSoft && this.soft && this.ram) {
+      softStep(this.soft, this.ram.bytes);
+      this.softDesynced = true;
+      return;
+    }
     for (let i = 0; i < 10; i++) this.stepPhase();
   }
 
-  tickBudget(n = this.phasesPerFrame): void {
-    if (!this.running || !this.booted) return;
-    for (let i = 0; i < n; i++) this.stepPhase();
+  /**
+   * Advance Run for one animation frame.
+   * Soft: many interpreter ops. Gate: phases until PHASES cap or GATE_BUDGET_MS.
+   * Returns whether any work ran (caller should refresh TTY).
+   */
+  tickBudget(): boolean {
+    if (!this.running || !this.booted) return false;
+    if (this.isSoft && this.soft && this.ram) {
+      softRun(this.soft, this.ram.bytes, SOFT_OPS_PER_FRAME);
+      this.softDesynced = true;
+      return true;
+    }
+    const maxPhases = PHASES_PER_FRAME[this.speed as Exclude<RunSpeed, 'soft'>];
+    const deadline = performance.now() + GATE_BUDGET_MS;
+    let n = 0;
+    while (n < maxPhases && performance.now() < deadline) {
+      this.stepPhase();
+      n++;
+    }
+    return n > 0;
   }
 
   setRunning(on: boolean): void {

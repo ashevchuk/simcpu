@@ -55,10 +55,11 @@ export class MachinePanel {
         <button type="button" data-act="step" title="One full instruction (10 phases)">Step</button>
         <button type="button" data-act="reboot" title="Reset PC via runner reboot">Reboot</button>
         <label class="machine-panel-speed">Speed
-          <select data-act="speed" title="FSM phases per animation frame">
-            <option value="slow">Slow (2)</option>
-            <option value="normal" selected>Normal (10)</option>
-            <option value="turbo">Turbo (40)</option>
+          <select data-act="speed" title="Soft = interpreter (fast TTY). Gates = transistor (slow).">
+            <option value="soft" selected>Soft (fast)</option>
+            <option value="slow">Gates slow</option>
+            <option value="normal">Gates normal</option>
+            <option value="turbo">Gates turbo</option>
           </select>
         </label>
         <span class="machine-panel-status">idle</span>
@@ -85,7 +86,7 @@ JR spin</textarea>
         </div>
       </div>
       <pre class="machine-panel-out"></pre>
-      <div class="machine-panel-hint">TTY canvas = Z80 cmd ROM (H/M/W/G). Host Cmd = soft helper. First boot slow.</div>
+      <div class="machine-panel-hint">Soft Run = fast Z80 on RAM. Gates = transistor (slow). TTY H/M/W/G. First boot slow.</div>
     `;
     this.canvas = this.root.querySelector('canvas')!;
     this.hint = this.root.querySelector('.machine-panel-hint')!;
@@ -250,7 +251,7 @@ JR spin</textarea>
     this.keyHandler = (e: KeyboardEvent) => this.onKeyDown(e);
     this.canvas.addEventListener('keydown', this.keyHandler);
     this.hint.textContent =
-      'TTY canvas = Z80 H/M/W/G. Host Cmd = soft helper. Asm → Load @ (≥200h). First boot slow.';
+      'Soft Run = fast TTY. Gates = real transistors (slow). Asm → Load @ (≥200h).';
     this.setVisible(true);
     this.draw();
     this.refreshControls();
@@ -295,7 +296,8 @@ JR spin</textarea>
       return;
     }
     const spd = this.runner!.speed;
-    this.statusEl.textContent = `${this.runner!.running ? 'run' : 'pause'} · ${spd} ${this.runner!.phasesPerFrame}/f`;
+    const desync = this.runner!.softDesynced && spd !== 'soft' ? ' · desync' : '';
+    this.statusEl.textContent = `${this.runner!.running ? 'run' : 'pause'} · ${spd}${desync}`;
     this.btnRun.classList.toggle('active', this.runner!.running);
     this.btnPause.classList.toggle('active', !this.runner!.running);
   }

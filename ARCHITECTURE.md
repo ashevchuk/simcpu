@@ -163,9 +163,10 @@ src/machine/    Soft machine map over RamComponent (not transistor devices).
                    reloads command ROM).
   assembler.ts    Mini two-pass Z80 subset assembler (labels, DB/DW,
                    IX/IY/(IX+d), CB, common ED).
-  MachineRunner.ts Auto-wires Input clocks/reset/seeds and pulses them
-                   (throttled Run / Step / speed) — not a transistor
-                   oscillator.
+  MachineRunner.ts Soft Run (default): softZ80 interpreter on ram.bytes.
+                   Gate speeds: time-budgeted transistor phases.
+  softZ80.ts      Behavioral Z80 subset for interactive TTY (not timing-
+                   accurate; gate Step still uses the real circuit).
 
 src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 demo, owns the hierarchy navigation stack (dive in/out,
@@ -237,6 +238,7 @@ test/monitor.test.ts     Soft echo-monitor opcode image + loadMonitor.
 test/machine-monitor.test.ts Echo monitor on addrBits=12: prompt + key
                           echo into FB, KEY_STATUS cleared.
 test/command-rom.test.ts Z80 command ROM assemble + TTY H on addrBits=12.
+test/soft-z80.test.ts    Soft interpreter: command ROM H/help + tiny ALU.
 test/softConsole.test.ts Host M/W/G/R/H + loadHexAt (R → command ROM).
 test/assembler.test.ts   Mini assembler: LD/JR/labels/DB, IX/IY/CB/ED,
                           + error cases.
@@ -978,11 +980,20 @@ into RAM, and fills the hex box; **Assemble + Go** also patches `JP` at
 `MachineRunner` wires `Input` drivers for `clk` / `phaseClk` / `reset` /
 `aReset` / FSM seed / lean B–L+SP zero-seeds (parked far above the CPU;
 IX/IY/shadows omitted to cut clutter), boots like the test harness, then
-advances the ring under UI control: **Run** / **Pause** / **Step** /
-**Reboot**, with **Slow (2) / Normal (10) / Turbo (40)** FSM phases per
-animation frame. Not a transistor oscillator — same soft trade-off as
-Real RAM / the TTY panel. First boot after place still pays a
-multi-second `flatten()`; later ticks hit the flatten cache.
+advances under UI control.
+
+**Default speed is Soft:** `softZ80.ts` interprets unprefixed opcodes
+against the shared `ram.bytes` (~8k ops/frame) so the TTY command ROM is
+usable. Same performance trade-off as Real RAM / the panel — not
+transistor timing. Soft Run desyncs gate-level PC/regs; **Reboot**
+re-seeds both. Prefixed CB/ED/DD/FD throw in soft mode (use **Gates** +
+Step).
+
+**Gates slow/normal/turbo:** real circuit edges with a **~12ms wall-clock
+budget** per animation frame (phase cap 2/10/40). Folding does not shrink
+the ~57k-net `step()` cost — Soft exists because turbo-at-all-costs was
+unusable for interactive TTY. First place/boot still pays a multi-second
+`flatten()`.
 
 ### Folded Z80CPU placement (Canvas)
 
