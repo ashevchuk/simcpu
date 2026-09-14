@@ -3,10 +3,21 @@
  * actually runs. Two-pass with labels. Not a full commercial Z80ASM.
  *
  * Numbers: 0xNN, NNh, $NN, decimal, 'A'. Labels: `name:` then JR/JP/CALL/DW name.
- * Directives: DB/DEFB, DW/DEFW. Comments: `; ...` or `// ...`.
+ * Directives: DB/DEFB, DW/DEFW, EQU/DEFL name,value (or `name: EQU value`).
+ * Comments: `; ...` or `// ...`.
  * Index: IX/IY, (IX+d)/(IY+d), IXH/IXL/IYH/IYL remap, DD/FD CB on (IX+d).
- * CB bit/rot and common ED (blocks, ADC/SBC HL, NEG, IM, RETI, …).
+ * CB bit/rot (incl. SLL) and common ED (blocks, ADC/SBC HL, NEG, IM, RETI, …).
+ *
+ * Commercial gaps (intentionally not here): MACRO/ENDM / REPT, local labels,
+ * expressions (`FOO+1`, HIGH/LOW), INCLUDE/PHASE/ORG mid-stream relocation,
+ * full undocumented DD/FD CB z≠6 dest remap, every ED corner (IM vectors,
+ * I/O block flag quirks), listing pagination / cross-ref, relocatable objects.
  */
+
+export interface AssembleOptions {
+  /** When false, skip building the text listing (bytes still assembled). Default true. */
+  listing?: boolean;
+}
 
 export interface AssembleResult {
   ok: boolean;
@@ -79,22 +90,33 @@ interface IndexHalf {
   r: 4 | 5; // H or L slot
 }
 
-export function assemble(source: string, origin = 0): AssembleResult {
+export function assemble(source: string, origin = 0, opts: AssembleOptions = {}): AssembleResult {
+  const wantListing = opts.listing !== false;
   const errors: string[] = [];
   const lines = tokenize(source);
   const labels = new Map<string, number>();
+  const equ = new Map<string, number>();
   const emits: Emit[] = [];
   let pc = origin & 0xffff;
 
   for (const ln of lines) {
+    const mn = ln.mnemonic?.toLowerCase();
+    if (mn === 'equ' || mn === 'defl') {
+      try {
+        defineEqu(ln, equ, labels);
+      } catch (e) {
+        errors.push(`L${ln.lineNo}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      continue;
+    }
     if (ln.label) {
       const key = ln.label.toLowerCase();
-      if (labels.has(key)) errors.push(`L${ln.lineNo}: duplicate label '${ln.label}'`);
+      if (labels.has(key) || equ.has(key)) errors.push(`L${ln.lineNo}: duplicate label '${ln.label}'`);
       else labels.set(key, pc);
     }
     if (!ln.mnemonic) continue;
     try {
-      const emit = encode(ln);
+      const emit = encode(ln, equ);
       emits.push(emit);
       pc = (pc + emitSize(emit)) & 0xffff;
     } catch (e) {
@@ -108,10 +130,10 @@ export function assemble(source: string, origin = 0): AssembleResult {
   for (const em of emits) {
     const start = pc;
     try {
-      const data = materialize(em, pc, labels);
+      const data = materialize(em, pc, labels, equ);
       out.push(...data);
       pc = (pc + data.length) & 0xffff;
-      if (data.length > 0) {
+      if (wantListing && data.length > 0) {
         const hex = data.map((b) => b.toString(16).padStart(2, '0')).join(' ');
         listing.push(`${fmtAddr(start)}  ${hex.padEnd(12)}  ${em.text}`);
       }
@@ -129,30 +151,58 @@ export function assemble(source: string, origin = 0): AssembleResult {
   };
 }
 
+/** EQU/DEFL name,value — or `name: EQU value` (label is the symbol). */
+function defineEqu(ln: LineTok, equ: Map<string, number>, labels: Map<string, number>): void {
+  let name: string;
+  let valArg: string;
+  if (ln.label && ln.args.length === 1) {
+    name = ln.label;
+    valArg = ln.args[0]!;
+  } else if (ln.args.length === 2) {
+    name = ln.args[0]!;
+    valArg = ln.args[1]!;
+  } else {
+    throw new Error('EQU/DEFL needs name,value (or name: EQU value)');
+  }
+  if (!/^[A-Za-z_][\w]*$/.test(name)) throw new Error(`bad EQU name '${name}'`);
+  const n = parseImm(valArg);
+  if (n === null) throw new Error(`bad EQU value '${valArg}'`);
+  const key = name.toLowerCase();
+  if (equ.has(key) || labels.has(key)) throw new Error(`duplicate EQU '${name}'`);
+  equ.set(key, n & 0xffff);
+}
+
 function emitSize(em: Emit): number {
   if (em.kind === 'bytes') return em.data.length;
   if (em.kind === 'rel') return 2;
   return em.opcode.length + 2;
 }
 
-function materialize(em: Emit, pc: number, labels: Map<string, number>): number[] {
+function materialize(
+  em: Emit,
+  pc: number,
+  labels: Map<string, number>,
+  equ: Map<string, number>,
+): number[] {
   if (em.kind === 'bytes') return em.data;
   if (em.kind === 'rel') {
-    const target = resolve(em.target, labels);
+    const target = resolve(em.target, labels, equ);
     const next = (pc + 2) & 0xffff;
     let disp = target - next;
     if (disp < -128 || disp > 127) throw new Error(`relative jump out of range to '${em.target}' (${disp})`);
     if (disp < 0) disp += 256;
     return [em.op, disp & 0xff];
   }
-  const target = resolve(em.target, labels);
+  const target = resolve(em.target, labels, equ);
   return [...em.opcode, target & 0xff, (target >> 8) & 0xff];
 }
 
-function resolve(name: string, labels: Map<string, number>): number {
+function resolve(name: string, labels: Map<string, number>, equ: Map<string, number>): number {
   const n = parseImm(name);
   if (n !== null) return n & 0xffff;
-  const addr = labels.get(name.toLowerCase());
+  const key = name.toLowerCase();
+  if (equ.has(key)) return equ.get(key)! & 0xffff;
+  const addr = labels.get(key);
   if (addr === undefined) throw new Error(`unknown label '${name}'`);
   return addr;
 }
@@ -206,11 +256,12 @@ function splitArgs(s: string): string[] {
   return parts;
 }
 
-function encode(ln: LineTok): Emit {
+function encode(ln: LineTok, equ: Map<string, number>): Emit {
   const m = ln.mnemonic!;
   const a = ln.args;
   const text = ln.raw;
   const line = ln.lineNo;
+  const imm = (s: string) => parseImmOrEqu(s, equ);
 
   if (m === 'db' || m === 'defb') {
     const data: number[] = [];
@@ -219,7 +270,7 @@ function encode(ln: LineTok): Emit {
         for (let i = 1; i < arg.length - 1; i++) data.push(arg.charCodeAt(i) & 0xff);
         continue;
       }
-      const n = parseImm(arg);
+      const n = imm(arg);
       if (n === null || n < 0 || n > 0xff) throw new Error(`bad DB byte '${arg}'`);
       data.push(n);
     }
@@ -227,12 +278,16 @@ function encode(ln: LineTok): Emit {
   }
 
   if (m === 'dw' || m === 'defw') {
-    if (a.length === 1 && parseImm(a[0]!) === null) {
+    if (a.length === 1) {
+      const n = imm(a[0]!);
+      if (n !== null) {
+        return { kind: 'bytes', data: [n & 0xff, (n >> 8) & 0xff], text, line };
+      }
       return { kind: 'abs', opcode: [], target: a[0]!, text, line };
     }
     const data: number[] = [];
     for (const arg of a) {
-      const n = parseImm(arg);
+      const n = imm(arg);
       if (n === null) throw new Error(`DW label must be alone: '${arg}'`);
       data.push(n & 0xff, (n >> 8) & 0xff);
     }
@@ -278,7 +333,7 @@ function encode(ln: LineTok): Emit {
   if (m in simple && a.length === 0) return immBytes(simple[m]!, text, line);
 
   if (m === 'im') {
-    const n = parseImm(a[0] ?? '');
+    const n = imm(a[0] ?? '');
     if (n === 0) return immBytes([0xed, 0x46], text, line);
     if (n === 1) return immBytes([0xed, 0x56], text, line);
     if (n === 2) return immBytes([0xed, 0x5e], text, line);
@@ -304,7 +359,7 @@ function encode(ln: LineTok): Emit {
   }
 
   if (m === 'rst') {
-    const n = parseImm(a[0] ?? '');
+    const n = imm(a[0] ?? '');
     if (n === null || (n & 7) !== 0 || n > 0x38) throw new Error(`bad RST '${a[0]}'`);
     return immBytes([0xc7 | n], text, line);
   }
@@ -361,7 +416,7 @@ function encode(ln: LineTok): Emit {
 
   if (m === 'in') {
     if (a.length === 2 && norm(a[0]!) === 'a' && isParen(a[1]!)) {
-      const n = parseImm(stripParens(a[1]!));
+      const n = imm(stripParens(a[1]!));
       if (n === null || n > 0xff) throw new Error('bad IN port');
       return immBytes([0xdb, n], text, line);
     }
@@ -374,7 +429,7 @@ function encode(ln: LineTok): Emit {
   }
   if (m === 'out') {
     if (a.length === 2 && isParen(a[0]!) && norm(a[1]!) === 'a') {
-      const n = parseImm(stripParens(a[0]!));
+      const n = imm(stripParens(a[0]!));
       if (n === null || n > 0xff) throw new Error('bad OUT port');
       return immBytes([0xd3, n], text, line);
     }
@@ -389,7 +444,7 @@ function encode(ln: LineTok): Emit {
   // CB: BIT / SET / RES / rotates
   if (m === 'bit' || m === 'set' || m === 'res') {
     if (a.length !== 2) throw new Error(`${m.toUpperCase()} bit,op`);
-    const bit = parseImm(a[0]!);
+    const bit = imm(a[0]!);
     if (bit === null || bit < 0 || bit > 7) throw new Error('bit 0..7');
     const x = m === 'bit' ? 1 : m === 'res' ? 2 : 3;
     const op = (x << 6) | (bit << 3);
@@ -430,7 +485,7 @@ function encode(ln: LineTok): Emit {
     if (half) return immBytes([half.pref, 0x80 | (y << 3) | half.r], text, line);
     const r = parseR8(op);
     if (r !== null) return immBytes([0x80 | (y << 3) | r], text, line);
-    const n = parseImm(op);
+    const n = imm(op);
     if (n !== null && n <= 0xff) return immBytes([0xc6 | (y << 3), n], text, line);
     throw new Error(`bad ${m.toUpperCase()} operand`);
   }
@@ -454,7 +509,7 @@ function encode(ln: LineTok): Emit {
 
   if (m === 'ld') {
     if (a.length !== 2) throw new Error('LD needs two operands');
-    return encodeLd(a[0]!, a[1]!, text, line);
+    return encodeLd(a[0]!, a[1]!, text, line, equ);
   }
 
   throw new Error(`unsupported mnemonic '${m}'`);
@@ -471,9 +526,10 @@ function encodeCbOp(opBase: number, operand: string, text: string, line: number)
   return immBytes([0xcb, opBase | r], text, line);
 }
 
-function encodeLd(dst: string, src: string, text: string, line: number): Emit {
+function encodeLd(dst: string, src: string, text: string, line: number, equ: Map<string, number>): Emit {
   const d = norm(dst);
   const s = norm(src);
+  const imm = (x: string) => parseImmOrEqu(x, equ);
 
   // I / R
   if (d === 'a' && s === 'i') return immBytes([0xed, 0x57], text, line);
@@ -489,9 +545,9 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
   if (d === 'ix' || d === 'iy') {
     const pref = d === 'ix' ? 0xdd : 0xfd;
     if (isAbsMem(src)) return { kind: 'abs', opcode: [pref, 0x2a], target: stripParens(src), text, line };
-    if (parseImm(src) !== null) {
-      const n = parseImm(src)!;
-      return immBytes([pref, 0x21, n & 0xff, (n >> 8) & 0xff], text, line);
+    const ni = imm(src);
+    if (ni !== null) {
+      return immBytes([pref, 0x21, ni & 0xff, (ni >> 8) & 0xff], text, line);
     }
     return { kind: 'abs', opcode: [pref, 0x21], target: src, text, line };
   }
@@ -503,13 +559,12 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
   const dd = DD[d];
   if (dd !== undefined && !isParen(dst)) {
     if (isAbsMem(src)) {
-      // ED LD dd,(nn) — not for HL (uses 2A)
       if (d === 'hl') return { kind: 'abs', opcode: [0x2a], target: stripParens(src), text, line };
       return { kind: 'abs', opcode: [0xed, 0x4b | (dd << 4)], target: stripParens(src), text, line };
     }
-    if (parseImm(src) !== null) {
-      const n = parseImm(src)!;
-      return immBytes([0x01 | (dd << 4), n & 0xff, (n >> 8) & 0xff], text, line);
+    const ni = imm(src);
+    if (ni !== null) {
+      return immBytes([0x01 | (dd << 4), ni & 0xff, (ni >> 8) & 0xff], text, line);
     }
     return { kind: 'abs', opcode: [0x01 | (dd << 4)], target: src, text, line };
   }
@@ -530,12 +585,11 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
   if (d === '(de)' && s === 'a') return immBytes([0x12], text, line);
   if (d === 'a' && s === '(de)') return immBytes([0x1a], text, line);
 
-  // (IX+d) / (IY+d)
   const dstIdx = parseIndexDisp(dst);
   const srcIdx = parseIndexDisp(src);
   if (dstIdx && srcIdx) throw new Error('LD (IX+d),(IY+d) illegal');
   if (dstIdx) {
-    const n = parseImm(src);
+    const n = imm(src);
     if (n !== null && n <= 0xff) return immBytes([dstIdx.pref, 0x36, dstIdx.d, n], text, line);
     const r = parseR8(src);
     if (r !== null && r !== HLMEM) return immBytes([dstIdx.pref, 0x70 | r, dstIdx.d], text, line);
@@ -548,7 +602,7 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
   }
 
   if (d === '(hl)') {
-    const n = parseImm(src);
+    const n = imm(src);
     if (n !== null && n <= 0xff) return immBytes([0x36, n], text, line);
     const r = parseR8(src);
     if (r !== null && r !== HLMEM) return immBytes([0x70 | r], text, line);
@@ -559,7 +613,6 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
     if (r !== null && r !== HLMEM) return immBytes([0x40 | (r << 3) | HLMEM], text, line);
   }
 
-  // IXH/IXL/IYH/IYL remap
   const dh = parseIndexHalf(dst);
   const sh = parseIndexHalf(src);
   if (dh || sh) {
@@ -567,7 +620,7 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
     if (dh && sh && dh.pref !== sh.pref) throw new Error('mixed IX/IY halves');
     if (dh && sh) return immBytes([pref, 0x40 | (dh.r << 3) | sh.r], text, line);
     if (dh) {
-      const n = parseImm(src);
+      const n = imm(src);
       if (n !== null && n <= 0xff) return immBytes([pref, 0x06 | (dh.r << 3), n], text, line);
       const rs = parseR8(src);
       if (rs !== null && rs !== HLMEM) return immBytes([pref, 0x40 | (dh.r << 3) | rs], text, line);
@@ -581,7 +634,7 @@ function encodeLd(dst: string, src: string, text: string, line: number): Emit {
 
   const rd = parseR8(dst);
   if (rd !== null && rd !== HLMEM) {
-    const n = parseImm(src);
+    const n = imm(src);
     if (n !== null && n <= 0xff) return immBytes([0x06 | (rd << 3), n], text, line);
     const rs = parseR8(src);
     if (rs !== null) return immBytes([0x40 | (rd << 3) | rs], text, line);
@@ -648,6 +701,13 @@ export function parseImm(s: string): number | null {
   return null;
 }
 
+function parseImmOrEqu(s: string, equ: Map<string, number>): number | null {
+  const n = parseImm(s);
+  if (n !== null) return n;
+  const v = equ.get(s.trim().toLowerCase());
+  return v === undefined ? null : v;
+}
+
 function norm(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, '');
 }
@@ -675,7 +735,13 @@ function fmtAddr(addr: number): string {
   return (addr & 0xffff).toString(16).padStart(4, '0');
 }
 
-/** Format assembled bytes as comma-hex for the Load box. */
-export function bytesToHexPrompt(bytes: Uint8Array): string {
-  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join(',');
+/** Format assembled bytes as comma-hex for the Load box. Optional space every `group` bytes. */
+export function bytesToHexPrompt(bytes: Uint8Array, group = 0): string {
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0'));
+  if (group <= 0) return hex.join(',');
+  const parts: string[] = [];
+  for (let i = 0; i < hex.length; i += group) {
+    parts.push(hex.slice(i, i + group).join(','));
+  }
+  return parts.join(' ');
 }

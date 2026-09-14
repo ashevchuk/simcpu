@@ -7,7 +7,8 @@
  *   0x000–0xDFF  program / general RAM
  *   0xE00–0xEFF  text framebuffer (32×8 ASCII cells, row-major)
  *   0xF00        keyboard status (0 = empty, 1 = key waiting)
- *   0xF01        keyboard data (last key byte)
+ *   0xF01        keyboard data (last key byte; reading clears KEY_STATUS —
+ *                soft SoftMemHooks and gate solver applyRamKeyClearOnRead)
  *   0xF02–0xFFF  reserved
  *
  * Soft-only overlays (not stored in the 4K RAM image — see softDevices.ts):

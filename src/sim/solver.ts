@@ -1,4 +1,5 @@
 import { Circuit, currentStructureVersion } from './Circuit.js';
+import { KEY_DATA, KEY_STATUS } from '../machine/memoryMap.js';
 import type { Level, NetMap, RamComponent, SimState } from './types.js';
 
 /**
@@ -429,6 +430,7 @@ export function step(
   for (const i of contendedIdx) contended.add(netIds[i]!);
 
   applyRamWrites(rams, netMap, prev.levelOf, levelOf);
+  applyRamKeyClearOnRead(rams, netMap, levelOf);
 
   return { levelOf, contended, settled: !changed, iterations };
 }
@@ -482,6 +484,36 @@ function applyRamWrites(rams: RamComponent[], netMap: NetMap, prev: Map<string, 
     }
     ram.bytes[addr] = byte;
   }
+}
+
+/**
+ * Gate-path clear-on-read for keyboard MMIO: when OE is driving a resolved
+ * read of KEY_DATA (and WE is not asserted), clear KEY_STATUS — same side
+ * effect softZ80 SoftMemHooks provide. Called once after settle so address
+ * flicker during relaxation does not spuriously clear.
+ */
+export function applyRamKeyClearOnRead(
+  rams: RamComponent[],
+  netMap: NetMap,
+  settled: Map<string, Level>,
+): void {
+  for (const ram of rams) {
+    if (netLevel(netMap, settled, ram.pins.oe!.id) !== 1) continue;
+    if (netLevel(netMap, settled, ram.pins.we!.id) === 1) continue;
+    const addr = resolvedAddr(ram, netMap, settled);
+    if (addr === undefined) continue;
+    clearKeyStatusOnDataRead(ram.bytes, addr);
+  }
+}
+
+/**
+ * If `addr` is KEY_DATA, clear KEY_STATUS in `bytes`. Exported for unit tests
+ * and shared with the gate solver's post-settle MMIO hook.
+ */
+export function clearKeyStatusOnDataRead(bytes: Uint8Array, addr: number): void {
+  if (addr !== KEY_DATA) return;
+  if (KEY_STATUS >= bytes.length) return;
+  bytes[KEY_STATUS] = 0;
 }
 
 export function initialState(): SimState {

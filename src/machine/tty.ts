@@ -3,10 +3,9 @@ import { FB_COLS, FB_ROWS, KEY_DATA, KEY_STATUS, fbIndex } from './memoryMap.js'
 /**
  * Soft keyboard helpers over KEY_STATUS / KEY_DATA.
  *
- * Clear-on-read lives in softZ80's SoftMemHooks (clearOnReadKeys): a soft
- * mem read of KEY_DATA clears KEY_STATUS. injectKey is unchanged — it still
- * only posts a key (sets KEY_DATA + KEY_STATUS=1). Gate-level RAM has no
- * MMIO side effects; Z80 code must clear status with a store there.
+ * Clear-on-read: soft path via softZ80 SoftMemHooks (clearOnReadKeys); gate
+ * path via solver applyRamKeyClearOnRead after a settled OE read of KEY_DATA.
+ * injectKey is unchanged — it only posts a key (KEY_DATA + KEY_STATUS=1).
  */
 
 /** Write one ASCII cell into a RAM image (row-major framebuffer). */

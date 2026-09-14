@@ -38,9 +38,9 @@ import type { Pin, Point, RamComponent } from './types.js';
 /** Fold buildRegisterBit() into a reusable 1-bit register chip. Ports, in order: d, we, clk, q, qn. */
 function makeRegisterBitChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
-  const vcc = makeSource(scratch, 1).pins.out;
-  const gnd = makeSource(scratch, 0).pins.out;
-  const bit = buildRegisterBit(scratch, vcc, gnd);
+  makeSource(scratch, 1); // rail driver
+  makeSource(scratch, 0);
+  const bit = buildRegisterBit(scratch);
   return foldExposing(scratch, 'REG_BIT', library, [
     { pin: bit.d, isOutput: false },
     { pin: bit.we, isOutput: false },
@@ -128,12 +128,12 @@ export interface AluSlice {
  * the selected op (chaining N of these — see buildAlu below — only makes
  * sense for ADD, but there's no harm wiring the carry chain unconditionally).
  */
-export function buildAluSlice(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): AluSlice {
-  const adder = buildFullAdder(circuit, vcc, gnd, pos);
-  const andG = buildAnd(circuit, vcc, gnd, { x: pos.x, y: pos.y + 1400 });
-  const orG = buildOr(circuit, vcc, gnd, { x: pos.x, y: pos.y + 1700 });
-  const xorG = buildXor(circuit, vcc, gnd, { x: pos.x, y: pos.y + 2000 });
-  const mux = buildMux4(circuit, vcc, gnd, { x: pos.x + 1500, y: pos.y + 800 });
+export function buildAluSlice(circuit: Circuit, pos: Point = { x: 0, y: 0 }): AluSlice {
+  const adder = buildFullAdder(circuit, pos);
+  const andG = buildAnd(circuit, { x: pos.x, y: pos.y + 1400 });
+  const orG = buildOr(circuit, { x: pos.x, y: pos.y + 1700 });
+  const xorG = buildXor(circuit, { x: pos.x, y: pos.y + 2000 });
+  const mux = buildMux4(circuit, { x: pos.x + 1500, y: pos.y + 800 });
 
   wire(circuit, adder.a, andG.a);
   wire(circuit, adder.a, orG.a);
@@ -153,9 +153,9 @@ export function buildAluSlice(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point =
 /** Fold buildAluSlice() into a reusable 1-bit ALU chip. Ports, in order: a, b, cin, op0, op1, out, cout. */
 function makeAluSliceChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
-  const vcc = makeSource(scratch, 1).pins.out;
-  const gnd = makeSource(scratch, 0).pins.out;
-  const slice = buildAluSlice(scratch, vcc, gnd);
+  makeSource(scratch, 1); // rail driver
+  makeSource(scratch, 0);
+  const slice = buildAluSlice(scratch);
   return foldExposing(scratch, 'ALU_SLICE', library, [
     { pin: slice.a, isOutput: false },
     { pin: slice.b, isOutput: false },
@@ -248,9 +248,9 @@ export function buildAlu(parent: Circuit, library: ChipLibrary, bits: number, po
 /** Fold buildHalfAdder() into a reusable chip. Ports, in order: a, b, sum, cout. */
 function makeHalfAdderChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
-  const vcc = makeSource(scratch, 1).pins.out;
-  const gnd = makeSource(scratch, 0).pins.out;
-  const ha = buildHalfAdder(scratch, vcc, gnd);
+  makeSource(scratch, 1); // rail driver
+  makeSource(scratch, 0);
+  const ha = buildHalfAdder(scratch);
   return foldExposing(scratch, 'HALF_ADDER', library, [
     { pin: ha.a, isOutput: false },
     { pin: ha.b, isOutput: false },
@@ -262,9 +262,9 @@ function makeHalfAdderChip(library: ChipLibrary): ChipDef {
 /** Fold buildMux2() into a reusable chip. Ports, in order: sel, in0, in1, out. */
 function makeMux2Chip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
-  const vcc = makeSource(scratch, 1).pins.out;
-  const gnd = makeSource(scratch, 0).pins.out;
-  const m = buildMux2(scratch, vcc, gnd);
+  makeSource(scratch, 1); // rail driver
+  makeSource(scratch, 0);
+  const m = buildMux2(scratch);
   return foldExposing(scratch, 'MUX2', library, [
     { pin: m.sel, isOutput: false },
     { pin: m.in0, isOutput: false },
@@ -448,9 +448,9 @@ export function buildRingCounter(parent: Circuit, library: ChipLibrary, phases: 
 /** Fold buildTriStateBuffer() into a reusable chip. Ports, in order: a, en, out. */
 function makeTriBufChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
-  const vcc = makeSource(scratch, 1).pins.out;
-  const gnd = makeSource(scratch, 0).pins.out;
-  const buf = buildTriStateBuffer(scratch, vcc, gnd);
+  makeSource(scratch, 1); // rail driver
+  makeSource(scratch, 0);
+  const buf = buildTriStateBuffer(scratch);
   return foldExposing(scratch, 'TRI_BUF', library, [
     { pin: buf.a, isOutput: false },
     { pin: buf.en, isOutput: false },
@@ -503,9 +503,9 @@ export function buildStubRom(parent: Circuit, library: ChipLibrary, words: (0 | 
   const dataBits = words[0]?.length ?? 0;
   if (!words.every((w) => w.length === dataBits)) throw new Error('buildStubRom: every word must be the same width');
 
-  const vcc = makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 }).pins.out;
-  const gnd = makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 80 }).pins.out;
-  const dec = buildDecoder(parent, vcc, gnd, addrBits, { x: pos.x, y: pos.y });
+  makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 }); // rail driver
+  makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 80 });
+  const dec = buildDecoder(parent, addrBits, { x: pos.x, y: pos.y });
 
   const bufDef = getTriBufChip(library);
   const bufRowStep = chipInstanceHeight(bufDef.ports.length) + 10;
@@ -516,7 +516,7 @@ export function buildStubRom(parent: Circuit, library: ChipLibrary, words: (0 | 
     let bus: Pin | undefined;
     for (let w = 0; w < wordCount; w++) {
       const row = w * dataBits + bit;
-      const gate = buildAnd(parent, vcc, gnd, { x: pos.x + 800, y: pos.y + row * 100 }); // selected & oe
+      const gate = buildAnd(parent, { x: pos.x + 800, y: pos.y + row * 100 }); // selected & oe
       wire(parent, gate.a, dec.lines[w]!);
       if (!oe) oe = gate.b;
       else wire(parent, oe, gate.b);
@@ -648,8 +648,8 @@ export function buildMinimalCpu(
   pos: Point = { x: 0, y: 0 },
 ): MinimalCpu {
   if (addrBits > 5) throw new Error('buildMinimalCpu: STORE/LOAD encode their target address in 5 bits, so addrBits must be <= 5');
-  const vcc = makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 400 }).pins.out;
-  const gnd = makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 360 }).pins.out;
+  makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 400 }); // rail driver
+  makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 360 });
 
   const pc = buildProgramCounter(parent, library, addrBits, { x: pos.x, y: pos.y });
   const ram = makeRam(parent, addrBits, 8, program, { x: pos.x + 1400, y: pos.y });
@@ -666,7 +666,7 @@ export function buildMinimalCpu(
   wire(parent, fsm.phase[0]!, ir.we);
 
   // PC holds during FETCH and DECODE_EXECUTE, advances only during INCREMENT.
-  const notPhase1 = buildNot(parent, vcc, gnd, { x: pos.x - 200, y: pos.y - 200 });
+  const notPhase1 = buildNot(parent, { x: pos.x - 200, y: pos.y - 200 });
   wire(parent, fsm.phase[1]!, notPhase1.in);
   wire(parent, notPhase1.out, pc.load);
   pc.q.forEach((q, i) => wire(parent, q, pc.d[i]!)); // self-loop: "reload" == hold
@@ -676,7 +676,7 @@ export function buildMinimalCpu(
   // isn't a power-of-two split any bit can express) — this is a genuine
   // one-hot decoder over all 3 opcode bits, `buildDecoder` (already used
   // for `buildStubRom`'s addressing), not an ad hoc AND/OR/NOT tree.
-  const dec = buildDecoder(parent, vcc, gnd, 3, { x: pos.x + 3200, y: pos.y - 500 });
+  const dec = buildDecoder(parent, 3, { x: pos.x + 3200, y: pos.y - 500 });
   wire(parent, ir.q[5]!, dec.addr[0]!);
   wire(parent, ir.q[6]!, dec.addr[1]!);
   wire(parent, ir.q[7]!, dec.addr[2]!);
@@ -687,11 +687,11 @@ export function buildMinimalCpu(
   // op0=1 for AND or XOR, op1=1 for OR or XOR. ADI needs neither line high
   // (op=00=ADD already), so it drives nothing here — the two ORs already
   // default to 0 when isAni/isOri/isXri are all 0.
-  const aluOp0 = buildOr(parent, vcc, gnd, { x: pos.x + 3600, y: pos.y - 500 });
+  const aluOp0 = buildOr(parent, { x: pos.x + 3600, y: pos.y - 500 });
   wire(parent, isAni!, aluOp0.a);
   wire(parent, isXri!, aluOp0.b);
   wire(parent, aluOp0.out, alu.op0);
-  const aluOp1 = buildOr(parent, vcc, gnd, { x: pos.x + 3600, y: pos.y - 300 });
+  const aluOp1 = buildOr(parent, { x: pos.x + 3600, y: pos.y - 300 });
   wire(parent, isOri!, aluOp1.a);
   wire(parent, isXri!, aluOp1.b);
   wire(parent, aluOp1.out, alu.op1);
@@ -701,40 +701,40 @@ export function buildMinimalCpu(
   // ACC writes on DECODE_EXECUTE for any of the 5 ACC-writing instructions
   // (LDI/ADI/ANI/ORI/XRI) — a 4-input OR tree, since none of them share a
   // single bit the way the old 4-instruction encoding's LDI/ADI/LOAD did.
-  const accWeOr1 = buildOr(parent, vcc, gnd, { x: pos.x + 3900, y: pos.y - 500 });
+  const accWeOr1 = buildOr(parent, { x: pos.x + 3900, y: pos.y - 500 });
   wire(parent, isLdi!, accWeOr1.a);
   wire(parent, isAdi!, accWeOr1.b);
-  const accWeOr2 = buildOr(parent, vcc, gnd, { x: pos.x + 3900, y: pos.y - 400 });
+  const accWeOr2 = buildOr(parent, { x: pos.x + 3900, y: pos.y - 400 });
   wire(parent, isAni!, accWeOr2.a);
   wire(parent, isOri!, accWeOr2.b);
-  const accWeOr3 = buildOr(parent, vcc, gnd, { x: pos.x + 3900, y: pos.y - 300 }); // XRI or LOAD — the two odd ones out of a 6-way OR
+  const accWeOr3 = buildOr(parent, { x: pos.x + 3900, y: pos.y - 300 }); // XRI or LOAD — the two odd ones out of a 6-way OR
   wire(parent, isXri!, accWeOr3.a);
   wire(parent, isLoad!, accWeOr3.b);
-  const accWeOr12 = buildOr(parent, vcc, gnd, { x: pos.x + 4100, y: pos.y - 450 });
+  const accWeOr12 = buildOr(parent, { x: pos.x + 4100, y: pos.y - 450 });
   wire(parent, accWeOr1.out, accWeOr12.a);
   wire(parent, accWeOr2.out, accWeOr12.b);
-  const accWeRaw = buildOr(parent, vcc, gnd, { x: pos.x + 4300, y: pos.y - 400 });
+  const accWeRaw = buildOr(parent, { x: pos.x + 4300, y: pos.y - 400 });
   wire(parent, accWeOr12.out, accWeRaw.a);
   wire(parent, accWeOr3.out, accWeRaw.b);
-  const accWeGate = buildAnd(parent, vcc, gnd, { x: pos.x + 4500, y: pos.y - 450 });
+  const accWeGate = buildAnd(parent, { x: pos.x + 4500, y: pos.y - 450 });
   wire(parent, fsm.phase[2]!, accWeGate.a);
   wire(parent, accWeRaw.out, accWeGate.b);
   wire(parent, accWeGate.out, acc.we);
 
-  const memSel = buildOr(parent, vcc, gnd, { x: pos.x + 3900, y: pos.y - 100 }); // STORE or LOAD, whichever it is
+  const memSel = buildOr(parent, { x: pos.x + 3900, y: pos.y - 100 }); // STORE or LOAD, whichever it is
   wire(parent, isStore!, memSel.a);
   wire(parent, isLoad!, memSel.b);
-  const memNow = buildAnd(parent, vcc, gnd, { x: pos.x + 4100, y: pos.y - 100 }); // memSel AND phase2: either one's own execute step
+  const memNow = buildAnd(parent, { x: pos.x + 4100, y: pos.y - 100 }); // memSel AND phase2: either one's own execute step
   wire(parent, memSel.out, memNow.a);
   wire(parent, fsm.phase[2]!, memNow.b);
-  const storeNow = buildAnd(parent, vcc, gnd, { x: pos.x + 4200, y: pos.y + 100 }); // STORE only
+  const storeNow = buildAnd(parent, { x: pos.x + 4200, y: pos.y + 100 }); // STORE only
   wire(parent, isStore!, storeNow.a);
   wire(parent, fsm.phase[2]!, storeNow.b);
   wire(parent, storeNow.out, ram.pins.we!);
-  const loadNow = buildAnd(parent, vcc, gnd, { x: pos.x + 4200, y: pos.y + 300 }); // LOAD only
+  const loadNow = buildAnd(parent, { x: pos.x + 4200, y: pos.y + 300 }); // LOAD only
   wire(parent, isLoad!, loadNow.a);
   wire(parent, fsm.phase[2]!, loadNow.b);
-  const ramOe = buildOr(parent, vcc, gnd, { x: pos.x + 4500, y: pos.y + 200 }); // FETCH's own read, OR a LOAD's
+  const ramOe = buildOr(parent, { x: pos.x + 4500, y: pos.y + 200 }); // FETCH's own read, OR a LOAD's
   wire(parent, fsm.phase[0]!, ramOe.a);
   wire(parent, loadNow.out, ramOe.b);
   wire(parent, ramOe.out, ram.pins.oe!);
@@ -821,19 +821,19 @@ export interface Z80Decoder {
  */
 export function buildZ80Decoder(parent: Circuit, opcode: Pin[], pos: Point = { x: 0, y: 0 }): Z80Decoder {
   if (opcode.length !== 8) throw new Error('buildZ80Decoder needs an 8-bit opcode');
-  const vcc = makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 }).pins.out;
-  const gnd = makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 80 }).pins.out;
+  makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 }); // rail driver
+  makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 80 });
 
-  const decX = buildDecoder(parent, vcc, gnd, 2, { x: pos.x, y: pos.y });
+  const decX = buildDecoder(parent, 2, { x: pos.x, y: pos.y });
   wire(parent, opcode[6]!, decX.addr[0]!); // bit6: x's own LSB
   wire(parent, opcode[7]!, decX.addr[1]!); // bit7: x's own MSB
 
-  const decY = buildDecoder(parent, vcc, gnd, 3, { x: pos.x, y: pos.y + 400 });
+  const decY = buildDecoder(parent, 3, { x: pos.x, y: pos.y + 400 });
   wire(parent, opcode[3]!, decY.addr[0]!);
   wire(parent, opcode[4]!, decY.addr[1]!);
   wire(parent, opcode[5]!, decY.addr[2]!);
 
-  const decZ = buildDecoder(parent, vcc, gnd, 3, { x: pos.x, y: pos.y + 1000 });
+  const decZ = buildDecoder(parent, 3, { x: pos.x, y: pos.y + 1000 });
   wire(parent, opcode[0]!, decZ.addr[0]!);
   wire(parent, opcode[1]!, decZ.addr[1]!);
   wire(parent, opcode[2]!, decZ.addr[2]!);
@@ -2113,10 +2113,10 @@ export function buildZ80Cpu(
   // address must be the interrupted instruction's own PC), clear both
   // IFFs, then let the existing RST push/jump path run. No INTACK cycle,
   // no IM0/IM2 — see Known Simplifications.
-  const intIffAndIm = buildAnd(parent, vcc3, gnd3, { x: pos.x + 2050, y: pos.y + 4600 });
+  const intIffAndIm = buildAnd(parent, { x: pos.x + 2050, y: pos.y + 4600 });
   wire(parent, iff1.q[0]!, intIffAndIm.a);
   wire(parent, im1.q[0]!, intIffAndIm.b);
-  const intPending = buildAnd(parent, vcc3, gnd3, { x: pos.x + 2100, y: pos.y + 4600 });
+  const intPending = buildAnd(parent, { x: pos.x + 2100, y: pos.y + 4600 });
   wire(parent, intIffAndIm.out, intPending.a);
   // Default INT low via an internal Input — every FETCH samples this, so a
   // floating pin would be unsafe the way unused `ioPortDataIn` bits are not.
@@ -2124,7 +2124,7 @@ export function buildZ80Cpu(
   const intDrive = makeInput(parent, 0, { x: pos.x + 1950, y: pos.y + 4600 });
   wire(parent, intDrive.pins.out, intPending.b);
   const intPin = intDrive.pins.out;
-  const intAcceptNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 2150, y: pos.y + 4600 });
+  const intAcceptNow = buildAnd(parent, { x: pos.x + 2150, y: pos.y + 4600 });
   wire(parent, intPending.out, intAcceptNow.a);
   tieToLabel('PHASE0', intAcceptNow.b, { x: pos.x + 2050, y: pos.y + 4620 });
   tieToLabel('INT_ACCEPT_NOW', intAcceptNow.out, { x: pos.x + 2250, y: pos.y + 4600 }); // anchor — IR force mux, IFF clear, intServing we/d
@@ -2133,7 +2133,7 @@ export function buildZ80Cpu(
   // without a separate PHASE7 term.
   tieToLabel('PHASE0', intServing.we, { x: pos.x + 2050, y: pos.y + 4480 });
   wire(parent, intAcceptNow.out, intServing.d[0]!);
-  const notIntServing = buildNot(parent, vcc3, gnd3, { x: pos.x + 2200, y: pos.y + 4440 });
+  const notIntServing = buildNot(parent, { x: pos.x + 2200, y: pos.y + 4440 });
   wire(parent, intServing.q[0]!, notIntServing.in);
   tieToLabel('NOT_INT_SERVING', notIntServing.out, { x: pos.x + 2300, y: pos.y + 4440 }); // anchor — pcHold's PHASE1 term
   tieToLabel('INT_SERVING', intServing.q[0]!, { x: pos.x + 2300, y: pos.y + 4420 });
@@ -2191,36 +2191,36 @@ export function buildZ80Cpu(
   // immediately following another (real hardware restart) is still not
   // modeled — one-shot "prefix, then real opcode" does not restart.
   const rawStackGroup = dec.x[3]!;
-  const isCbPrefixZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8700, y: pos.y - 4200 });
+  const isCbPrefixZ = buildAnd(parent, { x: pos.x + 8700, y: pos.y - 4200 });
   wire(parent, rawStackGroup, isCbPrefixZ.a);
   wire(parent, dec.z[3]!, isCbPrefixZ.b);
-  const isCbPrefixRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8750, y: pos.y - 4200 });
+  const isCbPrefixRaw = buildAnd(parent, { x: pos.x + 8750, y: pos.y - 4200 });
   wire(parent, isCbPrefixZ.out, isCbPrefixRaw.a);
   wire(parent, dec.y[1]!, isCbPrefixRaw.b);
-  const isPrefixZ5 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8700, y: pos.y - 4150 });
+  const isPrefixZ5 = buildAnd(parent, { x: pos.x + 8700, y: pos.y - 4150 });
   wire(parent, rawStackGroup, isPrefixZ5.a);
   wire(parent, dec.z[5]!, isPrefixZ5.b);
-  const isDdPrefixRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8750, y: pos.y - 4150 });
+  const isDdPrefixRaw = buildAnd(parent, { x: pos.x + 8750, y: pos.y - 4150 });
   wire(parent, isPrefixZ5.out, isDdPrefixRaw.a);
   wire(parent, dec.y[3]!, isDdPrefixRaw.b);
-  const isEdPrefixRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8750, y: pos.y - 4100 });
+  const isEdPrefixRaw = buildAnd(parent, { x: pos.x + 8750, y: pos.y - 4100 });
   wire(parent, isPrefixZ5.out, isEdPrefixRaw.a);
   wire(parent, dec.y[5]!, isEdPrefixRaw.b);
-  const isFdPrefixRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8750, y: pos.y - 4050 });
+  const isFdPrefixRaw = buildAnd(parent, { x: pos.x + 8750, y: pos.y - 4050 });
   wire(parent, isPrefixZ5.out, isFdPrefixRaw.a);
   wire(parent, dec.y[7]!, isFdPrefixRaw.b);
 
-  const isAnyPrefixRawStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 8800, y: pos.y - 4175 });
+  const isAnyPrefixRawStage = buildOr(parent, { x: pos.x + 8800, y: pos.y - 4175 });
   wire(parent, isCbPrefixRaw.out, isAnyPrefixRawStage.a);
   wire(parent, isDdPrefixRaw.out, isAnyPrefixRawStage.b);
-  const isAnyPrefixRawStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 8800, y: pos.y - 4075 });
+  const isAnyPrefixRawStage2 = buildOr(parent, { x: pos.x + 8800, y: pos.y - 4075 });
   wire(parent, isEdPrefixRaw.out, isAnyPrefixRawStage2.a);
   wire(parent, isFdPrefixRaw.out, isAnyPrefixRawStage2.b);
-  const isAnyPrefixRaw = buildOr(parent, vcc3, gnd3, { x: pos.x + 8850, y: pos.y - 4125 });
+  const isAnyPrefixRaw = buildOr(parent, { x: pos.x + 8850, y: pos.y - 4125 });
   wire(parent, isAnyPrefixRawStage.out, isAnyPrefixRaw.a);
   wire(parent, isAnyPrefixRawStage2.out, isAnyPrefixRaw.b);
 
-  const prefixReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8900, y: pos.y - 4125 });
+  const prefixReadNow = buildAnd(parent, { x: pos.x + 8900, y: pos.y - 4125 });
   wire(parent, isAnyPrefixRaw.out, prefixReadNow.a);
   tieToLabel('PHASE2', prefixReadNow.b, { x: pos.x + 8800, y: pos.y - 4125 });
   tieToLabel('PREFIX_READ_NOW', prefixReadNow.out, { x: pos.x + 9000, y: pos.y - 4125 }); // anchor — ramOeFinal (far) reads this via the label; `irWe` (right below) reads it by direct wire instead, same scope
@@ -2236,7 +2236,7 @@ export function buildZ80Cpu(
   // ahead-of-`d` shape `aReset` already established for `A`.
   const activePrefix = buildRegister(parent, library, 4, { x: pos.x + 8900, y: pos.y - 6600 });
   tieToLabel('CLK', activePrefix.clk, { x: pos.x + 8900, y: pos.y - 6620 });
-  const activePrefixWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y - 6500 });
+  const activePrefixWe = buildOr(parent, { x: pos.x + 8950, y: pos.y - 6500 });
   tieToLabel('PHASE0', activePrefixWe.a, { x: pos.x + 8850, y: pos.y - 6500 });
   wire(parent, prefixReadNow.out, activePrefixWe.b);
   wire(parent, activePrefixWe.out, activePrefix.we);
@@ -2252,16 +2252,16 @@ export function buildZ80Cpu(
   const isDdActive = activePrefix.q[1]!;
   const isEdActive = activePrefix.q[2]!;
   const isFdActive = activePrefix.q[3]!;
-  const anyPrefixActiveStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6550 });
+  const anyPrefixActiveStage = buildOr(parent, { x: pos.x + 9100, y: pos.y - 6550 });
   wire(parent, isCbActive, anyPrefixActiveStage.a);
   wire(parent, isDdActive, anyPrefixActiveStage.b);
-  const anyPrefixActiveStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6450 });
+  const anyPrefixActiveStage2 = buildOr(parent, { x: pos.x + 9100, y: pos.y - 6450 });
   wire(parent, isEdActive, anyPrefixActiveStage2.a);
   wire(parent, isFdActive, anyPrefixActiveStage2.b);
-  const anyPrefixActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6500 });
+  const anyPrefixActive = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6500 });
   wire(parent, anyPrefixActiveStage.out, anyPrefixActive.a);
   wire(parent, anyPrefixActiveStage2.out, anyPrefixActive.b);
-  const notPrefixActive = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6500 });
+  const notPrefixActive = buildNot(parent, { x: pos.x + 9200, y: pos.y - 6500 });
   wire(parent, anyPrefixActive.out, notPrefixActive.in);
   tieToLabel('NOT_PREFIX_ACTIVE', notPrefixActive.out, { x: pos.x + 9250, y: pos.y - 6500 }); // anchor — isX0Group/isLdGroup/isAluGroup/isStackGroup (all far) read this
   // PC's own second advance (below) needs this true for exactly one phase,
@@ -2270,7 +2270,7 @@ export function buildZ80Cpu(
   // why `pc.d`'s own mux only ever wants a fresh advance pulsed once, the
   // identical shape every other multi-byte read's own `*_ADVANCE_NOW`
   // already uses).
-  const prefixAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6450 });
+  const prefixAdvanceNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 6450 });
   wire(parent, anyPrefixActive.out, prefixAdvanceNow.a);
   tieToLabel('PHASE3', prefixAdvanceNow.b, { x: pos.x + 9150, y: pos.y - 6450 });
   tieToLabel('PREFIX_ADVANCE_NOW', prefixAdvanceNow.out, { x: pos.x + 9350, y: pos.y - 6450 }); // anchor — PC's own advance (far) reads this
@@ -2291,13 +2291,13 @@ export function buildZ80Cpu(
   // second IR-only op recapture at PHASE6. See "DD CB / FD CB" in ARCHITECTURE.md.
   const ddCbMode = buildRegister(parent, library, 1, { x: pos.x + 8900, y: pos.y - 6700 });
   tieToLabel('CLK', ddCbMode.clk, { x: pos.x + 8900, y: pos.y - 6720 });
-  const ddCbModeSetNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y - 6680 });
+  const ddCbModeSetNow = buildAnd(parent, { x: pos.x + 8950, y: pos.y - 6680 });
   wire(parent, isDdActive, ddCbModeSetNow.a);
   wire(parent, isCbPrefixRaw.out, ddCbModeSetNow.b);
-  const ddCbModeSetPhase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y - 6680 });
+  const ddCbModeSetPhase = buildAnd(parent, { x: pos.x + 9000, y: pos.y - 6680 });
   wire(parent, ddCbModeSetNow.out, ddCbModeSetPhase.a);
   tieToLabel('PHASE3', ddCbModeSetPhase.b, { x: pos.x + 8900, y: pos.y - 6680 });
-  const ddCbModeWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6660 });
+  const ddCbModeWe = buildOr(parent, { x: pos.x + 9050, y: pos.y - 6660 });
   tieToLabel('PHASE0', ddCbModeWe.a, { x: pos.x + 8950, y: pos.y - 6660 });
   wire(parent, ddCbModeSetPhase.out, ddCbModeWe.b);
   wire(parent, ddCbModeWe.out, ddCbMode.we);
@@ -2312,13 +2312,13 @@ export function buildZ80Cpu(
 
   const fdCbMode = buildRegister(parent, library, 1, { x: pos.x + 8900, y: pos.y - 6800 });
   tieToLabel('CLK', fdCbMode.clk, { x: pos.x + 8900, y: pos.y - 6820 });
-  const fdCbModeSetNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y - 6780 });
+  const fdCbModeSetNow = buildAnd(parent, { x: pos.x + 8950, y: pos.y - 6780 });
   wire(parent, isFdActive, fdCbModeSetNow.a);
   wire(parent, isCbPrefixRaw.out, fdCbModeSetNow.b);
-  const fdCbModeSetPhase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y - 6780 });
+  const fdCbModeSetPhase = buildAnd(parent, { x: pos.x + 9000, y: pos.y - 6780 });
   wire(parent, fdCbModeSetNow.out, fdCbModeSetPhase.a);
   tieToLabel('PHASE3', fdCbModeSetPhase.b, { x: pos.x + 8900, y: pos.y - 6780 });
-  const fdCbModeWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6760 });
+  const fdCbModeWe = buildOr(parent, { x: pos.x + 9050, y: pos.y - 6760 });
   tieToLabel('PHASE0', fdCbModeWe.a, { x: pos.x + 8950, y: pos.y - 6760 });
   wire(parent, fdCbModeSetPhase.out, fdCbModeWe.b);
   wire(parent, fdCbModeWe.out, fdCbMode.we);
@@ -2331,15 +2331,15 @@ export function buildZ80Cpu(
   }
   tieToLabel('IS_FDCB_MODE', fdCbMode.q[0]!, { x: pos.x + 9200, y: pos.y - 6800 });
 
-  const ddFdCbMode = buildOr(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6750 });
+  const ddFdCbMode = buildOr(parent, { x: pos.x + 9250, y: pos.y - 6750 });
   wire(parent, ddCbMode.q[0]!, ddFdCbMode.a);
   wire(parent, fdCbMode.q[0]!, ddFdCbMode.b);
-  const notDdFdCbMode = buildNot(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6750 });
+  const notDdFdCbMode = buildNot(parent, { x: pos.x + 9300, y: pos.y - 6750 });
   wire(parent, ddFdCbMode.out, notDdFdCbMode.in);
-  const cbTableActiveStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6720 });
+  const cbTableActiveStage = buildOr(parent, { x: pos.x + 9250, y: pos.y - 6720 });
   wire(parent, isCbActive, cbTableActiveStage.a);
   wire(parent, ddCbMode.q[0]!, cbTableActiveStage.b);
-  const cbTableActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6720 });
+  const cbTableActive = buildOr(parent, { x: pos.x + 9300, y: pos.y - 6720 });
   wire(parent, cbTableActiveStage.out, cbTableActive.a);
   wire(parent, fdCbMode.q[0]!, cbTableActive.b);
 
@@ -2350,47 +2350,47 @@ export function buildZ80Cpu(
   // `dec.z` — `NOT_PREFIX_ACTIVE` already keeps unprefixed `LD HL,nn`
   // quiet under DD, so this parallel path is the only one that fires.
   // Adjacent-phase exclusions mirror EDNN (ring-counter transient).
-  const isLdIxNnX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6280 });
+  const isLdIxNnX = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6280 });
   wire(parent, isDdActive, isLdIxNnX.a);
   wire(parent, dec.x[0]!, isLdIxNnX.b);
-  const isLdIxNnZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6280 });
+  const isLdIxNnZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 6280 });
   wire(parent, isLdIxNnX.out, isLdIxNnZ.a);
   wire(parent, dec.z[1]!, isLdIxNnZ.b);
-  const isLdIxNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6280 });
+  const isLdIxNn = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6280 });
   wire(parent, isLdIxNnZ.out, isLdIxNn.a);
   wire(parent, dec.y[4]!, isLdIxNn.b);
 
-  const ldIxNnLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6280 });
+  const ldIxNnLowNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6280 });
   wire(parent, isLdIxNn.out, ldIxNnLowNow.a);
   tieToLabel('PHASE4', ldIxNnLowNow.b, { x: pos.x + 9250, y: pos.y - 6280 });
   tieToLabel('LDIXNN_LOW_NOW', ldIxNnLowNow.out, { x: pos.x + 9450, y: pos.y - 6280 }); // anchor — ram.oe, IXL write-back
 
-  const ldIxNnLowAdvRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6250 });
+  const ldIxNnLowAdvRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6250 });
   wire(parent, isLdIxNn.out, ldIxNnLowAdvRaw.a);
   tieToLabel('PHASE5', ldIxNnLowAdvRaw.b, { x: pos.x + 9250, y: pos.y - 6250 });
-  const notLdIxNnLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 6265 });
+  const notLdIxNnLowNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 6265 });
   wire(parent, ldIxNnLowNow.out, notLdIxNnLowNow.in);
-  const ldIxNnLowAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 6250 });
+  const ldIxNnLowAdvanceNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 6250 });
   wire(parent, ldIxNnLowAdvRaw.out, ldIxNnLowAdvanceNow.a);
   wire(parent, notLdIxNnLowNow.out, ldIxNnLowAdvanceNow.b);
   tieToLabel('LDIXNN_LOW_ADVANCE_NOW', ldIxNnLowAdvanceNow.out, { x: pos.x + 9550, y: pos.y - 6250 }); // anchor — pcHold
 
-  const ldIxNnHighRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6220 });
+  const ldIxNnHighRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6220 });
   wire(parent, isLdIxNn.out, ldIxNnHighRaw.a);
   tieToLabel('PHASE6', ldIxNnHighRaw.b, { x: pos.x + 9250, y: pos.y - 6220 });
-  const notLdIxNnLowAdvNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 6235 });
+  const notLdIxNnLowAdvNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 6235 });
   wire(parent, ldIxNnLowAdvanceNow.out, notLdIxNnLowAdvNow.in);
-  const ldIxNnHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 6220 });
+  const ldIxNnHighNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 6220 });
   wire(parent, ldIxNnHighRaw.out, ldIxNnHighNow.a);
   wire(parent, notLdIxNnLowAdvNow.out, ldIxNnHighNow.b);
   tieToLabel('LDIXNN_HIGH_NOW', ldIxNnHighNow.out, { x: pos.x + 9550, y: pos.y - 6220 }); // anchor — ram.oe, IXH write-back
 
-  const ldIxNnHighAdvRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6190 });
+  const ldIxNnHighAdvRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6190 });
   wire(parent, isLdIxNn.out, ldIxNnHighAdvRaw.a);
   tieToLabel('PHASE7', ldIxNnHighAdvRaw.b, { x: pos.x + 9250, y: pos.y - 6190 });
-  const notLdIxNnHighNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 6205 });
+  const notLdIxNnHighNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 6205 });
   wire(parent, ldIxNnHighNow.out, notLdIxNnHighNow.in);
-  const ldIxNnHighAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 6190 });
+  const ldIxNnHighAdvanceNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 6190 });
   wire(parent, ldIxNnHighAdvRaw.out, ldIxNnHighAdvanceNow.a);
   wire(parent, notLdIxNnHighNow.out, ldIxNnHighAdvanceNow.b);
   tieToLabel('LDIXNN_HIGH_ADVANCE_NOW', ldIxNnHighAdvanceNow.out, { x: pos.x + 9550, y: pos.y - 6190 }); // anchor — pcHold
@@ -2399,40 +2399,40 @@ export function buildZ80Cpu(
   // the prefix burns PHASE2–3, so the body sits on PHASE4–5. Parallel
   // DD-gated decode on raw `dec.x[3]` (unprefixed PUSH/POP HL stay quiet
   // under `NOT_PREFIX_ACTIVE`).
-  const isDdStackX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6150 });
+  const isDdStackX = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6150 });
   wire(parent, isDdActive, isDdStackX.a);
   wire(parent, dec.x[3]!, isDdStackX.b);
-  const isPushIxZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6150 });
+  const isPushIxZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 6150 });
   wire(parent, isDdStackX.out, isPushIxZ.a);
   wire(parent, dec.z[5]!, isPushIxZ.b);
-  const isPushIx = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6150 });
+  const isPushIx = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6150 });
   wire(parent, isPushIxZ.out, isPushIx.a);
   wire(parent, dec.y[4]!, isPushIx.b);
-  const pushIxHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6150 });
+  const pushIxHighNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6150 });
   wire(parent, isPushIx.out, pushIxHighNow.a);
   tieToLabel('PHASE4', pushIxHighNow.b, { x: pos.x + 9250, y: pos.y - 6150 });
   tieToLabel('PUSHIX_HIGH_NOW', pushIxHighNow.out, { x: pos.x + 9450, y: pos.y - 6150 }); // anchor — stackWriteNow, IXH→bus
-  const notPushIxHighNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 6130 });
+  const notPushIxHighNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 6130 });
   wire(parent, pushIxHighNow.out, notPushIxHighNow.in);
-  const pushIxLowStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6120 });
+  const pushIxLowStage = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6120 });
   wire(parent, isPushIx.out, pushIxLowStage.a);
   tieToLabel('PHASE5', pushIxLowStage.b, { x: pos.x + 9250, y: pos.y - 6120 });
-  const pushIxLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 6120 });
+  const pushIxLowNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 6120 });
   wire(parent, pushIxLowStage.out, pushIxLowNow.a);
   wire(parent, notPushIxHighNow.out, pushIxLowNow.b);
   tieToLabel('PUSHIX_LOW_NOW', pushIxLowNow.out, { x: pos.x + 9550, y: pos.y - 6120 }); // anchor — stackWriteNow, IXL→bus
 
-  const isPopIxZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6090 });
+  const isPopIxZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 6090 });
   wire(parent, isDdStackX.out, isPopIxZ.a);
   wire(parent, dec.z[1]!, isPopIxZ.b);
-  const isPopIx = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6090 });
+  const isPopIx = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6090 });
   wire(parent, isPopIxZ.out, isPopIx.a);
   wire(parent, dec.y[4]!, isPopIx.b);
-  const popIxLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6090 });
+  const popIxLowNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6090 });
   wire(parent, isPopIx.out, popIxLowNow.a);
   tieToLabel('PHASE4', popIxLowNow.b, { x: pos.x + 9250, y: pos.y - 6090 });
   tieToLabel('POPIX_LOW_NOW', popIxLowNow.out, { x: pos.x + 9450, y: pos.y - 6090 }); // anchor — readNow, IXL write-back
-  const popIxHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6060 });
+  const popIxHighNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6060 });
   wire(parent, isPopIx.out, popIxHighNow.a);
   tieToLabel('PHASE5', popIxHighNow.b, { x: pos.x + 9250, y: pos.y - 6060 });
   tieToLabel('POPIX_HIGH_NOW', popIxHighNow.out, { x: pos.x + 9450, y: pos.y - 6060 }); // anchor — readNow, IXH write-back
@@ -2440,86 +2440,86 @@ export function buildZ80Cpu(
   // FD: LD IY,nn (real 0xFD 0x21 nn nn) — mechanical mirror of DD LD IX,nn
   // above, gated on `isFdActive` instead of `isDdActive`. Same PHASE4–7
   // shape; adjacent-phase exclusions identical.
-  const isLdIyNnX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6020 });
+  const isLdIyNnX = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6020 });
   wire(parent, isFdActive, isLdIyNnX.a);
   wire(parent, dec.x[0]!, isLdIyNnX.b);
-  const isLdIyNnZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6020 });
+  const isLdIyNnZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 6020 });
   wire(parent, isLdIyNnX.out, isLdIyNnZ.a);
   wire(parent, dec.z[1]!, isLdIyNnZ.b);
-  const isLdIyNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6020 });
+  const isLdIyNn = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6020 });
   wire(parent, isLdIyNnZ.out, isLdIyNn.a);
   wire(parent, dec.y[4]!, isLdIyNn.b);
 
-  const ldIyNnLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6020 });
+  const ldIyNnLowNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6020 });
   wire(parent, isLdIyNn.out, ldIyNnLowNow.a);
   tieToLabel('PHASE4', ldIyNnLowNow.b, { x: pos.x + 9250, y: pos.y - 6020 });
   tieToLabel('LDIYNN_LOW_NOW', ldIyNnLowNow.out, { x: pos.x + 9450, y: pos.y - 6020 }); // anchor — ram.oe, IYL write-back
 
-  const ldIyNnLowAdvRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5990 });
+  const ldIyNnLowAdvRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5990 });
   wire(parent, isLdIyNn.out, ldIyNnLowAdvRaw.a);
   tieToLabel('PHASE5', ldIyNnLowAdvRaw.b, { x: pos.x + 9250, y: pos.y - 5990 });
-  const notLdIyNnLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 6005 });
+  const notLdIyNnLowNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 6005 });
   wire(parent, ldIyNnLowNow.out, notLdIyNnLowNow.in);
-  const ldIyNnLowAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5990 });
+  const ldIyNnLowAdvanceNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5990 });
   wire(parent, ldIyNnLowAdvRaw.out, ldIyNnLowAdvanceNow.a);
   wire(parent, notLdIyNnLowNow.out, ldIyNnLowAdvanceNow.b);
   tieToLabel('LDIYNN_LOW_ADVANCE_NOW', ldIyNnLowAdvanceNow.out, { x: pos.x + 9550, y: pos.y - 5990 }); // anchor — pcHold
 
-  const ldIyNnHighRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5960 });
+  const ldIyNnHighRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5960 });
   wire(parent, isLdIyNn.out, ldIyNnHighRaw.a);
   tieToLabel('PHASE6', ldIyNnHighRaw.b, { x: pos.x + 9250, y: pos.y - 5960 });
-  const notLdIyNnLowAdvNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5975 });
+  const notLdIyNnLowAdvNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 5975 });
   wire(parent, ldIyNnLowAdvanceNow.out, notLdIyNnLowAdvNow.in);
-  const ldIyNnHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5960 });
+  const ldIyNnHighNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5960 });
   wire(parent, ldIyNnHighRaw.out, ldIyNnHighNow.a);
   wire(parent, notLdIyNnLowAdvNow.out, ldIyNnHighNow.b);
   tieToLabel('LDIYNN_HIGH_NOW', ldIyNnHighNow.out, { x: pos.x + 9550, y: pos.y - 5960 }); // anchor — ram.oe, IYH write-back
 
-  const ldIyNnHighAdvRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5930 });
+  const ldIyNnHighAdvRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5930 });
   wire(parent, isLdIyNn.out, ldIyNnHighAdvRaw.a);
   tieToLabel('PHASE7', ldIyNnHighAdvRaw.b, { x: pos.x + 9250, y: pos.y - 5930 });
-  const notLdIyNnHighNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5945 });
+  const notLdIyNnHighNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 5945 });
   wire(parent, ldIyNnHighNow.out, notLdIyNnHighNow.in);
-  const ldIyNnHighAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5930 });
+  const ldIyNnHighAdvanceNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5930 });
   wire(parent, ldIyNnHighAdvRaw.out, ldIyNnHighAdvanceNow.a);
   wire(parent, notLdIyNnHighNow.out, ldIyNnHighAdvanceNow.b);
   tieToLabel('LDIYNN_HIGH_ADVANCE_NOW', ldIyNnHighAdvanceNow.out, { x: pos.x + 9550, y: pos.y - 5930 }); // anchor — pcHold
 
   // FD: PUSH IY (0xFD 0xE5) / POP IY (0xFD 0xE1) — mirror of PUSH/POP IX.
-  const isFdStackX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5890 });
+  const isFdStackX = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5890 });
   wire(parent, isFdActive, isFdStackX.a);
   wire(parent, dec.x[3]!, isFdStackX.b);
-  const isPushIyZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5890 });
+  const isPushIyZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5890 });
   wire(parent, isFdStackX.out, isPushIyZ.a);
   wire(parent, dec.z[5]!, isPushIyZ.b);
-  const isPushIy = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5890 });
+  const isPushIy = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5890 });
   wire(parent, isPushIyZ.out, isPushIy.a);
   wire(parent, dec.y[4]!, isPushIy.b);
-  const pushIyHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5890 });
+  const pushIyHighNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5890 });
   wire(parent, isPushIy.out, pushIyHighNow.a);
   tieToLabel('PHASE4', pushIyHighNow.b, { x: pos.x + 9250, y: pos.y - 5890 });
   tieToLabel('PUSHIY_HIGH_NOW', pushIyHighNow.out, { x: pos.x + 9450, y: pos.y - 5890 }); // anchor — stackWriteNow, IYH→bus
-  const notPushIyHighNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5870 });
+  const notPushIyHighNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 5870 });
   wire(parent, pushIyHighNow.out, notPushIyHighNow.in);
-  const pushIyLowStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5860 });
+  const pushIyLowStage = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5860 });
   wire(parent, isPushIy.out, pushIyLowStage.a);
   tieToLabel('PHASE5', pushIyLowStage.b, { x: pos.x + 9250, y: pos.y - 5860 });
-  const pushIyLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5860 });
+  const pushIyLowNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5860 });
   wire(parent, pushIyLowStage.out, pushIyLowNow.a);
   wire(parent, notPushIyHighNow.out, pushIyLowNow.b);
   tieToLabel('PUSHIY_LOW_NOW', pushIyLowNow.out, { x: pos.x + 9550, y: pos.y - 5860 }); // anchor — stackWriteNow, IYL→bus
 
-  const isPopIyZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5830 });
+  const isPopIyZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5830 });
   wire(parent, isFdStackX.out, isPopIyZ.a);
   wire(parent, dec.z[1]!, isPopIyZ.b);
-  const isPopIy = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5830 });
+  const isPopIy = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5830 });
   wire(parent, isPopIyZ.out, isPopIy.a);
   wire(parent, dec.y[4]!, isPopIy.b);
-  const popIyLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5830 });
+  const popIyLowNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5830 });
   wire(parent, isPopIy.out, popIyLowNow.a);
   tieToLabel('PHASE4', popIyLowNow.b, { x: pos.x + 9250, y: pos.y - 5830 });
   tieToLabel('POPIY_LOW_NOW', popIyLowNow.out, { x: pos.x + 9450, y: pos.y - 5830 }); // anchor — readNow, IYL write-back
-  const popIyHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5800 });
+  const popIyHighNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5800 });
   wire(parent, isPopIy.out, popIyHighNow.a);
   tieToLabel('PHASE5', popIyHighNow.b, { x: pos.x + 9250, y: pos.y - 5800 });
   tieToLabel('POPIY_HIGH_NOW', popIyHighNow.out, { x: pos.x + 9450, y: pos.y - 5800 }); // anchor — readNow, IYH write-back
@@ -2532,118 +2532,118 @@ export function buildZ80Cpu(
   // Odd-y fold for ADD IX/IY,rr — same shape as isAddHlYValid (built
   // later for unprefixed ADD HL,rr); duplicated here so this cluster
   // stays next to the other DD/FD bodies.
-  const isAddIxYValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5760 });
+  const isAddIxYValid1 = buildOr(parent, { x: pos.x + 9200, y: pos.y - 5760 });
   wire(parent, dec.y[1]!, isAddIxYValid1.a);
   wire(parent, dec.y[3]!, isAddIxYValid1.b);
-  const isAddIxYValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5730 });
+  const isAddIxYValid2 = buildOr(parent, { x: pos.x + 9200, y: pos.y - 5730 });
   wire(parent, isAddIxYValid1.out, isAddIxYValid2.a);
   wire(parent, dec.y[5]!, isAddIxYValid2.b);
-  const isAddIxYValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5700 });
+  const isAddIxYValid = buildOr(parent, { x: pos.x + 9200, y: pos.y - 5700 });
   wire(parent, isAddIxYValid2.out, isAddIxYValid.a);
   wire(parent, dec.y[7]!, isAddIxYValid.b);
 
-  const isAddIxX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5700 });
+  const isAddIxX = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5700 });
   wire(parent, isDdActive, isAddIxX.a);
   wire(parent, dec.x[0]!, isAddIxX.b);
-  const isAddIxZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5700 });
+  const isAddIxZ = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5700 });
   wire(parent, isAddIxX.out, isAddIxZ.a);
   wire(parent, dec.z[1]!, isAddIxZ.b);
-  const isAddIxRr = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5700 });
+  const isAddIxRr = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5700 });
   wire(parent, isAddIxZ.out, isAddIxRr.a);
   wire(parent, isAddIxYValid.out, isAddIxRr.b);
-  const addIxNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5700 });
+  const addIxNow = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 5700 });
   wire(parent, isAddIxRr.out, addIxNow.a);
   tieToLabel('PHASE4', addIxNow.b, { x: pos.x + 9300, y: pos.y - 5700 });
   tieToLabel('ADDIX_NOW', addIxNow.out, { x: pos.x + 9500, y: pos.y - 5700 }); // anchor — IX write-back, F C mux / we
 
-  const isAddIyX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5670 });
+  const isAddIyX = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5670 });
   wire(parent, isFdActive, isAddIyX.a);
   wire(parent, dec.x[0]!, isAddIyX.b);
-  const isAddIyZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5670 });
+  const isAddIyZ = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5670 });
   wire(parent, isAddIyX.out, isAddIyZ.a);
   wire(parent, dec.z[1]!, isAddIyZ.b);
-  const isAddIyRr = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5670 });
+  const isAddIyRr = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5670 });
   wire(parent, isAddIyZ.out, isAddIyRr.a);
   wire(parent, isAddIxYValid.out, isAddIyRr.b);
-  const addIyNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5670 });
+  const addIyNow = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 5670 });
   wire(parent, isAddIyRr.out, addIyNow.a);
   tieToLabel('PHASE4', addIyNow.b, { x: pos.x + 9300, y: pos.y - 5670 });
   tieToLabel('ADDIY_NOW', addIyNow.out, { x: pos.x + 9500, y: pos.y - 5670 }); // anchor — IY write-back, F C mux / we
 
   // INC/DEC IX/IY (DD/FD 0x23/0x2B) — z=3, y=4/5 (HL pair slot).
-  const isIncDecIxX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5640 });
+  const isIncDecIxX = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5640 });
   wire(parent, isDdActive, isIncDecIxX.a);
   wire(parent, dec.x[0]!, isIncDecIxX.b);
-  const isIncDecIxZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5640 });
+  const isIncDecIxZ = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5640 });
   wire(parent, isIncDecIxX.out, isIncDecIxZ.a);
   wire(parent, dec.z[3]!, isIncDecIxZ.b);
-  const isIncDecIxY = buildOr(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5640 });
+  const isIncDecIxY = buildOr(parent, { x: pos.x + 9350, y: pos.y - 5640 });
   wire(parent, dec.y[4]!, isIncDecIxY.a);
   wire(parent, dec.y[5]!, isIncDecIxY.b);
-  const isIncDecIx = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5640 });
+  const isIncDecIx = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 5640 });
   wire(parent, isIncDecIxZ.out, isIncDecIx.a);
   wire(parent, isIncDecIxY.out, isIncDecIx.b);
-  const incDecIxNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5640 });
+  const incDecIxNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5640 });
   wire(parent, isIncDecIx.out, incDecIxNow.a);
   tieToLabel('PHASE4', incDecIxNow.b, { x: pos.x + 9350, y: pos.y - 5640 });
   tieToLabel('INCDEC_IX_NOW', incDecIxNow.out, { x: pos.x + 9550, y: pos.y - 5640 }); // anchor — IX write-back from IXADD
 
-  const isIncDecIyX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5610 });
+  const isIncDecIyX = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5610 });
   wire(parent, isFdActive, isIncDecIyX.a);
   wire(parent, dec.x[0]!, isIncDecIyX.b);
-  const isIncDecIyZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5610 });
+  const isIncDecIyZ = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5610 });
   wire(parent, isIncDecIyX.out, isIncDecIyZ.a);
   wire(parent, dec.z[3]!, isIncDecIyZ.b);
-  const isIncDecIy = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5610 });
+  const isIncDecIy = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 5610 });
   wire(parent, isIncDecIyZ.out, isIncDecIy.a);
   wire(parent, isIncDecIxY.out, isIncDecIy.b);
-  const incDecIyNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5610 });
+  const incDecIyNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5610 });
   wire(parent, isIncDecIy.out, incDecIyNow.a);
   tieToLabel('PHASE4', incDecIyNow.b, { x: pos.x + 9350, y: pos.y - 5610 });
   tieToLabel('INCDEC_IY_NOW', incDecIyNow.out, { x: pos.x + 9550, y: pos.y - 5610 }); // anchor — IY write-back from IYADD
 
   // JP (IX/IY) (DD/FD 0xE9) / LD SP,IX/IY (DD/FD 0xF9) — reuse isDdStackX /
   // isFdStackX (already isDd/Fd ∧ x[3]).
-  const isJpIx = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5580 });
+  const isJpIx = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5580 });
   wire(parent, isDdStackX.out, isJpIx.a);
   wire(parent, dec.z[1]!, isJpIx.b);
-  const isJpIxY = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5580 });
+  const isJpIxY = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5580 });
   wire(parent, isJpIx.out, isJpIxY.a);
   wire(parent, dec.y[5]!, isJpIxY.b);
-  const jpIxNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5580 });
+  const jpIxNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5580 });
   wire(parent, isJpIxY.out, jpIxNow.a);
   tieToLabel('PHASE4', jpIxNow.b, { x: pos.x + 9250, y: pos.y - 5580 });
   tieToLabel('JPIX_NOW', jpIxNow.out, { x: pos.x + 9450, y: pos.y - 5580 }); // anchor — PC mux
 
-  const isJpIy = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5550 });
+  const isJpIy = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5550 });
   wire(parent, isFdStackX.out, isJpIy.a);
   wire(parent, dec.z[1]!, isJpIy.b);
-  const isJpIyY = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5550 });
+  const isJpIyY = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5550 });
   wire(parent, isJpIy.out, isJpIyY.a);
   wire(parent, dec.y[5]!, isJpIyY.b);
-  const jpIyNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5550 });
+  const jpIyNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5550 });
   wire(parent, isJpIyY.out, jpIyNow.a);
   tieToLabel('PHASE4', jpIyNow.b, { x: pos.x + 9250, y: pos.y - 5550 });
   tieToLabel('JPIY_NOW', jpIyNow.out, { x: pos.x + 9450, y: pos.y - 5550 }); // anchor — PC mux
 
-  const isLdSpIx = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5520 });
+  const isLdSpIx = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5520 });
   wire(parent, isDdStackX.out, isLdSpIx.a);
   wire(parent, dec.z[1]!, isLdSpIx.b);
-  const isLdSpIxY = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5520 });
+  const isLdSpIxY = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5520 });
   wire(parent, isLdSpIx.out, isLdSpIxY.a);
   wire(parent, dec.y[7]!, isLdSpIxY.b);
-  const ldSpIxNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5520 });
+  const ldSpIxNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5520 });
   wire(parent, isLdSpIxY.out, ldSpIxNow.a);
   tieToLabel('PHASE4', ldSpIxNow.b, { x: pos.x + 9250, y: pos.y - 5520 });
   tieToLabel('LDSPIX_NOW', ldSpIxNow.out, { x: pos.x + 9450, y: pos.y - 5520 }); // anchor — SP mux / we
 
-  const isLdSpIy = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5490 });
+  const isLdSpIy = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5490 });
   wire(parent, isFdStackX.out, isLdSpIy.a);
   wire(parent, dec.z[1]!, isLdSpIy.b);
-  const isLdSpIyY = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5490 });
+  const isLdSpIyY = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5490 });
   wire(parent, isLdSpIy.out, isLdSpIyY.a);
   wire(parent, dec.y[7]!, isLdSpIyY.b);
-  const ldSpIyNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5490 });
+  const ldSpIyNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5490 });
   wire(parent, isLdSpIyY.out, ldSpIyNow.a);
   tieToLabel('PHASE4', ldSpIyNow.b, { x: pos.x + 9250, y: pos.y - 5490 });
   tieToLabel('LDSPIY_NOW', ldSpIyNow.out, { x: pos.x + 9450, y: pos.y - 5490 }); // anchor — SP mux / we
@@ -2652,86 +2652,86 @@ export function buildZ80Cpu(
   // (EXSPHL's PHASE2–5 shape shifted by two). Shares spLo/HiTemp,
   // oldL/HTemp, exSpHlPlusOne, and the EXSPHL addr mux layers via OR'd
   // strobes (widened far below).
-  const isExSpIxZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5460 });
+  const isExSpIxZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5460 });
   wire(parent, isDdStackX.out, isExSpIxZ.a);
   wire(parent, dec.z[3]!, isExSpIxZ.b);
-  const isExSpIx = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5460 });
+  const isExSpIx = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5460 });
   wire(parent, isExSpIxZ.out, isExSpIx.a);
   wire(parent, dec.y[4]!, isExSpIx.b);
 
-  const exSpIxReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5460 });
+  const exSpIxReadLowNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5460 });
   wire(parent, isExSpIx.out, exSpIxReadLowNow.a);
   tieToLabel('PHASE4', exSpIxReadLowNow.b, { x: pos.x + 9250, y: pos.y - 5460 });
   tieToLabel('EXSPIX_READ_LOW_NOW', exSpIxReadLowNow.out, { x: pos.x + 9450, y: pos.y - 5460 });
 
-  const exSpIxReadHighRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5430 });
+  const exSpIxReadHighRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5430 });
   wire(parent, isExSpIx.out, exSpIxReadHighRaw.a);
   tieToLabel('PHASE5', exSpIxReadHighRaw.b, { x: pos.x + 9250, y: pos.y - 5430 });
-  const notExSpIxReadLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5445 });
+  const notExSpIxReadLowNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 5445 });
   wire(parent, exSpIxReadLowNow.out, notExSpIxReadLowNow.in);
-  const exSpIxReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5430 });
+  const exSpIxReadHighNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5430 });
   wire(parent, exSpIxReadHighRaw.out, exSpIxReadHighNow.a);
   wire(parent, notExSpIxReadLowNow.out, exSpIxReadHighNow.b);
   tieToLabel('EXSPIX_READ_HIGH_NOW', exSpIxReadHighNow.out, { x: pos.x + 9550, y: pos.y - 5430 });
 
-  const exSpIxWriteLowRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5400 });
+  const exSpIxWriteLowRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5400 });
   wire(parent, isExSpIx.out, exSpIxWriteLowRaw.a);
   tieToLabel('PHASE6', exSpIxWriteLowRaw.b, { x: pos.x + 9250, y: pos.y - 5400 });
-  const notExSpIxReadHighNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5415 });
+  const notExSpIxReadHighNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 5415 });
   wire(parent, exSpIxReadHighNow.out, notExSpIxReadHighNow.in);
-  const exSpIxWriteLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5400 });
+  const exSpIxWriteLowNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5400 });
   wire(parent, exSpIxWriteLowRaw.out, exSpIxWriteLowNow.a);
   wire(parent, notExSpIxReadHighNow.out, exSpIxWriteLowNow.b);
   tieToLabel('EXSPIX_WRITE_LOW_NOW', exSpIxWriteLowNow.out, { x: pos.x + 9550, y: pos.y - 5400 });
 
-  const exSpIxWriteHighRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5370 });
+  const exSpIxWriteHighRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5370 });
   wire(parent, isExSpIx.out, exSpIxWriteHighRaw.a);
   tieToLabel('PHASE7', exSpIxWriteHighRaw.b, { x: pos.x + 9250, y: pos.y - 5370 });
-  const notExSpIxWriteLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5385 });
+  const notExSpIxWriteLowNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 5385 });
   wire(parent, exSpIxWriteLowNow.out, notExSpIxWriteLowNow.in);
-  const exSpIxWriteHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5370 });
+  const exSpIxWriteHighNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5370 });
   wire(parent, exSpIxWriteHighRaw.out, exSpIxWriteHighNow.a);
   wire(parent, notExSpIxWriteLowNow.out, exSpIxWriteHighNow.b);
   tieToLabel('EXSPIX_WRITE_HIGH_NOW', exSpIxWriteHighNow.out, { x: pos.x + 9550, y: pos.y - 5370 });
 
-  const isExSpIyZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5340 });
+  const isExSpIyZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5340 });
   wire(parent, isFdStackX.out, isExSpIyZ.a);
   wire(parent, dec.z[3]!, isExSpIyZ.b);
-  const isExSpIy = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5340 });
+  const isExSpIy = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5340 });
   wire(parent, isExSpIyZ.out, isExSpIy.a);
   wire(parent, dec.y[4]!, isExSpIy.b);
 
-  const exSpIyReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5340 });
+  const exSpIyReadLowNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5340 });
   wire(parent, isExSpIy.out, exSpIyReadLowNow.a);
   tieToLabel('PHASE4', exSpIyReadLowNow.b, { x: pos.x + 9250, y: pos.y - 5340 });
   tieToLabel('EXSPIY_READ_LOW_NOW', exSpIyReadLowNow.out, { x: pos.x + 9450, y: pos.y - 5340 });
 
-  const exSpIyReadHighRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5310 });
+  const exSpIyReadHighRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5310 });
   wire(parent, isExSpIy.out, exSpIyReadHighRaw.a);
   tieToLabel('PHASE5', exSpIyReadHighRaw.b, { x: pos.x + 9250, y: pos.y - 5310 });
-  const notExSpIyReadLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5325 });
+  const notExSpIyReadLowNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 5325 });
   wire(parent, exSpIyReadLowNow.out, notExSpIyReadLowNow.in);
-  const exSpIyReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5310 });
+  const exSpIyReadHighNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5310 });
   wire(parent, exSpIyReadHighRaw.out, exSpIyReadHighNow.a);
   wire(parent, notExSpIyReadLowNow.out, exSpIyReadHighNow.b);
   tieToLabel('EXSPIY_READ_HIGH_NOW', exSpIyReadHighNow.out, { x: pos.x + 9550, y: pos.y - 5310 });
 
-  const exSpIyWriteLowRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5280 });
+  const exSpIyWriteLowRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5280 });
   wire(parent, isExSpIy.out, exSpIyWriteLowRaw.a);
   tieToLabel('PHASE6', exSpIyWriteLowRaw.b, { x: pos.x + 9250, y: pos.y - 5280 });
-  const notExSpIyReadHighNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5295 });
+  const notExSpIyReadHighNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 5295 });
   wire(parent, exSpIyReadHighNow.out, notExSpIyReadHighNow.in);
-  const exSpIyWriteLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5280 });
+  const exSpIyWriteLowNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5280 });
   wire(parent, exSpIyWriteLowRaw.out, exSpIyWriteLowNow.a);
   wire(parent, notExSpIyReadHighNow.out, exSpIyWriteLowNow.b);
   tieToLabel('EXSPIY_WRITE_LOW_NOW', exSpIyWriteLowNow.out, { x: pos.x + 9550, y: pos.y - 5280 });
 
-  const exSpIyWriteHighRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 5250 });
+  const exSpIyWriteHighRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 5250 });
   wire(parent, isExSpIy.out, exSpIyWriteHighRaw.a);
   tieToLabel('PHASE7', exSpIyWriteHighRaw.b, { x: pos.x + 9250, y: pos.y - 5250 });
-  const notExSpIyWriteLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5265 });
+  const notExSpIyWriteLowNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 5265 });
   wire(parent, exSpIyWriteLowNow.out, notExSpIyWriteLowNow.in);
-  const exSpIyWriteHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 5250 });
+  const exSpIyWriteHighNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 5250 });
   wire(parent, exSpIyWriteHighRaw.out, exSpIyWriteHighNow.a);
   wire(parent, notExSpIyWriteLowNow.out, exSpIyWriteHighNow.b);
   tieToLabel('EXSPIY_WRITE_HIGH_NOW', exSpIyWriteHighNow.out, { x: pos.x + 9550, y: pos.y - 5250 });
@@ -2741,225 +2741,225 @@ export function buildZ80Cpu(
   // isDdActive — never reopen isLdGroup/isX0Group/isAluGroup
   // (NOT_PREFIX_ACTIVE kills those under DD). Prefixed bodies start at
   // PHASE4. See "DD: IX" in ARCHITECTURE.md.
-  const notDdY6 = buildNot(parent, vcc3, gnd3, { x: pos.x + 9180, y: pos.y - 5220 });
+  const notDdY6 = buildNot(parent, { x: pos.x + 9180, y: pos.y - 5220 });
   wire(parent, dec.y[6]!, notDdY6.in);
-  const notDdZ6 = buildNot(parent, vcc3, gnd3, { x: pos.x + 9180, y: pos.y - 5200 });
+  const notDdZ6 = buildNot(parent, { x: pos.x + 9180, y: pos.y - 5200 });
   wire(parent, dec.z[6]!, notDdZ6.in);
 
-  const isDdMemLdReadX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 5220 });
+  const isDdMemLdReadX = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 5220 });
   wire(parent, isDdActive, isDdMemLdReadX.a);
   wire(parent, dec.x[1]!, isDdMemLdReadX.b);
-  const isDdMemLdReadZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 5220 });
+  const isDdMemLdReadZ = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 5220 });
   wire(parent, isDdMemLdReadX.out, isDdMemLdReadZ.a);
   wire(parent, dec.z[6]!, isDdMemLdReadZ.b);
-  const isDdMemLdRead = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5220 });
+  const isDdMemLdRead = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5220 });
   wire(parent, isDdMemLdReadZ.out, isDdMemLdRead.a);
   wire(parent, notDdY6.out, isDdMemLdRead.b);
   tieToLabel('IS_DDMEMLD_READ', isDdMemLdRead.out, { x: pos.x + 9400, y: pos.y - 5220 });
 
-  const isDdMemLdWriteX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 5190 });
+  const isDdMemLdWriteX = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 5190 });
   wire(parent, isDdActive, isDdMemLdWriteX.a);
   wire(parent, dec.x[1]!, isDdMemLdWriteX.b);
-  const isDdMemLdWriteY = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 5190 });
+  const isDdMemLdWriteY = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 5190 });
   wire(parent, isDdMemLdWriteX.out, isDdMemLdWriteY.a);
   wire(parent, dec.y[6]!, isDdMemLdWriteY.b);
-  const isDdMemLdWrite = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5190 });
+  const isDdMemLdWrite = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5190 });
   wire(parent, isDdMemLdWriteY.out, isDdMemLdWrite.a);
   wire(parent, notDdZ6.out, isDdMemLdWrite.b);
   tieToLabel('IS_DDMEMLD_WRITE', isDdMemLdWrite.out, { x: pos.x + 9400, y: pos.y - 5190 });
 
-  const isDdMemLdNX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 5160 });
+  const isDdMemLdNX = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 5160 });
   wire(parent, isDdActive, isDdMemLdNX.a);
   wire(parent, dec.x[0]!, isDdMemLdNX.b);
-  const isDdMemLdNZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 5160 });
+  const isDdMemLdNZ = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 5160 });
   wire(parent, isDdMemLdNX.out, isDdMemLdNZ.a);
   wire(parent, dec.z[6]!, isDdMemLdNZ.b);
-  const isDdMemLdN = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5160 });
+  const isDdMemLdN = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5160 });
   wire(parent, isDdMemLdNZ.out, isDdMemLdN.a);
   wire(parent, dec.y[6]!, isDdMemLdN.b);
   tieToLabel('IS_DDMEMLD_N', isDdMemLdN.out, { x: pos.x + 9400, y: pos.y - 5160 });
 
   // INC/DEC (IX+d): DD 34 d / DD 35 d — x=00, y=6, z=4/5.
-  const isDdMemIncDecX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 5135 });
+  const isDdMemIncDecX = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 5135 });
   wire(parent, isDdActive, isDdMemIncDecX.a);
   wire(parent, dec.x[0]!, isDdMemIncDecX.b);
-  const isDdMemIncDecZ = buildOr(parent, vcc3, gnd3, { x: pos.x + 9240, y: pos.y - 5135 });
+  const isDdMemIncDecZ = buildOr(parent, { x: pos.x + 9240, y: pos.y - 5135 });
   wire(parent, dec.z[4]!, isDdMemIncDecZ.a);
   wire(parent, dec.z[5]!, isDdMemIncDecZ.b);
-  const isDdMemIncDecXZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 5135 });
+  const isDdMemIncDecXZ = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 5135 });
   wire(parent, isDdMemIncDecX.out, isDdMemIncDecXZ.a);
   wire(parent, isDdMemIncDecZ.out, isDdMemIncDecXZ.b);
-  const isDdMemIncDec = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5135 });
+  const isDdMemIncDec = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5135 });
   wire(parent, isDdMemIncDecXZ.out, isDdMemIncDec.a);
   wire(parent, dec.y[6]!, isDdMemIncDec.b);
   tieToLabel('IS_DDMEM_INCDEC', isDdMemIncDec.out, { x: pos.x + 9400, y: pos.y - 5135 });
   // DEC direction for shared r8Adder (isDecR8 is dead under DD).
-  const isDdMemIsDec = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 5120 });
+  const isDdMemIsDec = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 5120 });
   wire(parent, isDdMemIncDec.out, isDdMemIsDec.a);
   wire(parent, dec.z[5]!, isDdMemIsDec.b);
   tieToLabel('DDMEM_IS_DEC', isDdMemIsDec.out, { x: pos.x + 9440, y: pos.y - 5120 });
 
   // ALU A,(IX+d): DD 86/8E/96/9E/A6/AE/B6/BE d — x=10, z=6.
-  const isDdMemAlu = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 5110 });
+  const isDdMemAlu = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 5110 });
   wire(parent, isDdActive, isDdMemAlu.a);
   wire(parent, dec.x[2]!, isDdMemAlu.b);
-  const isDdMemAluZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 5110 });
+  const isDdMemAluZ = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 5110 });
   wire(parent, isDdMemAlu.out, isDdMemAluZ.a);
   wire(parent, dec.z[6]!, isDdMemAluZ.b);
   tieToLabel('IS_DDMEM_ALU', isDdMemAluZ.out, { x: pos.x + 9400, y: pos.y - 5110 });
 
   // Shared d-fetch / advance for all DD (IX+d) mem shapes (LD + INC/DEC + ALU).
-  const isDdMemLdRw = buildOr(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 5205 });
+  const isDdMemLdRw = buildOr(parent, { x: pos.x + 9340, y: pos.y - 5205 });
   wire(parent, isDdMemLdRead.out, isDdMemLdRw.a);
   wire(parent, isDdMemLdWrite.out, isDdMemLdRw.b);
-  const isDdMemLdAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 5190 });
+  const isDdMemLdAny = buildOr(parent, { x: pos.x + 9380, y: pos.y - 5190 });
   wire(parent, isDdMemLdRw.out, isDdMemLdAny.a);
   wire(parent, isDdMemLdN.out, isDdMemLdAny.b);
-  const isDdMemExtra = buildOr(parent, vcc3, gnd3, { x: pos.x + 9360, y: pos.y - 5125 });
+  const isDdMemExtra = buildOr(parent, { x: pos.x + 9360, y: pos.y - 5125 });
   wire(parent, isDdMemIncDec.out, isDdMemExtra.a);
   wire(parent, isDdMemAluZ.out, isDdMemExtra.b);
-  const isDdMemAnyBase = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 5155 });
+  const isDdMemAnyBase = buildOr(parent, { x: pos.x + 9400, y: pos.y - 5155 });
   wire(parent, isDdMemLdAny.out, isDdMemAnyBase.a);
   wire(parent, isDdMemExtra.out, isDdMemAnyBase.b);
   // DD CB also needs d-fetch / advance at PHASE4–5 (op is not yet in IR).
-  const isDdMemAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9440, y: pos.y - 5155 });
+  const isDdMemAny = buildOr(parent, { x: pos.x + 9440, y: pos.y - 5155 });
   wire(parent, isDdMemAnyBase.out, isDdMemAny.a);
   wire(parent, ddCbMode.q[0]!, isDdMemAny.b);
 
-  const ddDispReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 5220 });
+  const ddDispReadNow = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 5220 });
   wire(parent, isDdMemAny.out, ddDispReadNow.a);
   tieToLabel('PHASE4', ddDispReadNow.b, { x: pos.x + 9320, y: pos.y - 5220 });
   tieToLabel('DDDISP_READ_NOW', ddDispReadNow.out, { x: pos.x + 9520, y: pos.y - 5220 }); // anchor — ixDisp.we, ram.oe
 
-  const ddDispAdvRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 5190 });
+  const ddDispAdvRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 5190 });
   wire(parent, isDdMemAny.out, ddDispAdvRaw.a);
   tieToLabel('PHASE5', ddDispAdvRaw.b, { x: pos.x + 9320, y: pos.y - 5190 });
-  const notDdDispReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 5205 });
+  const notDdDispReadNow = buildNot(parent, { x: pos.x + 9460, y: pos.y - 5205 });
   wire(parent, ddDispReadNow.out, notDdDispReadNow.in);
-  const ddDispAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 5190 });
+  const ddDispAdvanceNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 5190 });
   wire(parent, ddDispAdvRaw.out, ddDispAdvanceNow.a);
   wire(parent, notDdDispReadNow.out, ddDispAdvanceNow.b);
   tieToLabel('DDDISP_ADVANCE_NOW', ddDispAdvanceNow.out, { x: pos.x + 9600, y: pos.y - 5190 }); // anchor — pcHold
 
   // PHASE6 mem R/W @ IX+d (LD r,(IX+d) / LD (IX+d),r) — exclude PHASE5.
-  const notDdDispAdvanceNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 5175 });
+  const notDdDispAdvanceNow = buildNot(parent, { x: pos.x + 9460, y: pos.y - 5175 });
   wire(parent, ddDispAdvanceNow.out, notDdDispAdvanceNow.in);
-  const ddMemLdReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 5160 });
+  const ddMemLdReadRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 5160 });
   wire(parent, isDdMemLdRead.out, ddMemLdReadRaw.a);
   tieToLabel('PHASE6', ddMemLdReadRaw.b, { x: pos.x + 9320, y: pos.y - 5160 });
-  const ddMemLdReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 5160 });
+  const ddMemLdReadNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 5160 });
   wire(parent, ddMemLdReadRaw.out, ddMemLdReadNow.a);
   wire(parent, notDdDispAdvanceNow.out, ddMemLdReadNow.b);
   tieToLabel('DDMEMLD_READ_NOW', ddMemLdReadNow.out, { x: pos.x + 9600, y: pos.y - 5160 }); // anchor — ram.oe, addr, reg WE
 
-  const ddMemLdWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 5130 });
+  const ddMemLdWriteRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 5130 });
   wire(parent, isDdMemLdWrite.out, ddMemLdWriteRaw.a);
   tieToLabel('PHASE6', ddMemLdWriteRaw.b, { x: pos.x + 9320, y: pos.y - 5130 });
-  const ddMemLdWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 5130 });
+  const ddMemLdWriteNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 5130 });
   wire(parent, ddMemLdWriteRaw.out, ddMemLdWriteNow.a);
   wire(parent, notDdDispAdvanceNow.out, ddMemLdWriteNow.b);
   tieToLabel('DDMEMLD_WRITE_NOW', ddMemLdWriteNow.out, { x: pos.x + 9600, y: pos.y - 5130 }); // anchor — ram.we, addr, bus src
 
   // LD (IX+d),n — PHASE6 fetch n, PHASE7 write @ IX+d (+ advance past n).
-  const ddMemLdNImmRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 5100 });
+  const ddMemLdNImmRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 5100 });
   wire(parent, isDdMemLdN.out, ddMemLdNImmRaw.a);
   tieToLabel('PHASE6', ddMemLdNImmRaw.b, { x: pos.x + 9320, y: pos.y - 5100 });
-  const ddMemLdNImmReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 5100 });
+  const ddMemLdNImmReadNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 5100 });
   wire(parent, ddMemLdNImmRaw.out, ddMemLdNImmReadNow.a);
   wire(parent, notDdDispAdvanceNow.out, ddMemLdNImmReadNow.b);
   tieToLabel('DDMEMLDN_IMM_READ_NOW', ddMemLdNImmReadNow.out, { x: pos.x + 9600, y: pos.y - 5100 }); // anchor — ldIxDNImm.we, ram.oe
 
-  const notDdMemLdNImmReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 5085 });
+  const notDdMemLdNImmReadNow = buildNot(parent, { x: pos.x + 9460, y: pos.y - 5085 });
   wire(parent, ddMemLdNImmReadNow.out, notDdMemLdNImmReadNow.in);
-  const ddMemLdNWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 5070 });
+  const ddMemLdNWriteRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 5070 });
   wire(parent, isDdMemLdN.out, ddMemLdNWriteRaw.a);
   tieToLabel('PHASE7', ddMemLdNWriteRaw.b, { x: pos.x + 9320, y: pos.y - 5070 });
-  const ddMemLdNWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 5070 });
+  const ddMemLdNWriteNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 5070 });
   wire(parent, ddMemLdNWriteRaw.out, ddMemLdNWriteNow.a);
   wire(parent, notDdMemLdNImmReadNow.out, ddMemLdNWriteNow.b);
   tieToLabel('DDMEMLDN_WRITE_NOW', ddMemLdNWriteNow.out, { x: pos.x + 9600, y: pos.y - 5070 }); // anchor — ram.we, addr, pcHold, bus
 
   // INC/DEC (IX+d) — PHASE6 read → hlMemTemp @ IX+d; PHASE7 write R8RESULT
   // (unprefixed HLMEM_READ_NOW @ PHASE2 / INCDEC_HLMEM_NOW @ PHASE3, +4).
-  const ddMemIncDecReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 5045 });
+  const ddMemIncDecReadRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 5045 });
   wire(parent, isDdMemIncDec.out, ddMemIncDecReadRaw.a);
   tieToLabel('PHASE6', ddMemIncDecReadRaw.b, { x: pos.x + 9320, y: pos.y - 5045 });
-  const ddMemIncDecReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 5045 });
+  const ddMemIncDecReadNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 5045 });
   wire(parent, ddMemIncDecReadRaw.out, ddMemIncDecReadNow.a);
   wire(parent, notDdDispAdvanceNow.out, ddMemIncDecReadNow.b);
   tieToLabel('DDMEM_INCDEC_READ_NOW', ddMemIncDecReadNow.out, { x: pos.x + 9600, y: pos.y - 5045 }); // anchor — hlMemTemp.we, ram.oe, IXDISP_ADDR
 
-  const notDdMemIncDecReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 5030 });
+  const notDdMemIncDecReadNow = buildNot(parent, { x: pos.x + 9460, y: pos.y - 5030 });
   wire(parent, ddMemIncDecReadNow.out, notDdMemIncDecReadNow.in);
-  const ddMemIncDecWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 5015 });
+  const ddMemIncDecWriteRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 5015 });
   wire(parent, isDdMemIncDec.out, ddMemIncDecWriteRaw.a);
   tieToLabel('PHASE7', ddMemIncDecWriteRaw.b, { x: pos.x + 9320, y: pos.y - 5015 });
-  const ddMemIncDecWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 5015 });
+  const ddMemIncDecWriteNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 5015 });
   wire(parent, ddMemIncDecWriteRaw.out, ddMemIncDecWriteNow.a);
   wire(parent, notDdMemIncDecReadNow.out, ddMemIncDecWriteNow.b);
   tieToLabel('DDMEM_INCDEC_WRITE_NOW', ddMemIncDecWriteNow.out, { x: pos.x + 9600, y: pos.y - 5015 }); // anchor — ram.we, R8RESULT bus, F, IXDISP_ADDR
 
   // ALU A,(IX+d) — PHASE6 read @ IX+d onto BUS; commit A+F (hlNow @ PHASE2 +4).
-  const ddMemAluRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4990 });
+  const ddMemAluRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4990 });
   wire(parent, isDdMemAluZ.out, ddMemAluRaw.a);
   tieToLabel('PHASE6', ddMemAluRaw.b, { x: pos.x + 9320, y: pos.y - 4990 });
-  const ddMemAluNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4990 });
+  const ddMemAluNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4990 });
   wire(parent, ddMemAluRaw.out, ddMemAluNow.a);
   wire(parent, notDdDispAdvanceNow.out, ddMemAluNow.b);
   tieToLabel('DDMEM_ALU_NOW', ddMemAluNow.out, { x: pos.x + 9600, y: pos.y - 4990 }); // anchor — ram.oe, IXDISP_ADDR, aluAnyGroupNow
 
   // IX+d address only during mem R/W phases (not during d/n fetches @ PC).
-  const ddIxDispAddrRw = buildOr(parent, vcc3, gnd3, { x: pos.x + 9540, y: pos.y - 5145 });
+  const ddIxDispAddrRw = buildOr(parent, { x: pos.x + 9540, y: pos.y - 5145 });
   wire(parent, ddMemLdReadNow.out, ddIxDispAddrRw.a);
   wire(parent, ddMemLdWriteNow.out, ddIxDispAddrRw.b);
-  const ddIxDispAddrLd = buildOr(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 5130 });
+  const ddIxDispAddrLd = buildOr(parent, { x: pos.x + 9580, y: pos.y - 5130 });
   wire(parent, ddIxDispAddrRw.out, ddIxDispAddrLd.a);
   wire(parent, ddMemLdNWriteNow.out, ddIxDispAddrLd.b);
-  const ddIxDispAddrIncDec = buildOr(parent, vcc3, gnd3, { x: pos.x + 9540, y: pos.y - 5030 });
+  const ddIxDispAddrIncDec = buildOr(parent, { x: pos.x + 9540, y: pos.y - 5030 });
   wire(parent, ddMemIncDecReadNow.out, ddIxDispAddrIncDec.a);
   wire(parent, ddMemIncDecWriteNow.out, ddIxDispAddrIncDec.b);
-  const ddIxDispAddrExtra = buildOr(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 5010 });
+  const ddIxDispAddrExtra = buildOr(parent, { x: pos.x + 9580, y: pos.y - 5010 });
   wire(parent, ddIxDispAddrIncDec.out, ddIxDispAddrExtra.a);
   wire(parent, ddMemAluNow.out, ddIxDispAddrExtra.b);
-  const ddIxDispAddrBase = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 5070 });
+  const ddIxDispAddrBase = buildOr(parent, { x: pos.x + 9620, y: pos.y - 5070 });
   wire(parent, ddIxDispAddrLd.out, ddIxDispAddrBase.a);
   wire(parent, ddIxDispAddrExtra.out, ddIxDispAddrBase.b);
   // BIT / SETRES / CBROT (IX+d) — labels produced later near isCbX*Active.
-  const ddIxDispAddrBitSet = buildOr(parent, vcc3, gnd3, { x: pos.x + 9660, y: pos.y - 5070 });
+  const ddIxDispAddrBitSet = buildOr(parent, { x: pos.x + 9660, y: pos.y - 5070 });
   tieToLabel('BIT_IX_NOW', ddIxDispAddrBitSet.a, { x: pos.x + 9560, y: pos.y - 5050 });
   tieToLabel('SETRES_IX_READ_NOW', ddIxDispAddrBitSet.b, { x: pos.x + 9560, y: pos.y - 5030 });
-  const ddIxDispAddrSetW = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 5055 });
+  const ddIxDispAddrSetW = buildOr(parent, { x: pos.x + 9700, y: pos.y - 5055 });
   wire(parent, ddIxDispAddrBitSet.out, ddIxDispAddrSetW.a);
   tieToLabel('SETRES_IX_WRITE_NOW', ddIxDispAddrSetW.b, { x: pos.x + 9560, y: pos.y - 5010 });
-  const ddIxDispAddrRot = buildOr(parent, vcc3, gnd3, { x: pos.x + 9660, y: pos.y - 4990 });
+  const ddIxDispAddrRot = buildOr(parent, { x: pos.x + 9660, y: pos.y - 4990 });
   tieToLabel('CBROT_IX_READ_NOW', ddIxDispAddrRot.a, { x: pos.x + 9560, y: pos.y - 4990 });
   tieToLabel('CBROT_IX_WRITE_NOW', ddIxDispAddrRot.b, { x: pos.x + 9560, y: pos.y - 4970 });
-  const ddIxDispAddrCb = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 5020 });
+  const ddIxDispAddrCb = buildOr(parent, { x: pos.x + 9700, y: pos.y - 5020 });
   wire(parent, ddIxDispAddrSetW.out, ddIxDispAddrCb.a);
   wire(parent, ddIxDispAddrRot.out, ddIxDispAddrCb.b);
-  const ddIxDispAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9740, y: pos.y - 5070 });
+  const ddIxDispAddrNow = buildOr(parent, { x: pos.x + 9740, y: pos.y - 5070 });
   wire(parent, ddIxDispAddrBase.out, ddIxDispAddrNow.a);
   wire(parent, ddIxDispAddrCb.out, ddIxDispAddrNow.b);
   tieToLabel('IXDISP_ADDR_NOW', ddIxDispAddrNow.out, { x: pos.x + 9840, y: pos.y - 5070 }); // anchor — RAM addr mux
 
   // DD CB second IR-only op recapture @ PHASE6 (does NOT touch activePrefix).
   // Exclude PHASE5 d-advance (ring-counter transient).
-  const ddCbOpReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4960 });
+  const ddCbOpReadRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4960 });
   wire(parent, ddCbMode.q[0]!, ddCbOpReadRaw.a);
   tieToLabel('PHASE6', ddCbOpReadRaw.b, { x: pos.x + 9320, y: pos.y - 4960 });
-  const ddCbOpReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4960 });
+  const ddCbOpReadNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4960 });
   wire(parent, ddCbOpReadRaw.out, ddCbOpReadNow.a);
   wire(parent, notDdDispAdvanceNow.out, ddCbOpReadNow.b);
   tieToLabel('DDCB_OP_READ_NOW', ddCbOpReadNow.out, { x: pos.x + 9600, y: pos.y - 4960 }); // anchor — ir.we, ram.oe
   // Advance past op on PHASE9 (moved from PHASE7 — SET/RES/rot need PHASE7
   // read + PHASE8 write; BIT still commits @ PHASE7 and advances later).
   // Exclude adjacent PHASE8 write (ring-counter transient).
-  const ddCbOpAdvanceRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4935 });
+  const ddCbOpAdvanceRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4935 });
   wire(parent, ddCbMode.q[0]!, ddCbOpAdvanceRaw.a);
   tieToLabel('PHASE9', ddCbOpAdvanceRaw.b, { x: pos.x + 9320, y: pos.y - 4935 });
-  const notDdCbPhase8Write = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4945 });
+  const notDdCbPhase8Write = buildNot(parent, { x: pos.x + 9460, y: pos.y - 4945 });
   tieToLabel('DDCB_PHASE8_WRITE_ANY', notDdCbPhase8Write.in, { x: pos.x + 9320, y: pos.y - 4945 });
-  const ddCbOpAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4935 });
+  const ddCbOpAdvanceNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4935 });
   wire(parent, ddCbOpAdvanceRaw.out, ddCbOpAdvanceNow.a);
   wire(parent, notDdCbPhase8Write.out, ddCbOpAdvanceNow.b);
   tieToLabel('DDCB_OP_ADVANCE_NOW', ddCbOpAdvanceNow.out, { x: pos.x + 9600, y: pos.y - 4935 }); // anchor — pcHold
@@ -2975,208 +2975,208 @@ export function buildZ80Cpu(
     { y: dec.y[7]!, label: 'DDMEMLD_WE_A_NOW' },
   ];
   ddMemLdWeSpecs.forEach(({ y, label }, i) => {
-    const gate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9540, y: pos.y - 5220 - i * 22 });
+    const gate = buildAnd(parent, { x: pos.x + 9540, y: pos.y - 5220 - i * 22 });
     wire(parent, ddMemLdReadNow.out, gate.a);
     wire(parent, y, gate.b);
     tieToLabel(label, gate.out, { x: pos.x + 9640, y: pos.y - 5220 - i * 22 });
   });
 
   // FD (IY+d) mem slice — mechanical mirror of DD above.
-  const isFdMemLdReadX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 4860 });
+  const isFdMemLdReadX = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 4860 });
   wire(parent, isFdActive, isFdMemLdReadX.a);
   wire(parent, dec.x[1]!, isFdMemLdReadX.b);
-  const isFdMemLdReadZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4860 });
+  const isFdMemLdReadZ = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4860 });
   wire(parent, isFdMemLdReadX.out, isFdMemLdReadZ.a);
   wire(parent, dec.z[6]!, isFdMemLdReadZ.b);
-  const isFdMemLdRead = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4860 });
+  const isFdMemLdRead = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4860 });
   wire(parent, isFdMemLdReadZ.out, isFdMemLdRead.a);
   wire(parent, notDdY6.out, isFdMemLdRead.b);
   tieToLabel('IS_FDMEMLD_READ', isFdMemLdRead.out, { x: pos.x + 9400, y: pos.y - 4860 });
 
-  const isFdMemLdWriteX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 4830 });
+  const isFdMemLdWriteX = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 4830 });
   wire(parent, isFdActive, isFdMemLdWriteX.a);
   wire(parent, dec.x[1]!, isFdMemLdWriteX.b);
-  const isFdMemLdWriteY = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4830 });
+  const isFdMemLdWriteY = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4830 });
   wire(parent, isFdMemLdWriteX.out, isFdMemLdWriteY.a);
   wire(parent, dec.y[6]!, isFdMemLdWriteY.b);
-  const isFdMemLdWrite = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4830 });
+  const isFdMemLdWrite = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4830 });
   wire(parent, isFdMemLdWriteY.out, isFdMemLdWrite.a);
   wire(parent, notDdZ6.out, isFdMemLdWrite.b);
   tieToLabel('IS_FDMEMLD_WRITE', isFdMemLdWrite.out, { x: pos.x + 9400, y: pos.y - 4830 });
 
-  const isFdMemLdNX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 4800 });
+  const isFdMemLdNX = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 4800 });
   wire(parent, isFdActive, isFdMemLdNX.a);
   wire(parent, dec.x[0]!, isFdMemLdNX.b);
-  const isFdMemLdNZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4800 });
+  const isFdMemLdNZ = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4800 });
   wire(parent, isFdMemLdNX.out, isFdMemLdNZ.a);
   wire(parent, dec.z[6]!, isFdMemLdNZ.b);
-  const isFdMemLdN = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4800 });
+  const isFdMemLdN = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4800 });
   wire(parent, isFdMemLdNZ.out, isFdMemLdN.a);
   wire(parent, dec.y[6]!, isFdMemLdN.b);
   tieToLabel('IS_FDMEMLD_N', isFdMemLdN.out, { x: pos.x + 9400, y: pos.y - 4800 });
 
-  const isFdMemIncDecX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 4775 });
+  const isFdMemIncDecX = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 4775 });
   wire(parent, isFdActive, isFdMemIncDecX.a);
   wire(parent, dec.x[0]!, isFdMemIncDecX.b);
-  const isFdMemIncDecXZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4775 });
+  const isFdMemIncDecXZ = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4775 });
   wire(parent, isFdMemIncDecX.out, isFdMemIncDecXZ.a);
   wire(parent, isDdMemIncDecZ.out, isFdMemIncDecXZ.b);
-  const isFdMemIncDec = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4775 });
+  const isFdMemIncDec = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4775 });
   wire(parent, isFdMemIncDecXZ.out, isFdMemIncDec.a);
   wire(parent, dec.y[6]!, isFdMemIncDec.b);
   tieToLabel('IS_FDMEM_INCDEC', isFdMemIncDec.out, { x: pos.x + 9400, y: pos.y - 4775 });
-  const isFdMemIsDec = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4760 });
+  const isFdMemIsDec = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 4760 });
   wire(parent, isFdMemIncDec.out, isFdMemIsDec.a);
   wire(parent, dec.z[5]!, isFdMemIsDec.b);
   tieToLabel('FDMEM_IS_DEC', isFdMemIsDec.out, { x: pos.x + 9440, y: pos.y - 4760 });
 
-  const isFdMemAlu = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 4750 });
+  const isFdMemAlu = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 4750 });
   wire(parent, isFdActive, isFdMemAlu.a);
   wire(parent, dec.x[2]!, isFdMemAlu.b);
-  const isFdMemAluZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4750 });
+  const isFdMemAluZ = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4750 });
   wire(parent, isFdMemAlu.out, isFdMemAluZ.a);
   wire(parent, dec.z[6]!, isFdMemAluZ.b);
   tieToLabel('IS_FDMEM_ALU', isFdMemAluZ.out, { x: pos.x + 9400, y: pos.y - 4750 });
 
-  const isFdMemLdRw = buildOr(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4845 });
+  const isFdMemLdRw = buildOr(parent, { x: pos.x + 9340, y: pos.y - 4845 });
   wire(parent, isFdMemLdRead.out, isFdMemLdRw.a);
   wire(parent, isFdMemLdWrite.out, isFdMemLdRw.b);
-  const isFdMemLdAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 4830 });
+  const isFdMemLdAny = buildOr(parent, { x: pos.x + 9380, y: pos.y - 4830 });
   wire(parent, isFdMemLdRw.out, isFdMemLdAny.a);
   wire(parent, isFdMemLdN.out, isFdMemLdAny.b);
-  const isFdMemExtra = buildOr(parent, vcc3, gnd3, { x: pos.x + 9360, y: pos.y - 4765 });
+  const isFdMemExtra = buildOr(parent, { x: pos.x + 9360, y: pos.y - 4765 });
   wire(parent, isFdMemIncDec.out, isFdMemExtra.a);
   wire(parent, isFdMemAluZ.out, isFdMemExtra.b);
-  const isFdMemAnyBase = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 4795 });
+  const isFdMemAnyBase = buildOr(parent, { x: pos.x + 9400, y: pos.y - 4795 });
   wire(parent, isFdMemLdAny.out, isFdMemAnyBase.a);
   wire(parent, isFdMemExtra.out, isFdMemAnyBase.b);
-  const isFdMemAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9440, y: pos.y - 4795 });
+  const isFdMemAny = buildOr(parent, { x: pos.x + 9440, y: pos.y - 4795 });
   wire(parent, isFdMemAnyBase.out, isFdMemAny.a);
   wire(parent, fdCbMode.q[0]!, isFdMemAny.b);
 
-  const fdDispReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4860 });
+  const fdDispReadNow = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4860 });
   wire(parent, isFdMemAny.out, fdDispReadNow.a);
   tieToLabel('PHASE4', fdDispReadNow.b, { x: pos.x + 9320, y: pos.y - 4860 });
   tieToLabel('FDDISP_READ_NOW', fdDispReadNow.out, { x: pos.x + 9520, y: pos.y - 4860 });
 
-  const fdDispAdvRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4830 });
+  const fdDispAdvRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4830 });
   wire(parent, isFdMemAny.out, fdDispAdvRaw.a);
   tieToLabel('PHASE5', fdDispAdvRaw.b, { x: pos.x + 9320, y: pos.y - 4830 });
-  const notFdDispReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4845 });
+  const notFdDispReadNow = buildNot(parent, { x: pos.x + 9460, y: pos.y - 4845 });
   wire(parent, fdDispReadNow.out, notFdDispReadNow.in);
-  const fdDispAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4830 });
+  const fdDispAdvanceNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4830 });
   wire(parent, fdDispAdvRaw.out, fdDispAdvanceNow.a);
   wire(parent, notFdDispReadNow.out, fdDispAdvanceNow.b);
   tieToLabel('FDDISP_ADVANCE_NOW', fdDispAdvanceNow.out, { x: pos.x + 9600, y: pos.y - 4830 });
 
-  const notFdDispAdvanceNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4815 });
+  const notFdDispAdvanceNow = buildNot(parent, { x: pos.x + 9460, y: pos.y - 4815 });
   wire(parent, fdDispAdvanceNow.out, notFdDispAdvanceNow.in);
-  const fdMemLdReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4800 });
+  const fdMemLdReadRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4800 });
   wire(parent, isFdMemLdRead.out, fdMemLdReadRaw.a);
   tieToLabel('PHASE6', fdMemLdReadRaw.b, { x: pos.x + 9320, y: pos.y - 4800 });
-  const fdMemLdReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4800 });
+  const fdMemLdReadNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4800 });
   wire(parent, fdMemLdReadRaw.out, fdMemLdReadNow.a);
   wire(parent, notFdDispAdvanceNow.out, fdMemLdReadNow.b);
   tieToLabel('FDMEMLD_READ_NOW', fdMemLdReadNow.out, { x: pos.x + 9600, y: pos.y - 4800 });
 
-  const fdMemLdWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4770 });
+  const fdMemLdWriteRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4770 });
   wire(parent, isFdMemLdWrite.out, fdMemLdWriteRaw.a);
   tieToLabel('PHASE6', fdMemLdWriteRaw.b, { x: pos.x + 9320, y: pos.y - 4770 });
-  const fdMemLdWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4770 });
+  const fdMemLdWriteNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4770 });
   wire(parent, fdMemLdWriteRaw.out, fdMemLdWriteNow.a);
   wire(parent, notFdDispAdvanceNow.out, fdMemLdWriteNow.b);
   tieToLabel('FDMEMLD_WRITE_NOW', fdMemLdWriteNow.out, { x: pos.x + 9600, y: pos.y - 4770 });
 
-  const fdMemLdNImmRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4740 });
+  const fdMemLdNImmRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4740 });
   wire(parent, isFdMemLdN.out, fdMemLdNImmRaw.a);
   tieToLabel('PHASE6', fdMemLdNImmRaw.b, { x: pos.x + 9320, y: pos.y - 4740 });
-  const fdMemLdNImmReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4740 });
+  const fdMemLdNImmReadNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4740 });
   wire(parent, fdMemLdNImmRaw.out, fdMemLdNImmReadNow.a);
   wire(parent, notFdDispAdvanceNow.out, fdMemLdNImmReadNow.b);
   tieToLabel('FDMEMLDN_IMM_READ_NOW', fdMemLdNImmReadNow.out, { x: pos.x + 9600, y: pos.y - 4740 });
 
-  const notFdMemLdNImmReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4725 });
+  const notFdMemLdNImmReadNow = buildNot(parent, { x: pos.x + 9460, y: pos.y - 4725 });
   wire(parent, fdMemLdNImmReadNow.out, notFdMemLdNImmReadNow.in);
-  const fdMemLdNWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4710 });
+  const fdMemLdNWriteRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4710 });
   wire(parent, isFdMemLdN.out, fdMemLdNWriteRaw.a);
   tieToLabel('PHASE7', fdMemLdNWriteRaw.b, { x: pos.x + 9320, y: pos.y - 4710 });
-  const fdMemLdNWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4710 });
+  const fdMemLdNWriteNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4710 });
   wire(parent, fdMemLdNWriteRaw.out, fdMemLdNWriteNow.a);
   wire(parent, notFdMemLdNImmReadNow.out, fdMemLdNWriteNow.b);
   tieToLabel('FDMEMLDN_WRITE_NOW', fdMemLdNWriteNow.out, { x: pos.x + 9600, y: pos.y - 4710 });
 
-  const fdMemIncDecReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4685 });
+  const fdMemIncDecReadRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4685 });
   wire(parent, isFdMemIncDec.out, fdMemIncDecReadRaw.a);
   tieToLabel('PHASE6', fdMemIncDecReadRaw.b, { x: pos.x + 9320, y: pos.y - 4685 });
-  const fdMemIncDecReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4685 });
+  const fdMemIncDecReadNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4685 });
   wire(parent, fdMemIncDecReadRaw.out, fdMemIncDecReadNow.a);
   wire(parent, notFdDispAdvanceNow.out, fdMemIncDecReadNow.b);
   tieToLabel('FDMEM_INCDEC_READ_NOW', fdMemIncDecReadNow.out, { x: pos.x + 9600, y: pos.y - 4685 });
 
-  const notFdMemIncDecReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4670 });
+  const notFdMemIncDecReadNow = buildNot(parent, { x: pos.x + 9460, y: pos.y - 4670 });
   wire(parent, fdMemIncDecReadNow.out, notFdMemIncDecReadNow.in);
-  const fdMemIncDecWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4655 });
+  const fdMemIncDecWriteRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4655 });
   wire(parent, isFdMemIncDec.out, fdMemIncDecWriteRaw.a);
   tieToLabel('PHASE7', fdMemIncDecWriteRaw.b, { x: pos.x + 9320, y: pos.y - 4655 });
-  const fdMemIncDecWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4655 });
+  const fdMemIncDecWriteNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4655 });
   wire(parent, fdMemIncDecWriteRaw.out, fdMemIncDecWriteNow.a);
   wire(parent, notFdMemIncDecReadNow.out, fdMemIncDecWriteNow.b);
   tieToLabel('FDMEM_INCDEC_WRITE_NOW', fdMemIncDecWriteNow.out, { x: pos.x + 9600, y: pos.y - 4655 });
 
-  const fdMemAluRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4630 });
+  const fdMemAluRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4630 });
   wire(parent, isFdMemAluZ.out, fdMemAluRaw.a);
   tieToLabel('PHASE6', fdMemAluRaw.b, { x: pos.x + 9320, y: pos.y - 4630 });
-  const fdMemAluNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4630 });
+  const fdMemAluNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4630 });
   wire(parent, fdMemAluRaw.out, fdMemAluNow.a);
   wire(parent, notFdDispAdvanceNow.out, fdMemAluNow.b);
   tieToLabel('FDMEM_ALU_NOW', fdMemAluNow.out, { x: pos.x + 9600, y: pos.y - 4630 });
 
-  const fdIyDispAddrRw = buildOr(parent, vcc3, gnd3, { x: pos.x + 9540, y: pos.y - 4785 });
+  const fdIyDispAddrRw = buildOr(parent, { x: pos.x + 9540, y: pos.y - 4785 });
   wire(parent, fdMemLdReadNow.out, fdIyDispAddrRw.a);
   wire(parent, fdMemLdWriteNow.out, fdIyDispAddrRw.b);
-  const fdIyDispAddrLd = buildOr(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4770 });
+  const fdIyDispAddrLd = buildOr(parent, { x: pos.x + 9580, y: pos.y - 4770 });
   wire(parent, fdIyDispAddrRw.out, fdIyDispAddrLd.a);
   wire(parent, fdMemLdNWriteNow.out, fdIyDispAddrLd.b);
-  const fdIyDispAddrIncDec = buildOr(parent, vcc3, gnd3, { x: pos.x + 9540, y: pos.y - 4670 });
+  const fdIyDispAddrIncDec = buildOr(parent, { x: pos.x + 9540, y: pos.y - 4670 });
   wire(parent, fdMemIncDecReadNow.out, fdIyDispAddrIncDec.a);
   wire(parent, fdMemIncDecWriteNow.out, fdIyDispAddrIncDec.b);
-  const fdIyDispAddrExtra = buildOr(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4650 });
+  const fdIyDispAddrExtra = buildOr(parent, { x: pos.x + 9580, y: pos.y - 4650 });
   wire(parent, fdIyDispAddrIncDec.out, fdIyDispAddrExtra.a);
   wire(parent, fdMemAluNow.out, fdIyDispAddrExtra.b);
-  const fdIyDispAddrBase = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4710 });
+  const fdIyDispAddrBase = buildOr(parent, { x: pos.x + 9620, y: pos.y - 4710 });
   wire(parent, fdIyDispAddrLd.out, fdIyDispAddrBase.a);
   wire(parent, fdIyDispAddrExtra.out, fdIyDispAddrBase.b);
-  const fdIyDispAddrBitSet = buildOr(parent, vcc3, gnd3, { x: pos.x + 9660, y: pos.y - 4710 });
+  const fdIyDispAddrBitSet = buildOr(parent, { x: pos.x + 9660, y: pos.y - 4710 });
   tieToLabel('BIT_IY_NOW', fdIyDispAddrBitSet.a, { x: pos.x + 9560, y: pos.y - 4690 });
   tieToLabel('SETRES_IY_READ_NOW', fdIyDispAddrBitSet.b, { x: pos.x + 9560, y: pos.y - 4670 });
-  const fdIyDispAddrSetW = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 4695 });
+  const fdIyDispAddrSetW = buildOr(parent, { x: pos.x + 9700, y: pos.y - 4695 });
   wire(parent, fdIyDispAddrBitSet.out, fdIyDispAddrSetW.a);
   tieToLabel('SETRES_IY_WRITE_NOW', fdIyDispAddrSetW.b, { x: pos.x + 9560, y: pos.y - 4650 });
-  const fdIyDispAddrRot = buildOr(parent, vcc3, gnd3, { x: pos.x + 9660, y: pos.y - 4630 });
+  const fdIyDispAddrRot = buildOr(parent, { x: pos.x + 9660, y: pos.y - 4630 });
   tieToLabel('CBROT_IY_READ_NOW', fdIyDispAddrRot.a, { x: pos.x + 9560, y: pos.y - 4630 });
   tieToLabel('CBROT_IY_WRITE_NOW', fdIyDispAddrRot.b, { x: pos.x + 9560, y: pos.y - 4610 });
-  const fdIyDispAddrCb = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 4660 });
+  const fdIyDispAddrCb = buildOr(parent, { x: pos.x + 9700, y: pos.y - 4660 });
   wire(parent, fdIyDispAddrSetW.out, fdIyDispAddrCb.a);
   wire(parent, fdIyDispAddrRot.out, fdIyDispAddrCb.b);
-  const fdIyDispAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9740, y: pos.y - 4710 });
+  const fdIyDispAddrNow = buildOr(parent, { x: pos.x + 9740, y: pos.y - 4710 });
   wire(parent, fdIyDispAddrBase.out, fdIyDispAddrNow.a);
   wire(parent, fdIyDispAddrCb.out, fdIyDispAddrNow.b);
   tieToLabel('IYDISP_ADDR_NOW', fdIyDispAddrNow.out, { x: pos.x + 9840, y: pos.y - 4710 });
 
   // FD CB second IR-only op recapture @ PHASE6 (mirror of DDCB_OP_READ_NOW).
-  const fdCbOpReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4600 });
+  const fdCbOpReadRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4600 });
   wire(parent, fdCbMode.q[0]!, fdCbOpReadRaw.a);
   tieToLabel('PHASE6', fdCbOpReadRaw.b, { x: pos.x + 9320, y: pos.y - 4600 });
-  const fdCbOpReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4600 });
+  const fdCbOpReadNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4600 });
   wire(parent, fdCbOpReadRaw.out, fdCbOpReadNow.a);
   wire(parent, notFdDispAdvanceNow.out, fdCbOpReadNow.b);
   tieToLabel('FDCB_OP_READ_NOW', fdCbOpReadNow.out, { x: pos.x + 9600, y: pos.y - 4600 });
-  const fdCbOpAdvanceRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4575 });
+  const fdCbOpAdvanceRaw = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4575 });
   wire(parent, fdCbMode.q[0]!, fdCbOpAdvanceRaw.a);
   tieToLabel('PHASE9', fdCbOpAdvanceRaw.b, { x: pos.x + 9320, y: pos.y - 4575 });
-  const notFdCbPhase8Write = buildNot(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4585 });
+  const notFdCbPhase8Write = buildNot(parent, { x: pos.x + 9460, y: pos.y - 4585 });
   tieToLabel('FDCB_PHASE8_WRITE_ANY', notFdCbPhase8Write.in, { x: pos.x + 9320, y: pos.y - 4585 });
-  const fdCbOpAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4575 });
+  const fdCbOpAdvanceNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 4575 });
   wire(parent, fdCbOpAdvanceRaw.out, fdCbOpAdvanceNow.a);
   wire(parent, notFdCbPhase8Write.out, fdCbOpAdvanceNow.b);
   tieToLabel('FDCB_OP_ADVANCE_NOW', fdCbOpAdvanceNow.out, { x: pos.x + 9600, y: pos.y - 4575 });
@@ -3191,7 +3191,7 @@ export function buildZ80Cpu(
     { y: dec.y[7]!, label: 'FDMEMLD_WE_A_NOW' },
   ];
   fdMemLdWeSpecs.forEach(({ y, label }, i) => {
-    const gate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9540, y: pos.y - 4860 - i * 22 });
+    const gate = buildAnd(parent, { x: pos.x + 9540, y: pos.y - 4860 - i * 22 });
     wire(parent, fdMemLdReadNow.out, gate.a);
     wire(parent, y, gate.b);
     tieToLabel(label, gate.out, { x: pos.x + 9640, y: pos.y - 4860 - i * 22 });
@@ -3202,140 +3202,140 @@ export function buildZ80Cpu(
   // under DD/FD). Bodies @ PHASE4 (prefix burns 2–3). Skip under
   // ddCbMode/fdCbMode; do not remap (HL)/y=6/z=6 (already (IX+d)/(IY+d)).
   // See "DD: IX" / "FD: IY" in ARCHITECTURE.md.
-  const notDdCbMode = buildNot(parent, vcc3, gnd3, { x: pos.x + 9180, y: pos.y - 4520 });
+  const notDdCbMode = buildNot(parent, { x: pos.x + 9180, y: pos.y - 4520 });
   wire(parent, ddCbMode.q[0]!, notDdCbMode.in);
-  const notFdCbMode = buildNot(parent, vcc3, gnd3, { x: pos.x + 9180, y: pos.y - 4500 });
+  const notFdCbMode = buildNot(parent, { x: pos.x + 9180, y: pos.y - 4500 });
   wire(parent, fdCbMode.q[0]!, notFdCbMode.in);
 
-  const ddHl8Y45 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 4520 });
+  const ddHl8Y45 = buildOr(parent, { x: pos.x + 9200, y: pos.y - 4520 });
   wire(parent, dec.y[4]!, ddHl8Y45.a);
   wire(parent, dec.y[5]!, ddHl8Y45.b);
-  const ddHl8Z45 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 4500 });
+  const ddHl8Z45 = buildOr(parent, { x: pos.x + 9200, y: pos.y - 4500 });
   wire(parent, dec.z[4]!, ddHl8Z45.a);
   wire(parent, dec.z[5]!, ddHl8Z45.b);
-  const ddHl8Yz45 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9240, y: pos.y - 4510 });
+  const ddHl8Yz45 = buildOr(parent, { x: pos.x + 9240, y: pos.y - 4510 });
   wire(parent, ddHl8Y45.out, ddHl8Yz45.a);
   wire(parent, ddHl8Z45.out, ddHl8Yz45.b);
 
   // isDdHl8Ld = isDdActive ∧ ¬ddCbMode ∧ x[1] ∧ ¬y[6] ∧ ¬z[6] ∧ (y[4]∨y[5]∨z[4]∨z[5])
-  const isDdHl8LdBase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4520 });
+  const isDdHl8LdBase = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4520 });
   wire(parent, isDdActive, isDdHl8LdBase.a);
   wire(parent, notDdCbMode.out, isDdHl8LdBase.b);
-  const isDdHl8LdX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4520 });
+  const isDdHl8LdX = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4520 });
   wire(parent, isDdHl8LdBase.out, isDdHl8LdX.a);
   wire(parent, dec.x[1]!, isDdHl8LdX.b);
-  const isDdHl8LdNy = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4520 });
+  const isDdHl8LdNy = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 4520 });
   wire(parent, isDdHl8LdX.out, isDdHl8LdNy.a);
   wire(parent, notDdY6.out, isDdHl8LdNy.b);
-  const isDdHl8LdNz = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 4520 });
+  const isDdHl8LdNz = buildAnd(parent, { x: pos.x + 9380, y: pos.y - 4520 });
   wire(parent, isDdHl8LdNy.out, isDdHl8LdNz.a);
   wire(parent, notDdZ6.out, isDdHl8LdNz.b);
-  const isDdHl8Ld = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4520 });
+  const isDdHl8Ld = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4520 });
   wire(parent, isDdHl8LdNz.out, isDdHl8Ld.a);
   wire(parent, ddHl8Yz45.out, isDdHl8Ld.b);
   tieToLabel('IS_DDIX_HL8_LD', isDdHl8Ld.out, { x: pos.x + 9520, y: pos.y - 4520 });
 
   // isDdHl8Imm = isDdActive ∧ ¬ddCbMode ∧ x[0] ∧ z[6] ∧ (y[4]∨y[5])
-  const isDdHl8ImmBase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4490 });
+  const isDdHl8ImmBase = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4490 });
   wire(parent, isDdActive, isDdHl8ImmBase.a);
   wire(parent, notDdCbMode.out, isDdHl8ImmBase.b);
-  const isDdHl8ImmX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4490 });
+  const isDdHl8ImmX = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4490 });
   wire(parent, isDdHl8ImmBase.out, isDdHl8ImmX.a);
   wire(parent, dec.x[0]!, isDdHl8ImmX.b);
-  const isDdHl8ImmZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4490 });
+  const isDdHl8ImmZ = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 4490 });
   wire(parent, isDdHl8ImmX.out, isDdHl8ImmZ.a);
   wire(parent, dec.z[6]!, isDdHl8ImmZ.b);
-  const isDdHl8Imm = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 4490 });
+  const isDdHl8Imm = buildAnd(parent, { x: pos.x + 9380, y: pos.y - 4490 });
   wire(parent, isDdHl8ImmZ.out, isDdHl8Imm.a);
   wire(parent, ddHl8Y45.out, isDdHl8Imm.b);
   tieToLabel('IS_DDIX_HL8_IMM', isDdHl8Imm.out, { x: pos.x + 9520, y: pos.y - 4490 });
 
   // isDdHl8Inc = isDdActive ∧ ¬ddCbMode ∧ x[0] ∧ (z[4]∨z[5]) ∧ (y[4]∨y[5])
-  const isDdHl8IncBase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4460 });
+  const isDdHl8IncBase = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4460 });
   wire(parent, isDdActive, isDdHl8IncBase.a);
   wire(parent, notDdCbMode.out, isDdHl8IncBase.b);
-  const isDdHl8IncX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4460 });
+  const isDdHl8IncX = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4460 });
   wire(parent, isDdHl8IncBase.out, isDdHl8IncX.a);
   wire(parent, dec.x[0]!, isDdHl8IncX.b);
-  const isDdHl8IncZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4460 });
+  const isDdHl8IncZ = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 4460 });
   wire(parent, isDdHl8IncX.out, isDdHl8IncZ.a);
   wire(parent, ddHl8Z45.out, isDdHl8IncZ.b);
-  const isDdHl8Inc = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 4460 });
+  const isDdHl8Inc = buildAnd(parent, { x: pos.x + 9380, y: pos.y - 4460 });
   wire(parent, isDdHl8IncZ.out, isDdHl8Inc.a);
   wire(parent, ddHl8Y45.out, isDdHl8Inc.b);
   tieToLabel('IS_DDIX_HL8_INC', isDdHl8Inc.out, { x: pos.x + 9520, y: pos.y - 4460 });
-  const isDdHl8IsDec = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4445 });
+  const isDdHl8IsDec = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4445 });
   wire(parent, isDdHl8Inc.out, isDdHl8IsDec.a);
   wire(parent, dec.z[5]!, isDdHl8IsDec.b);
   tieToLabel('DDIX_HL8_IS_DEC', isDdHl8IsDec.out, { x: pos.x + 9520, y: pos.y - 4445 });
 
   // isDdHl8Alu = isDdActive ∧ ¬ddCbMode ∧ x[2] ∧ (z[4]∨z[5])
-  const isDdHl8AluBase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4430 });
+  const isDdHl8AluBase = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4430 });
   wire(parent, isDdActive, isDdHl8AluBase.a);
   wire(parent, notDdCbMode.out, isDdHl8AluBase.b);
-  const isDdHl8AluX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4430 });
+  const isDdHl8AluX = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4430 });
   wire(parent, isDdHl8AluBase.out, isDdHl8AluX.a);
   wire(parent, dec.x[2]!, isDdHl8AluX.b);
-  const isDdHl8Alu = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4430 });
+  const isDdHl8Alu = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 4430 });
   wire(parent, isDdHl8AluX.out, isDdHl8Alu.a);
   wire(parent, ddHl8Z45.out, isDdHl8Alu.b);
   tieToLabel('IS_DDIX_HL8_ALU', isDdHl8Alu.out, { x: pos.x + 9520, y: pos.y - 4430 });
 
   // PHASE4 bodies (imm also PHASE5 advance).
-  const ddIxHl8LdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4520 });
+  const ddIxHl8LdNow = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4520 });
   wire(parent, isDdHl8Ld.out, ddIxHl8LdNow.a);
   tieToLabel('PHASE4', ddIxHl8LdNow.b, { x: pos.x + 9360, y: pos.y - 4520 });
   tieToLabel('DDIX_HL8_LD_NOW', ddIxHl8LdNow.out, { x: pos.x + 9600, y: pos.y - 4520 });
 
-  const ddIxHl8ImmReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4490 });
+  const ddIxHl8ImmReadNow = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4490 });
   wire(parent, isDdHl8Imm.out, ddIxHl8ImmReadNow.a);
   tieToLabel('PHASE4', ddIxHl8ImmReadNow.b, { x: pos.x + 9360, y: pos.y - 4490 });
   tieToLabel('DDIX_HL8_IMM_READ_NOW', ddIxHl8ImmReadNow.out, { x: pos.x + 9600, y: pos.y - 4490 });
-  const ddIxHl8ImmAdvRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4475 });
+  const ddIxHl8ImmAdvRaw = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4475 });
   wire(parent, isDdHl8Imm.out, ddIxHl8ImmAdvRaw.a);
   tieToLabel('PHASE5', ddIxHl8ImmAdvRaw.b, { x: pos.x + 9360, y: pos.y - 4475 });
-  const notDdIxHl8ImmReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4482 });
+  const notDdIxHl8ImmReadNow = buildNot(parent, { x: pos.x + 9500, y: pos.y - 4482 });
   wire(parent, ddIxHl8ImmReadNow.out, notDdIxHl8ImmReadNow.in);
-  const ddIxHl8ImmAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9540, y: pos.y - 4475 });
+  const ddIxHl8ImmAdvanceNow = buildAnd(parent, { x: pos.x + 9540, y: pos.y - 4475 });
   wire(parent, ddIxHl8ImmAdvRaw.out, ddIxHl8ImmAdvanceNow.a);
   wire(parent, notDdIxHl8ImmReadNow.out, ddIxHl8ImmAdvanceNow.b);
   tieToLabel('DDIX_HL8_IMM_ADVANCE_NOW', ddIxHl8ImmAdvanceNow.out, { x: pos.x + 9680, y: pos.y - 4475 });
 
-  const ddIxHl8IncNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4460 });
+  const ddIxHl8IncNow = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4460 });
   wire(parent, isDdHl8Inc.out, ddIxHl8IncNow.a);
   tieToLabel('PHASE4', ddIxHl8IncNow.b, { x: pos.x + 9360, y: pos.y - 4460 });
   tieToLabel('DDIX_HL8_INC_NOW', ddIxHl8IncNow.out, { x: pos.x + 9600, y: pos.y - 4460 });
 
-  const ddIxHl8AluNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4430 });
+  const ddIxHl8AluNow = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4430 });
   wire(parent, isDdHl8Alu.out, ddIxHl8AluNow.a);
   tieToLabel('PHASE4', ddIxHl8AluNow.b, { x: pos.x + 9360, y: pos.y - 4430 });
   tieToLabel('DDIX_HL8_ALU_NOW', ddIxHl8AluNow.out, { x: pos.x + 9600, y: pos.y - 4430 });
 
   // Dest strobes — IXH/IXL never assert onto rH/rL WE.
-  const ddIxhLdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4520 });
+  const ddIxhLdNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4520 });
   wire(parent, ddIxHl8LdNow.out, ddIxhLdNow.a);
   wire(parent, dec.y[4]!, ddIxhLdNow.b);
-  const ddIxlLdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4505 });
+  const ddIxlLdNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4505 });
   wire(parent, ddIxHl8LdNow.out, ddIxlLdNow.a);
   wire(parent, dec.y[5]!, ddIxlLdNow.b);
-  const ddIxhImmNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4490 });
+  const ddIxhImmNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4490 });
   wire(parent, ddIxHl8ImmReadNow.out, ddIxhImmNow.a);
   wire(parent, dec.y[4]!, ddIxhImmNow.b);
-  const ddIxlImmNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4475 });
+  const ddIxlImmNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4475 });
   wire(parent, ddIxHl8ImmReadNow.out, ddIxlImmNow.a);
   wire(parent, dec.y[5]!, ddIxlImmNow.b);
-  const ddIxhBusNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4505 });
+  const ddIxhBusNow = buildOr(parent, { x: pos.x + 9620, y: pos.y - 4505 });
   wire(parent, ddIxhLdNow.out, ddIxhBusNow.a);
   wire(parent, ddIxhImmNow.out, ddIxhBusNow.b);
-  const ddIxlBusNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4485 });
+  const ddIxlBusNow = buildOr(parent, { x: pos.x + 9620, y: pos.y - 4485 });
   wire(parent, ddIxlLdNow.out, ddIxlBusNow.a);
   wire(parent, ddIxlImmNow.out, ddIxlBusNow.b);
   tieToLabel('DDIXH_BUS_NOW', ddIxhBusNow.out, { x: pos.x + 9720, y: pos.y - 4505 });
   tieToLabel('DDIXL_BUS_NOW', ddIxlBusNow.out, { x: pos.x + 9720, y: pos.y - 4485 });
-  const ddIxhIncNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4460 });
+  const ddIxhIncNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4460 });
   wire(parent, ddIxHl8IncNow.out, ddIxhIncNow.a);
   wire(parent, dec.y[4]!, ddIxhIncNow.b);
-  const ddIxlIncNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4445 });
+  const ddIxlIncNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4445 });
   wire(parent, ddIxHl8IncNow.out, ddIxlIncNow.a);
   wire(parent, dec.y[5]!, ddIxlIncNow.b);
   tieToLabel('DDIXH_INC_NOW', ddIxhIncNow.out, { x: pos.x + 9720, y: pos.y - 4460 });
@@ -3350,148 +3350,148 @@ export function buildZ80Cpu(
     { y: dec.y[7]!, label: 'DDIX_HL8_WE_A_NOW' },
   ];
   ddIxHl8WeSpecs.forEach(({ y, label }, i) => {
-    const gate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4420 - i * 18 });
+    const gate = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4420 - i * 18 });
     wire(parent, ddIxHl8LdNow.out, gate.a);
     wire(parent, y, gate.b);
     tieToLabel(label, gate.out, { x: pos.x + 9720, y: pos.y - 4420 - i * 18 });
   });
 
   // Source→BUS enables for remapped H/L (z=4/5) under LD + ALU.
-  const ddIxHl8SrcIxhLd = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4320 });
+  const ddIxHl8SrcIxhLd = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4320 });
   wire(parent, ddIxHl8LdNow.out, ddIxHl8SrcIxhLd.a);
   wire(parent, dec.z[4]!, ddIxHl8SrcIxhLd.b);
-  const ddIxHl8SrcIxlLd = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4305 });
+  const ddIxHl8SrcIxlLd = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4305 });
   wire(parent, ddIxHl8LdNow.out, ddIxHl8SrcIxlLd.a);
   wire(parent, dec.z[5]!, ddIxHl8SrcIxlLd.b);
-  const ddIxHl8SrcIxhAlu = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4290 });
+  const ddIxHl8SrcIxhAlu = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4290 });
   wire(parent, ddIxHl8AluNow.out, ddIxHl8SrcIxhAlu.a);
   wire(parent, dec.z[4]!, ddIxHl8SrcIxhAlu.b);
-  const ddIxHl8SrcIxlAlu = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4275 });
+  const ddIxHl8SrcIxlAlu = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4275 });
   wire(parent, ddIxHl8AluNow.out, ddIxHl8SrcIxlAlu.a);
   wire(parent, dec.z[5]!, ddIxHl8SrcIxlAlu.b);
-  const ddIxHl8SrcIxh = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4305 });
+  const ddIxHl8SrcIxh = buildOr(parent, { x: pos.x + 9620, y: pos.y - 4305 });
   wire(parent, ddIxHl8SrcIxhLd.out, ddIxHl8SrcIxh.a);
   wire(parent, ddIxHl8SrcIxhAlu.out, ddIxHl8SrcIxh.b);
-  const ddIxHl8SrcIxl = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4285 });
+  const ddIxHl8SrcIxl = buildOr(parent, { x: pos.x + 9620, y: pos.y - 4285 });
   wire(parent, ddIxHl8SrcIxlLd.out, ddIxHl8SrcIxl.a);
   wire(parent, ddIxHl8SrcIxlAlu.out, ddIxHl8SrcIxl.b);
   tieToLabel('DDIX_HL8_SRC_IXH_NOW', ddIxHl8SrcIxh.out, { x: pos.x + 9760, y: pos.y - 4305 });
   tieToLabel('DDIX_HL8_SRC_IXL_NOW', ddIxHl8SrcIxl.out, { x: pos.x + 9760, y: pos.y - 4285 });
 
   // FD twins — IYH/IYL.
-  const isFdHl8LdBase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4240 });
+  const isFdHl8LdBase = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4240 });
   wire(parent, isFdActive, isFdHl8LdBase.a);
   wire(parent, notFdCbMode.out, isFdHl8LdBase.b);
-  const isFdHl8LdX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4240 });
+  const isFdHl8LdX = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4240 });
   wire(parent, isFdHl8LdBase.out, isFdHl8LdX.a);
   wire(parent, dec.x[1]!, isFdHl8LdX.b);
-  const isFdHl8LdNy = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4240 });
+  const isFdHl8LdNy = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 4240 });
   wire(parent, isFdHl8LdX.out, isFdHl8LdNy.a);
   wire(parent, notDdY6.out, isFdHl8LdNy.b);
-  const isFdHl8LdNz = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 4240 });
+  const isFdHl8LdNz = buildAnd(parent, { x: pos.x + 9380, y: pos.y - 4240 });
   wire(parent, isFdHl8LdNy.out, isFdHl8LdNz.a);
   wire(parent, notDdZ6.out, isFdHl8LdNz.b);
-  const isFdHl8Ld = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4240 });
+  const isFdHl8Ld = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4240 });
   wire(parent, isFdHl8LdNz.out, isFdHl8Ld.a);
   wire(parent, ddHl8Yz45.out, isFdHl8Ld.b);
   tieToLabel('IS_FDIY_HL8_LD', isFdHl8Ld.out, { x: pos.x + 9520, y: pos.y - 4240 });
 
-  const isFdHl8ImmBase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4210 });
+  const isFdHl8ImmBase = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4210 });
   wire(parent, isFdActive, isFdHl8ImmBase.a);
   wire(parent, notFdCbMode.out, isFdHl8ImmBase.b);
-  const isFdHl8ImmX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4210 });
+  const isFdHl8ImmX = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4210 });
   wire(parent, isFdHl8ImmBase.out, isFdHl8ImmX.a);
   wire(parent, dec.x[0]!, isFdHl8ImmX.b);
-  const isFdHl8ImmZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4210 });
+  const isFdHl8ImmZ = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 4210 });
   wire(parent, isFdHl8ImmX.out, isFdHl8ImmZ.a);
   wire(parent, dec.z[6]!, isFdHl8ImmZ.b);
-  const isFdHl8Imm = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 4210 });
+  const isFdHl8Imm = buildAnd(parent, { x: pos.x + 9380, y: pos.y - 4210 });
   wire(parent, isFdHl8ImmZ.out, isFdHl8Imm.a);
   wire(parent, ddHl8Y45.out, isFdHl8Imm.b);
   tieToLabel('IS_FDIY_HL8_IMM', isFdHl8Imm.out, { x: pos.x + 9520, y: pos.y - 4210 });
 
-  const isFdHl8IncBase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4180 });
+  const isFdHl8IncBase = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4180 });
   wire(parent, isFdActive, isFdHl8IncBase.a);
   wire(parent, notFdCbMode.out, isFdHl8IncBase.b);
-  const isFdHl8IncX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4180 });
+  const isFdHl8IncX = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4180 });
   wire(parent, isFdHl8IncBase.out, isFdHl8IncX.a);
   wire(parent, dec.x[0]!, isFdHl8IncX.b);
-  const isFdHl8IncZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4180 });
+  const isFdHl8IncZ = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 4180 });
   wire(parent, isFdHl8IncX.out, isFdHl8IncZ.a);
   wire(parent, ddHl8Z45.out, isFdHl8IncZ.b);
-  const isFdHl8Inc = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 4180 });
+  const isFdHl8Inc = buildAnd(parent, { x: pos.x + 9380, y: pos.y - 4180 });
   wire(parent, isFdHl8IncZ.out, isFdHl8Inc.a);
   wire(parent, ddHl8Y45.out, isFdHl8Inc.b);
   tieToLabel('IS_FDIY_HL8_INC', isFdHl8Inc.out, { x: pos.x + 9520, y: pos.y - 4180 });
-  const isFdHl8IsDec = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 4165 });
+  const isFdHl8IsDec = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 4165 });
   wire(parent, isFdHl8Inc.out, isFdHl8IsDec.a);
   wire(parent, dec.z[5]!, isFdHl8IsDec.b);
   tieToLabel('FDIY_HL8_IS_DEC', isFdHl8IsDec.out, { x: pos.x + 9520, y: pos.y - 4165 });
 
-  const isFdHl8AluBase = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9260, y: pos.y - 4150 });
+  const isFdHl8AluBase = buildAnd(parent, { x: pos.x + 9260, y: pos.y - 4150 });
   wire(parent, isFdActive, isFdHl8AluBase.a);
   wire(parent, notFdCbMode.out, isFdHl8AluBase.b);
-  const isFdHl8AluX = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 4150 });
+  const isFdHl8AluX = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 4150 });
   wire(parent, isFdHl8AluBase.out, isFdHl8AluX.a);
   wire(parent, dec.x[2]!, isFdHl8AluX.b);
-  const isFdHl8Alu = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9340, y: pos.y - 4150 });
+  const isFdHl8Alu = buildAnd(parent, { x: pos.x + 9340, y: pos.y - 4150 });
   wire(parent, isFdHl8AluX.out, isFdHl8Alu.a);
   wire(parent, ddHl8Z45.out, isFdHl8Alu.b);
   tieToLabel('IS_FDIY_HL8_ALU', isFdHl8Alu.out, { x: pos.x + 9520, y: pos.y - 4150 });
 
-  const fdIyHl8LdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4240 });
+  const fdIyHl8LdNow = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4240 });
   wire(parent, isFdHl8Ld.out, fdIyHl8LdNow.a);
   tieToLabel('PHASE4', fdIyHl8LdNow.b, { x: pos.x + 9360, y: pos.y - 4240 });
   tieToLabel('FDIY_HL8_LD_NOW', fdIyHl8LdNow.out, { x: pos.x + 9600, y: pos.y - 4240 });
 
-  const fdIyHl8ImmReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4210 });
+  const fdIyHl8ImmReadNow = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4210 });
   wire(parent, isFdHl8Imm.out, fdIyHl8ImmReadNow.a);
   tieToLabel('PHASE4', fdIyHl8ImmReadNow.b, { x: pos.x + 9360, y: pos.y - 4210 });
   tieToLabel('FDIY_HL8_IMM_READ_NOW', fdIyHl8ImmReadNow.out, { x: pos.x + 9600, y: pos.y - 4210 });
-  const fdIyHl8ImmAdvRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4195 });
+  const fdIyHl8ImmAdvRaw = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4195 });
   wire(parent, isFdHl8Imm.out, fdIyHl8ImmAdvRaw.a);
   tieToLabel('PHASE5', fdIyHl8ImmAdvRaw.b, { x: pos.x + 9360, y: pos.y - 4195 });
-  const notFdIyHl8ImmReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 4202 });
+  const notFdIyHl8ImmReadNow = buildNot(parent, { x: pos.x + 9500, y: pos.y - 4202 });
   wire(parent, fdIyHl8ImmReadNow.out, notFdIyHl8ImmReadNow.in);
-  const fdIyHl8ImmAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9540, y: pos.y - 4195 });
+  const fdIyHl8ImmAdvanceNow = buildAnd(parent, { x: pos.x + 9540, y: pos.y - 4195 });
   wire(parent, fdIyHl8ImmAdvRaw.out, fdIyHl8ImmAdvanceNow.a);
   wire(parent, notFdIyHl8ImmReadNow.out, fdIyHl8ImmAdvanceNow.b);
   tieToLabel('FDIY_HL8_IMM_ADVANCE_NOW', fdIyHl8ImmAdvanceNow.out, { x: pos.x + 9680, y: pos.y - 4195 });
 
-  const fdIyHl8IncNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4180 });
+  const fdIyHl8IncNow = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4180 });
   wire(parent, isFdHl8Inc.out, fdIyHl8IncNow.a);
   tieToLabel('PHASE4', fdIyHl8IncNow.b, { x: pos.x + 9360, y: pos.y - 4180 });
   tieToLabel('FDIY_HL8_INC_NOW', fdIyHl8IncNow.out, { x: pos.x + 9600, y: pos.y - 4180 });
 
-  const fdIyHl8AluNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 4150 });
+  const fdIyHl8AluNow = buildAnd(parent, { x: pos.x + 9460, y: pos.y - 4150 });
   wire(parent, isFdHl8Alu.out, fdIyHl8AluNow.a);
   tieToLabel('PHASE4', fdIyHl8AluNow.b, { x: pos.x + 9360, y: pos.y - 4150 });
   tieToLabel('FDIY_HL8_ALU_NOW', fdIyHl8AluNow.out, { x: pos.x + 9600, y: pos.y - 4150 });
 
-  const fdIyhLdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4240 });
+  const fdIyhLdNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4240 });
   wire(parent, fdIyHl8LdNow.out, fdIyhLdNow.a);
   wire(parent, dec.y[4]!, fdIyhLdNow.b);
-  const fdIylLdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4225 });
+  const fdIylLdNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4225 });
   wire(parent, fdIyHl8LdNow.out, fdIylLdNow.a);
   wire(parent, dec.y[5]!, fdIylLdNow.b);
-  const fdIyhImmNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4210 });
+  const fdIyhImmNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4210 });
   wire(parent, fdIyHl8ImmReadNow.out, fdIyhImmNow.a);
   wire(parent, dec.y[4]!, fdIyhImmNow.b);
-  const fdIylImmNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4195 });
+  const fdIylImmNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4195 });
   wire(parent, fdIyHl8ImmReadNow.out, fdIylImmNow.a);
   wire(parent, dec.y[5]!, fdIylImmNow.b);
-  const fdIyhBusNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4225 });
+  const fdIyhBusNow = buildOr(parent, { x: pos.x + 9620, y: pos.y - 4225 });
   wire(parent, fdIyhLdNow.out, fdIyhBusNow.a);
   wire(parent, fdIyhImmNow.out, fdIyhBusNow.b);
-  const fdIylBusNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4205 });
+  const fdIylBusNow = buildOr(parent, { x: pos.x + 9620, y: pos.y - 4205 });
   wire(parent, fdIylLdNow.out, fdIylBusNow.a);
   wire(parent, fdIylImmNow.out, fdIylBusNow.b);
   tieToLabel('FDIYH_BUS_NOW', fdIyhBusNow.out, { x: pos.x + 9720, y: pos.y - 4225 });
   tieToLabel('FDIYL_BUS_NOW', fdIylBusNow.out, { x: pos.x + 9720, y: pos.y - 4205 });
-  const fdIyhIncNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4180 });
+  const fdIyhIncNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4180 });
   wire(parent, fdIyHl8IncNow.out, fdIyhIncNow.a);
   wire(parent, dec.y[4]!, fdIyhIncNow.b);
-  const fdIylIncNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4165 });
+  const fdIylIncNow = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4165 });
   wire(parent, fdIyHl8IncNow.out, fdIylIncNow.a);
   wire(parent, dec.y[5]!, fdIylIncNow.b);
   tieToLabel('FDIYH_INC_NOW', fdIyhIncNow.out, { x: pos.x + 9720, y: pos.y - 4180 });
@@ -3505,28 +3505,28 @@ export function buildZ80Cpu(
     { y: dec.y[7]!, label: 'FDIY_HL8_WE_A_NOW' },
   ];
   fdIyHl8WeSpecs.forEach(({ y, label }, i) => {
-    const gate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4140 - i * 18 });
+    const gate = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4140 - i * 18 });
     wire(parent, fdIyHl8LdNow.out, gate.a);
     wire(parent, y, gate.b);
     tieToLabel(label, gate.out, { x: pos.x + 9720, y: pos.y - 4140 - i * 18 });
   });
 
-  const fdIyHl8SrcIyhLd = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4040 });
+  const fdIyHl8SrcIyhLd = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4040 });
   wire(parent, fdIyHl8LdNow.out, fdIyHl8SrcIyhLd.a);
   wire(parent, dec.z[4]!, fdIyHl8SrcIyhLd.b);
-  const fdIyHl8SrcIylLd = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4025 });
+  const fdIyHl8SrcIylLd = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4025 });
   wire(parent, fdIyHl8LdNow.out, fdIyHl8SrcIylLd.a);
   wire(parent, dec.z[5]!, fdIyHl8SrcIylLd.b);
-  const fdIyHl8SrcIyhAlu = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 4010 });
+  const fdIyHl8SrcIyhAlu = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 4010 });
   wire(parent, fdIyHl8AluNow.out, fdIyHl8SrcIyhAlu.a);
   wire(parent, dec.z[4]!, fdIyHl8SrcIyhAlu.b);
-  const fdIyHl8SrcIylAlu = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 3995 });
+  const fdIyHl8SrcIylAlu = buildAnd(parent, { x: pos.x + 9580, y: pos.y - 3995 });
   wire(parent, fdIyHl8AluNow.out, fdIyHl8SrcIylAlu.a);
   wire(parent, dec.z[5]!, fdIyHl8SrcIylAlu.b);
-  const fdIyHl8SrcIyh = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4025 });
+  const fdIyHl8SrcIyh = buildOr(parent, { x: pos.x + 9620, y: pos.y - 4025 });
   wire(parent, fdIyHl8SrcIyhLd.out, fdIyHl8SrcIyh.a);
   wire(parent, fdIyHl8SrcIyhAlu.out, fdIyHl8SrcIyh.b);
-  const fdIyHl8SrcIyl = buildOr(parent, vcc3, gnd3, { x: pos.x + 9620, y: pos.y - 4005 });
+  const fdIyHl8SrcIyl = buildOr(parent, { x: pos.x + 9620, y: pos.y - 4005 });
   wire(parent, fdIyHl8SrcIylLd.out, fdIyHl8SrcIyl.a);
   wire(parent, fdIyHl8SrcIylAlu.out, fdIyHl8SrcIyl.b);
   tieToLabel('FDIY_HL8_SRC_IYH_NOW', fdIyHl8SrcIyh.out, { x: pos.x + 9760, y: pos.y - 4025 });
@@ -3550,32 +3550,32 @@ export function buildZ80Cpu(
   // Z80 hardware actually requires, just not previously checked.
   // `isEdX1Active` (`x=01`) is `NEG`'s own family's requirement,
   // designed correctly from the start.
-  const isEdX2Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6360 });
+  const isEdX2Active = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 6360 });
   wire(parent, isEdActive, isEdX2Active.a);
   wire(parent, dec.x[2]!, isEdX2Active.b);
-  const isEdX1Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6370 });
+  const isEdX1Active = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 6370 });
   wire(parent, isEdActive, isEdX1Active.a);
   wire(parent, dec.x[1]!, isEdX1Active.b);
   // CB x=00 — rotate/shift column (RLC…SRL). Same "prefix ∧ x" shape.
   // `cbTableActive` covers plain CB plus DD CB / FD CB mode (nested).
-  const isCbX0Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6375 });
+  const isCbX0Active = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 6375 });
   wire(parent, cbTableActive.out, isCbX0Active.a);
   wire(parent, dec.x[0]!, isCbX0Active.b);
   tieToLabel('IS_CB_ROT', isCbX0Active.out, { x: pos.x + 9200, y: pos.y - 6375 });
   // CB x=01 is the BIT family — same "prefix ∧ this table's x" shape ED uses.
-  const isCbX1Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6380 });
+  const isCbX1Active = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 6380 });
   wire(parent, cbTableActive.out, isCbX1Active.a);
   wire(parent, dec.x[1]!, isCbX1Active.b);
   // CB x=10 / x=11 — RES / SET.
-  const isCbX2Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6390 });
+  const isCbX2Active = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 6390 });
   wire(parent, cbTableActive.out, isCbX2Active.a);
   wire(parent, dec.x[2]!, isCbX2Active.b);
   tieToLabel('IS_CB_RES', isCbX2Active.out, { x: pos.x + 9200, y: pos.y - 6390 });
-  const isCbX3Active = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6400 });
+  const isCbX3Active = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 6400 });
   wire(parent, cbTableActive.out, isCbX3Active.a);
   wire(parent, dec.x[3]!, isCbX3Active.b);
   tieToLabel('IS_CB_SET', isCbX3Active.out, { x: pos.x + 9200, y: pos.y - 6400 });
-  const isCbSetRes = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6395 });
+  const isCbSetRes = buildOr(parent, { x: pos.x + 9200, y: pos.y - 6395 });
   wire(parent, isCbX2Active.out, isCbSetRes.a);
   wire(parent, isCbX3Active.out, isCbSetRes.b);
 
@@ -3585,32 +3585,32 @@ export function buildZ80Cpu(
   // Collides with unprefixed `LD r,r'` — `NOT_PREFIX_ACTIVE` keeps that quiet.
   // Under DD CB / FD CB mode, register-form CB stays quiet (CB itself in IR
   // at PHASE4 looks like SET z=3); SET/RES/rot (HL) also gated off this slice.
-  const notCbBitHl = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7400 });
+  const notCbBitHl = buildNot(parent, { x: pos.x + 9200, y: pos.y - 7400 });
   wire(parent, dec.z[6]!, notCbBitHl.in);
-  const isBitRegRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7400 });
+  const isBitRegRaw = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7400 });
   wire(parent, isCbX1Active.out, isBitRegRaw.a);
   wire(parent, notCbBitHl.out, isBitRegRaw.b);
-  const isBitRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7400 });
+  const isBitRegNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7400 });
   wire(parent, isBitRegRaw.out, isBitRegNow.a);
   wire(parent, notDdFdCbMode.out, isBitRegNow.b);
   tieToLabel('IS_BIT_REG_NOW', isBitRegNow.out, { x: pos.x + 9300, y: pos.y - 7400 });
-  const bitRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7420 });
+  const bitRegNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7420 });
   wire(parent, isBitRegNow.out, bitRegNow.a);
   tieToLabel('PHASE4', bitRegNow.b, { x: pos.x + 9250, y: pos.y - 7420 });
   tieToLabel('BIT_REG_NOW', bitRegNow.out, { x: pos.x + 9450, y: pos.y - 7420 }); // anchor — F we/layer
 
-  const isBitHlRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7440 });
+  const isBitHlRaw = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7440 });
   wire(parent, isCbX1Active.out, isBitHlRaw.a);
   wire(parent, dec.z[6]!, isBitHlRaw.b);
-  const isBitHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7440 });
+  const isBitHl = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7440 });
   wire(parent, isBitHlRaw.out, isBitHl.a);
   wire(parent, notDdFdCbMode.out, isBitHl.b);
   tieToLabel('IS_BIT_HL', isBitHl.out, { x: pos.x + 9300, y: pos.y - 7440 });
-  const bitHlReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7460 });
+  const bitHlReadNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7460 });
   wire(parent, isBitHl.out, bitHlReadNow.a);
   tieToLabel('PHASE4', bitHlReadNow.b, { x: pos.x + 9250, y: pos.y - 7460 });
   tieToLabel('BIT_HL_READ_NOW', bitHlReadNow.out, { x: pos.x + 9450, y: pos.y - 7460 }); // anchor — hlMemTemp.we, ram.oe, addr=HL
-  const bitHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7480 });
+  const bitHlNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7480 });
   wire(parent, isBitHl.out, bitHlNow.a);
   tieToLabel('PHASE5', bitHlNow.b, { x: pos.x + 9250, y: pos.y - 7480 });
   tieToLabel('BIT_HL_NOW', bitHlNow.out, { x: pos.x + 9450, y: pos.y - 7480 }); // anchor — F we/layer
@@ -3618,39 +3618,39 @@ export function buildZ80Cpu(
   // DD CB / FD CB: BIT y,(IX+d)/(IY+d) — documented z=6 only. After PHASE6
   // op recapture, PHASE7 reads @ IX+d/IY+d and commits flags from BUS same
   // phase (mirror ALU A,(IX+d) @ PHASE6 — not BIT_HL's two-phase hold).
-  const isDdCbBit = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7495 });
+  const isDdCbBit = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7495 });
   wire(parent, ddCbMode.q[0]!, isDdCbBit.a);
   wire(parent, isCbX1Active.out, isDdCbBit.b);
-  const isDdCbBitZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7495 });
+  const isDdCbBitZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7495 });
   wire(parent, isDdCbBit.out, isDdCbBitZ.a);
   wire(parent, dec.z[6]!, isDdCbBitZ.b);
-  const bitIxRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7495 });
+  const bitIxRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7495 });
   wire(parent, isDdCbBitZ.out, bitIxRaw.a);
   tieToLabel('PHASE7', bitIxRaw.b, { x: pos.x + 9200, y: pos.y - 7495 });
-  const notDdCbOpReadForBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7485 });
+  const notDdCbOpReadForBit = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7485 });
   tieToLabel('DDCB_OP_READ_NOW', notDdCbOpReadForBit.in, { x: pos.x + 9220, y: pos.y - 7485 });
-  const bitIxNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7495 });
+  const bitIxNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7495 });
   wire(parent, bitIxRaw.out, bitIxNow.a);
   wire(parent, notDdCbOpReadForBit.out, bitIxNow.b);
   tieToLabel('BIT_IX_NOW', bitIxNow.out, { x: pos.x + 9450, y: pos.y - 7495 }); // anchor — ram.oe, IXDISP, F
 
-  const isFdCbBit = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7510 });
+  const isFdCbBit = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7510 });
   wire(parent, fdCbMode.q[0]!, isFdCbBit.a);
   wire(parent, isCbX1Active.out, isFdCbBit.b);
-  const isFdCbBitZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7510 });
+  const isFdCbBitZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7510 });
   wire(parent, isFdCbBit.out, isFdCbBitZ.a);
   wire(parent, dec.z[6]!, isFdCbBitZ.b);
-  const bitIyRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7510 });
+  const bitIyRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7510 });
   wire(parent, isFdCbBitZ.out, bitIyRaw.a);
   tieToLabel('PHASE7', bitIyRaw.b, { x: pos.x + 9200, y: pos.y - 7510 });
-  const notFdCbOpReadForBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7500 });
+  const notFdCbOpReadForBit = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7500 });
   tieToLabel('FDCB_OP_READ_NOW', notFdCbOpReadForBit.in, { x: pos.x + 9220, y: pos.y - 7500 });
-  const bitIyNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7510 });
+  const bitIyNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7510 });
   wire(parent, bitIyRaw.out, bitIyNow.a);
   wire(parent, notFdCbOpReadForBit.out, bitIyNow.b);
   tieToLabel('BIT_IY_NOW', bitIyNow.out, { x: pos.x + 9450, y: pos.y - 7510 }); // anchor — ram.oe, IYDISP, F
 
-  const bitIxIyNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7502 });
+  const bitIxIyNow = buildOr(parent, { x: pos.x + 9500, y: pos.y - 7502 });
   wire(parent, bitIxNow.out, bitIxIyNow.a);
   wire(parent, bitIyNow.out, bitIxIyNow.b);
   tieToLabel('BIT_IXIY_NOW', bitIxIyNow.out, { x: pos.x + 9600, y: pos.y - 7502 }); // anchor — shared F we/layer
@@ -3670,13 +3670,13 @@ export function buildZ80Cpu(
     let term: Pin | null = null;
     for (let ri = 0; ri < bitRegSelect.length; ri++) {
       const { reg, z } = bitRegSelect[ri]!;
-      const andGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7600 + i * 80 + ri * 10 });
+      const andGate = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 7600 + i * 80 + ri * 10 });
       wire(parent, reg[i]!, andGate.a);
       wire(parent, z, andGate.b);
       if (term === null) {
         term = andGate.out;
       } else {
-        const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y - 7600 + i * 80 + ri * 10 });
+        const orGate = buildOr(parent, { x: pos.x + 9550, y: pos.y - 7600 + i * 80 + ri * 10 });
         wire(parent, term, orGate.a);
         wire(parent, andGate.out, orGate.b);
         term = orGate.out;
@@ -3686,22 +3686,22 @@ export function buildZ80Cpu(
   }
   let bitTest: Pin | null = null;
   for (let yi = 0; yi < 8; yi++) {
-    const andGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 7600 + yi * 20 });
+    const andGate = buildAnd(parent, { x: pos.x + 9600, y: pos.y - 7600 + yi * 20 });
     wire(parent, bitRegByte[yi]!, andGate.a);
     wire(parent, dec.y[yi]!, andGate.b);
     if (bitTest === null) {
       bitTest = andGate.out;
     } else {
-      const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9650, y: pos.y - 7600 + yi * 20 });
+      const orGate = buildOr(parent, { x: pos.x + 9650, y: pos.y - 7600 + yi * 20 });
       wire(parent, bitTest, orGate.a);
       wire(parent, andGate.out, orGate.b);
       bitTest = orGate.out;
     }
   }
-  const bitZBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 7420 });
+  const bitZBit = buildNot(parent, { x: pos.x + 9700, y: pos.y - 7420 });
   wire(parent, bitTest!, bitZBit.in);
   // S is bit 7 of (r AND mask) — nonzero only when testing bit 7 and it is set.
-  const bitSBit = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 7400 });
+  const bitSBit = buildAnd(parent, { x: pos.x + 9700, y: pos.y - 7400 });
   wire(parent, bitTest!, bitSBit.a);
   wire(parent, dec.y[7]!, bitSBit.b);
   // P/V mirrors Z on BIT (undocumented-but-stable real Z80 behavior).
@@ -3713,16 +3713,16 @@ export function buildZ80Cpu(
   // Register form: PHASE4. (HL): PHASE4 read into hlMemTemp, PHASE5 write
   // the modified byte back. Result byte published as SETRESRESULT{i}
   // after hlMemTemp exists (shared src mux: register select vs HLMEM).
-  const notCbSetResHl = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7500 });
+  const notCbSetResHl = buildNot(parent, { x: pos.x + 9200, y: pos.y - 7500 });
   wire(parent, dec.z[6]!, notCbSetResHl.in);
-  const isSetResRegRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7500 });
+  const isSetResRegRaw = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7500 });
   wire(parent, isCbSetRes.out, isSetResRegRaw.a);
   wire(parent, notCbSetResHl.out, isSetResRegRaw.b);
-  const isSetResReg = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7500 });
+  const isSetResReg = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7500 });
   wire(parent, isSetResRegRaw.out, isSetResReg.a);
   wire(parent, notDdFdCbMode.out, isSetResReg.b);
   tieToLabel('IS_SETRES_REG', isSetResReg.out, { x: pos.x + 9300, y: pos.y - 7500 });
-  const setResRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7520 });
+  const setResRegNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7520 });
   wire(parent, isSetResReg.out, setResRegNow.a);
   tieToLabel('PHASE4', setResRegNow.b, { x: pos.x + 9250, y: pos.y - 7520 });
   tieToLabel('SETRES_REG_NOW', setResRegNow.out, { x: pos.x + 9450, y: pos.y - 7520 });
@@ -3736,29 +3736,29 @@ export function buildZ80Cpu(
     { z: dec.z[7]!, label: 'SETRES_WE_A_NOW' },
   ];
   setResWeSpecs.forEach(({ z, label }, i) => {
-    const gate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7500 - i * 25 });
+    const gate = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 7500 - i * 25 });
     wire(parent, setResRegNow.out, gate.a);
     wire(parent, z, gate.b);
     tieToLabel(label, gate.out, { x: pos.x + 9600, y: pos.y - 7500 - i * 25 });
   });
 
-  const isSetResHlRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7540 });
+  const isSetResHlRaw = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7540 });
   wire(parent, isCbSetRes.out, isSetResHlRaw.a);
   wire(parent, dec.z[6]!, isSetResHlRaw.b);
-  const isSetResHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7540 });
+  const isSetResHl = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7540 });
   wire(parent, isSetResHlRaw.out, isSetResHl.a);
   wire(parent, notDdFdCbMode.out, isSetResHl.b);
   tieToLabel('IS_SETRES_HL', isSetResHl.out, { x: pos.x + 9300, y: pos.y - 7540 });
-  const setResHlReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7560 });
+  const setResHlReadNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7560 });
   wire(parent, isSetResHl.out, setResHlReadNow.a);
   tieToLabel('PHASE4', setResHlReadNow.b, { x: pos.x + 9250, y: pos.y - 7560 });
   tieToLabel('SETRES_HL_READ_NOW', setResHlReadNow.out, { x: pos.x + 9450, y: pos.y - 7560 });
-  const setResHlWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7580 });
+  const setResHlWriteRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7580 });
   wire(parent, isSetResHl.out, setResHlWriteRaw.a);
   tieToLabel('PHASE5', setResHlWriteRaw.b, { x: pos.x + 9250, y: pos.y - 7580 });
-  const notSetResHlReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 7570 });
+  const notSetResHlReadNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 7570 });
   wire(parent, setResHlReadNow.out, notSetResHlReadNow.in);
-  const setResHlWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 7580 });
+  const setResHlWriteNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 7580 });
   wire(parent, setResHlWriteRaw.out, setResHlWriteNow.a);
   wire(parent, notSetResHlReadNow.out, setResHlWriteNow.b);
   tieToLabel('SETRES_HL_WRITE_NOW', setResHlWriteNow.out, { x: pos.x + 9550, y: pos.y - 7580 });
@@ -3766,67 +3766,67 @@ export function buildZ80Cpu(
   // DD CB / FD CB: SET/RES y,(IX+d)/(IY+d) — documented z=6 only. PHASE7
   // read → hlMemTemp; PHASE8 write SETRESRESULT @ IX+d/IY+d. Undocumented
   // z≠6 register write-back skipped this slice.
-  const isDdCbSetRes = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7720 });
+  const isDdCbSetRes = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7720 });
   wire(parent, ddCbMode.q[0]!, isDdCbSetRes.a);
   wire(parent, isCbSetRes.out, isDdCbSetRes.b);
-  const isDdCbSetResZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7720 });
+  const isDdCbSetResZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7720 });
   wire(parent, isDdCbSetRes.out, isDdCbSetResZ.a);
   wire(parent, dec.z[6]!, isDdCbSetResZ.b);
-  const setResIxReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7720 });
+  const setResIxReadRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7720 });
   wire(parent, isDdCbSetResZ.out, setResIxReadRaw.a);
   tieToLabel('PHASE7', setResIxReadRaw.b, { x: pos.x + 9200, y: pos.y - 7720 });
-  const notDdCbOpReadForSetRes = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7710 });
+  const notDdCbOpReadForSetRes = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7710 });
   tieToLabel('DDCB_OP_READ_NOW', notDdCbOpReadForSetRes.in, { x: pos.x + 9220, y: pos.y - 7710 });
-  const setResIxReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7720 });
+  const setResIxReadNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7720 });
   wire(parent, setResIxReadRaw.out, setResIxReadNow.a);
   wire(parent, notDdCbOpReadForSetRes.out, setResIxReadNow.b);
   tieToLabel('SETRES_IX_READ_NOW', setResIxReadNow.out, { x: pos.x + 9450, y: pos.y - 7720 }); // anchor — hlMemTemp.we, ram.oe, IXDISP
-  const setResIxWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7740 });
+  const setResIxWriteRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7740 });
   wire(parent, isDdCbSetResZ.out, setResIxWriteRaw.a);
   tieToLabel('PHASE8', setResIxWriteRaw.b, { x: pos.x + 9200, y: pos.y - 7740 });
-  const notSetResIxReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7730 });
+  const notSetResIxReadNow = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7730 });
   wire(parent, setResIxReadNow.out, notSetResIxReadNow.in);
-  const setResIxWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7740 });
+  const setResIxWriteNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7740 });
   wire(parent, setResIxWriteRaw.out, setResIxWriteNow.a);
   wire(parent, notSetResIxReadNow.out, setResIxWriteNow.b);
   tieToLabel('SETRES_IX_WRITE_NOW', setResIxWriteNow.out, { x: pos.x + 9450, y: pos.y - 7740 }); // anchor — ram.we, SETRESRESULT bus, IXDISP
 
-  const isFdCbSetRes = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7760 });
+  const isFdCbSetRes = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7760 });
   wire(parent, fdCbMode.q[0]!, isFdCbSetRes.a);
   wire(parent, isCbSetRes.out, isFdCbSetRes.b);
-  const isFdCbSetResZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7760 });
+  const isFdCbSetResZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7760 });
   wire(parent, isFdCbSetRes.out, isFdCbSetResZ.a);
   wire(parent, dec.z[6]!, isFdCbSetResZ.b);
-  const setResIyReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7760 });
+  const setResIyReadRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7760 });
   wire(parent, isFdCbSetResZ.out, setResIyReadRaw.a);
   tieToLabel('PHASE7', setResIyReadRaw.b, { x: pos.x + 9200, y: pos.y - 7760 });
-  const notFdCbOpReadForSetRes = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7750 });
+  const notFdCbOpReadForSetRes = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7750 });
   tieToLabel('FDCB_OP_READ_NOW', notFdCbOpReadForSetRes.in, { x: pos.x + 9220, y: pos.y - 7750 });
-  const setResIyReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7760 });
+  const setResIyReadNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7760 });
   wire(parent, setResIyReadRaw.out, setResIyReadNow.a);
   wire(parent, notFdCbOpReadForSetRes.out, setResIyReadNow.b);
   tieToLabel('SETRES_IY_READ_NOW', setResIyReadNow.out, { x: pos.x + 9450, y: pos.y - 7760 });
-  const setResIyWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7780 });
+  const setResIyWriteRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7780 });
   wire(parent, isFdCbSetResZ.out, setResIyWriteRaw.a);
   tieToLabel('PHASE8', setResIyWriteRaw.b, { x: pos.x + 9200, y: pos.y - 7780 });
-  const notSetResIyReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7770 });
+  const notSetResIyReadNow = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7770 });
   wire(parent, setResIyReadNow.out, notSetResIyReadNow.in);
-  const setResIyWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7780 });
+  const setResIyWriteNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7780 });
   wire(parent, setResIyWriteRaw.out, setResIyWriteNow.a);
   wire(parent, notSetResIyReadNow.out, setResIyWriteNow.b);
   tieToLabel('SETRES_IY_WRITE_NOW', setResIyWriteNow.out, { x: pos.x + 9450, y: pos.y - 7780 });
 
-  const setResCommitRegHl = buildOr(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7550 });
+  const setResCommitRegHl = buildOr(parent, { x: pos.x + 9500, y: pos.y - 7550 });
   wire(parent, setResRegNow.out, setResCommitRegHl.a);
   wire(parent, setResHlWriteNow.out, setResCommitRegHl.b);
-  const setResCommitIxIy = buildOr(parent, vcc3, gnd3, { x: pos.x + 9520, y: pos.y - 7730 });
+  const setResCommitIxIy = buildOr(parent, { x: pos.x + 9520, y: pos.y - 7730 });
   wire(parent, setResIxWriteNow.out, setResCommitIxIy.a);
   wire(parent, setResIyWriteNow.out, setResCommitIxIy.b);
-  const setResCommitNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y - 7550 });
+  const setResCommitNow = buildOr(parent, { x: pos.x + 9550, y: pos.y - 7550 });
   wire(parent, setResCommitRegHl.out, setResCommitNow.a);
   wire(parent, setResCommitIxIy.out, setResCommitNow.b);
   tieToLabel('SETRES_COMMIT_NOW', setResCommitNow.out, { x: pos.x + 9650, y: pos.y - 7550 });
-  const setResMemWriteAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 7570 });
+  const setResMemWriteAny = buildOr(parent, { x: pos.x + 9580, y: pos.y - 7570 });
   wire(parent, setResHlWriteNow.out, setResMemWriteAny.a);
   wire(parent, setResCommitIxIy.out, setResMemWriteAny.b);
   tieToLabel('SETRES_MEM_WRITE_ANY', setResMemWriteAny.out, { x: pos.x + 9680, y: pos.y - 7570 }); // anchor — bus drive / ram.we
@@ -3835,16 +3835,16 @@ export function buildZ80Cpu(
   // unprefixed RLCA/… these refresh S/Z/P/X/Y/H/N/C from the *result*.
   // Register: PHASE4. (HL): PHASE4 read, PHASE5 write+flags. Collides with
   // unprefixed x=00 — `NOT_PREFIX_ACTIVE` keeps that quiet.
-  const notCbRotHl = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7620 });
+  const notCbRotHl = buildNot(parent, { x: pos.x + 9200, y: pos.y - 7620 });
   wire(parent, dec.z[6]!, notCbRotHl.in);
-  const isCbRotRegRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7620 });
+  const isCbRotRegRaw = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7620 });
   wire(parent, isCbX0Active.out, isCbRotRegRaw.a);
   wire(parent, notCbRotHl.out, isCbRotRegRaw.b);
-  const isCbRotReg = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7620 });
+  const isCbRotReg = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7620 });
   wire(parent, isCbRotRegRaw.out, isCbRotReg.a);
   wire(parent, notDdFdCbMode.out, isCbRotReg.b);
   tieToLabel('IS_CBROT_REG', isCbRotReg.out, { x: pos.x + 9300, y: pos.y - 7620 });
-  const cbRotRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7640 });
+  const cbRotRegNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7640 });
   wire(parent, isCbRotReg.out, cbRotRegNow.a);
   tieToLabel('PHASE4', cbRotRegNow.b, { x: pos.x + 9250, y: pos.y - 7640 });
   tieToLabel('CBROT_REG_NOW', cbRotRegNow.out, { x: pos.x + 9450, y: pos.y - 7640 });
@@ -3858,114 +3858,114 @@ export function buildZ80Cpu(
     { z: dec.z[7]!, label: 'CBROT_WE_A_NOW' },
   ];
   cbRotWeSpecs.forEach(({ z, label }, i) => {
-    const gate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7620 - i * 25 });
+    const gate = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 7620 - i * 25 });
     wire(parent, cbRotRegNow.out, gate.a);
     wire(parent, z, gate.b);
     tieToLabel(label, gate.out, { x: pos.x + 9600, y: pos.y - 7620 - i * 25 });
   });
-  const isCbRotHlRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7660 });
+  const isCbRotHlRaw = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7660 });
   wire(parent, isCbX0Active.out, isCbRotHlRaw.a);
   wire(parent, dec.z[6]!, isCbRotHlRaw.b);
-  const isCbRotHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7660 });
+  const isCbRotHl = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7660 });
   wire(parent, isCbRotHlRaw.out, isCbRotHl.a);
   wire(parent, notDdFdCbMode.out, isCbRotHl.b);
   tieToLabel('IS_CBROT_HL', isCbRotHl.out, { x: pos.x + 9300, y: pos.y - 7660 });
-  const cbRotHlReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7680 });
+  const cbRotHlReadNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7680 });
   wire(parent, isCbRotHl.out, cbRotHlReadNow.a);
   tieToLabel('PHASE4', cbRotHlReadNow.b, { x: pos.x + 9250, y: pos.y - 7680 });
   tieToLabel('CBROT_HL_READ_NOW', cbRotHlReadNow.out, { x: pos.x + 9450, y: pos.y - 7680 });
-  const cbRotHlWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7700 });
+  const cbRotHlWriteRaw = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7700 });
   wire(parent, isCbRotHl.out, cbRotHlWriteRaw.a);
   tieToLabel('PHASE5', cbRotHlWriteRaw.b, { x: pos.x + 9250, y: pos.y - 7700 });
-  const notCbRotHlReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 7690 });
+  const notCbRotHlReadNow = buildNot(parent, { x: pos.x + 9400, y: pos.y - 7690 });
   wire(parent, cbRotHlReadNow.out, notCbRotHlReadNow.in);
-  const cbRotHlWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 7700 });
+  const cbRotHlWriteNow = buildAnd(parent, { x: pos.x + 9450, y: pos.y - 7700 });
   wire(parent, cbRotHlWriteRaw.out, cbRotHlWriteNow.a);
   wire(parent, notCbRotHlReadNow.out, cbRotHlWriteNow.b);
   tieToLabel('CBROT_HL_WRITE_NOW', cbRotHlWriteNow.out, { x: pos.x + 9550, y: pos.y - 7700 });
 
   // DD CB / FD CB: RLC…SRL (IX+d)/(IY+d) — documented z=6 only. PHASE7
   // read → cbRotHold; PHASE8 write+flags. Same undocumented z≠6 skip.
-  const isDdCbRot = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7800 });
+  const isDdCbRot = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7800 });
   wire(parent, ddCbMode.q[0]!, isDdCbRot.a);
   wire(parent, isCbX0Active.out, isDdCbRot.b);
-  const isDdCbRotZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7800 });
+  const isDdCbRotZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7800 });
   wire(parent, isDdCbRot.out, isDdCbRotZ.a);
   wire(parent, dec.z[6]!, isDdCbRotZ.b);
-  const cbRotIxReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7800 });
+  const cbRotIxReadRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7800 });
   wire(parent, isDdCbRotZ.out, cbRotIxReadRaw.a);
   tieToLabel('PHASE7', cbRotIxReadRaw.b, { x: pos.x + 9200, y: pos.y - 7800 });
-  const notDdCbOpReadForRot = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7790 });
+  const notDdCbOpReadForRot = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7790 });
   tieToLabel('DDCB_OP_READ_NOW', notDdCbOpReadForRot.in, { x: pos.x + 9220, y: pos.y - 7790 });
-  const cbRotIxReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7800 });
+  const cbRotIxReadNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7800 });
   wire(parent, cbRotIxReadRaw.out, cbRotIxReadNow.a);
   wire(parent, notDdCbOpReadForRot.out, cbRotIxReadNow.b);
   tieToLabel('CBROT_IX_READ_NOW', cbRotIxReadNow.out, { x: pos.x + 9450, y: pos.y - 7800 }); // anchor — cbRotHold.we, ram.oe, IXDISP
-  const cbRotIxWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7820 });
+  const cbRotIxWriteRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7820 });
   wire(parent, isDdCbRotZ.out, cbRotIxWriteRaw.a);
   tieToLabel('PHASE8', cbRotIxWriteRaw.b, { x: pos.x + 9200, y: pos.y - 7820 });
-  const notCbRotIxReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7810 });
+  const notCbRotIxReadNow = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7810 });
   wire(parent, cbRotIxReadNow.out, notCbRotIxReadNow.in);
-  const cbRotIxWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7820 });
+  const cbRotIxWriteNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7820 });
   wire(parent, cbRotIxWriteRaw.out, cbRotIxWriteNow.a);
   wire(parent, notCbRotIxReadNow.out, cbRotIxWriteNow.b);
   tieToLabel('CBROT_IX_WRITE_NOW', cbRotIxWriteNow.out, { x: pos.x + 9450, y: pos.y - 7820 }); // anchor — ram.we, CBROT bus, F, IXDISP
 
-  const isFdCbRot = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 7840 });
+  const isFdCbRot = buildAnd(parent, { x: pos.x + 9220, y: pos.y - 7840 });
   wire(parent, fdCbMode.q[0]!, isFdCbRot.a);
   wire(parent, isCbX0Active.out, isFdCbRot.b);
-  const isFdCbRotZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7840 });
+  const isFdCbRotZ = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 7840 });
   wire(parent, isFdCbRot.out, isFdCbRotZ.a);
   wire(parent, dec.z[6]!, isFdCbRotZ.b);
-  const cbRotIyReadRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7840 });
+  const cbRotIyReadRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7840 });
   wire(parent, isFdCbRotZ.out, cbRotIyReadRaw.a);
   tieToLabel('PHASE7', cbRotIyReadRaw.b, { x: pos.x + 9200, y: pos.y - 7840 });
-  const notFdCbOpReadForRot = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7830 });
+  const notFdCbOpReadForRot = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7830 });
   tieToLabel('FDCB_OP_READ_NOW', notFdCbOpReadForRot.in, { x: pos.x + 9220, y: pos.y - 7830 });
-  const cbRotIyReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7840 });
+  const cbRotIyReadNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7840 });
   wire(parent, cbRotIyReadRaw.out, cbRotIyReadNow.a);
   wire(parent, notFdCbOpReadForRot.out, cbRotIyReadNow.b);
   tieToLabel('CBROT_IY_READ_NOW', cbRotIyReadNow.out, { x: pos.x + 9450, y: pos.y - 7840 });
-  const cbRotIyWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 7860 });
+  const cbRotIyWriteRaw = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 7860 });
   wire(parent, isFdCbRotZ.out, cbRotIyWriteRaw.a);
   tieToLabel('PHASE8', cbRotIyWriteRaw.b, { x: pos.x + 9200, y: pos.y - 7860 });
-  const notCbRotIyReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 7850 });
+  const notCbRotIyReadNow = buildNot(parent, { x: pos.x + 9320, y: pos.y - 7850 });
   wire(parent, cbRotIyReadNow.out, notCbRotIyReadNow.in);
-  const cbRotIyWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7860 });
+  const cbRotIyWriteNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 7860 });
   wire(parent, cbRotIyWriteRaw.out, cbRotIyWriteNow.a);
   wire(parent, notCbRotIyReadNow.out, cbRotIyWriteNow.b);
   tieToLabel('CBROT_IY_WRITE_NOW', cbRotIyWriteNow.out, { x: pos.x + 9450, y: pos.y - 7860 });
 
   // Flags + register/RAM commit share this strobe (reg PHASE4, HL PHASE5,
   // IX/IY PHASE8).
-  const cbRotRegHl = buildOr(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 7670 });
+  const cbRotRegHl = buildOr(parent, { x: pos.x + 9500, y: pos.y - 7670 });
   wire(parent, cbRotRegNow.out, cbRotRegHl.a);
   wire(parent, cbRotHlWriteNow.out, cbRotRegHl.b);
-  const cbRotIxIy = buildOr(parent, vcc3, gnd3, { x: pos.x + 9520, y: pos.y - 7810 });
+  const cbRotIxIy = buildOr(parent, { x: pos.x + 9520, y: pos.y - 7810 });
   wire(parent, cbRotIxWriteNow.out, cbRotIxIy.a);
   wire(parent, cbRotIyWriteNow.out, cbRotIxIy.b);
-  const cbRotNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y - 7670 });
+  const cbRotNow = buildOr(parent, { x: pos.x + 9550, y: pos.y - 7670 });
   wire(parent, cbRotRegHl.out, cbRotNow.a);
   wire(parent, cbRotIxIy.out, cbRotNow.b);
   tieToLabel('CBROT_NOW', cbRotNow.out, { x: pos.x + 9650, y: pos.y - 7670 });
-  const cbRotMemWriteAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 7690 });
+  const cbRotMemWriteAny = buildOr(parent, { x: pos.x + 9580, y: pos.y - 7690 });
   wire(parent, cbRotHlWriteNow.out, cbRotMemWriteAny.a);
   wire(parent, cbRotIxIy.out, cbRotMemWriteAny.b);
   tieToLabel('CBROT_MEM_WRITE_ANY', cbRotMemWriteAny.out, { x: pos.x + 9680, y: pos.y - 7690 }); // anchor — memBit/hlSrc/bus/ram.we
-  const cbRotMemReadIxIy = buildOr(parent, vcc3, gnd3, { x: pos.x + 9580, y: pos.y - 7710 });
+  const cbRotMemReadIxIy = buildOr(parent, { x: pos.x + 9580, y: pos.y - 7710 });
   wire(parent, cbRotIxReadNow.out, cbRotMemReadIxIy.a);
   wire(parent, cbRotIyReadNow.out, cbRotMemReadIxIy.b);
-  const cbRotMemReadAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 7700 });
+  const cbRotMemReadAny = buildOr(parent, { x: pos.x + 9600, y: pos.y - 7700 });
   wire(parent, cbRotHlReadNow.out, cbRotMemReadAny.a);
   wire(parent, cbRotMemReadIxIy.out, cbRotMemReadAny.b);
   tieToLabel('CBROT_MEM_READ_ANY', cbRotMemReadAny.out, { x: pos.x + 9700, y: pos.y - 7700 }); // anchor — cbRotHold.we
 
   // PHASE8 write union for DD/FD CB op-advance exclusion (adjacent phase).
-  const ddCbPhase8WriteAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 7880 });
+  const ddCbPhase8WriteAny = buildOr(parent, { x: pos.x + 9600, y: pos.y - 7880 });
   wire(parent, setResIxWriteNow.out, ddCbPhase8WriteAny.a);
   wire(parent, cbRotIxWriteNow.out, ddCbPhase8WriteAny.b);
   tieToLabel('DDCB_PHASE8_WRITE_ANY', ddCbPhase8WriteAny.out, { x: pos.x + 9700, y: pos.y - 7880 });
-  const fdCbPhase8WriteAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 7900 });
+  const fdCbPhase8WriteAny = buildOr(parent, { x: pos.x + 9600, y: pos.y - 7900 });
   wire(parent, setResIyWriteNow.out, fdCbPhase8WriteAny.a);
   wire(parent, cbRotIyWriteNow.out, fdCbPhase8WriteAny.b);
   tieToLabel('FDCB_PHASE8_WRITE_ANY', fdCbPhase8WriteAny.out, { x: pos.x + 9700, y: pos.y - 7900 });
@@ -3994,29 +3994,29 @@ export function buildZ80Cpu(
   // the *recaptured* `ir`'s `dec.y`/`dec.z` exactly the way that collision
   // predicts, gated by `isEdActive` to stay silent for the real
   // unprefixed four.
-  const isLdiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6300 });
-  const isLdiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6300 });
+  const isLdiNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6300 });
+  const isLdiStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6300 });
   wire(parent, isEdX2Active.out, isLdiStage.a);
   wire(parent, dec.y[4]!, isLdiStage.b);
   wire(parent, isLdiStage.out, isLdiNow.a);
   wire(parent, dec.z[0]!, isLdiNow.b);
   tieToLabel('IS_LDI_NOW', isLdiNow.out, { x: pos.x + 9150, y: pos.y - 6300 }); // anchor — isLdBlockNow just below reads this
-  const isLddNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6270 });
-  const isLddStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6270 });
+  const isLddNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6270 });
+  const isLddStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6270 });
   wire(parent, isEdX2Active.out, isLddStage.a);
   wire(parent, dec.y[5]!, isLddStage.b);
   wire(parent, isLddStage.out, isLddNow.a);
   wire(parent, dec.z[0]!, isLddNow.b);
   tieToLabel('IS_LDD_NOW', isLddNow.out, { x: pos.x + 9150, y: pos.y - 6270 });
-  const isLdirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6240 });
-  const isLdirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6240 });
+  const isLdirNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6240 });
+  const isLdirStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6240 });
   wire(parent, isEdX2Active.out, isLdirStage.a);
   wire(parent, dec.y[6]!, isLdirStage.b);
   wire(parent, isLdirStage.out, isLdirNow.a);
   wire(parent, dec.z[0]!, isLdirNow.b);
   tieToLabel('IS_LDIR_NOW', isLdirNow.out, { x: pos.x + 9150, y: pos.y - 6240 }); // anchor — isRepeatVariantNow just below reads this
-  const isLddrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6210 });
-  const isLddrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6210 });
+  const isLddrNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6210 });
+  const isLddrStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6210 });
   wire(parent, isEdX2Active.out, isLddrStage.a);
   wire(parent, dec.y[7]!, isLddrStage.b);
   wire(parent, isLddrStage.out, isLddrNow.a);
@@ -4029,13 +4029,13 @@ export function buildZ80Cpu(
   // above directly, the same "the four base group gates are what
   // everything downstream reads, not the raw `dec.x[N]` each is built
   // from" discipline this file established for `isX0Group`/etc.).
-  const isLdBlockStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6350 });
+  const isLdBlockStage = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6350 });
   wire(parent, isLdiNow.out, isLdBlockStage.a);
   wire(parent, isLddNow.out, isLdBlockStage.b);
-  const isLdBlockStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6380 });
+  const isLdBlockStage2 = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6380 });
   wire(parent, isLdirNow.out, isLdBlockStage2.a);
   wire(parent, isLddrNow.out, isLdBlockStage2.b);
-  const isLdBlockNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6365 });
+  const isLdBlockNow = buildOr(parent, { x: pos.x + 9200, y: pos.y - 6365 });
   wire(parent, isLdBlockStage.out, isLdBlockNow.a);
   wire(parent, isLdBlockStage2.out, isLdBlockNow.b);
   tieToLabel('IS_LDBLOCK_NOW', isLdBlockNow.out, { x: pos.x + 9250, y: pos.y - 6365 }); // anchor — phase decode just below, RAM's own oe/we/address mux, the F-register layer, and BC's own pair adder (all far) read this
@@ -4048,7 +4048,7 @@ export function buildZ80Cpu(
   // so only the *decrementing* half needs a widened direction line,
   // `LDI`/`LDIR` get their `+1` for free exactly the way plain `LDI`
   // always did.
-  const directionIsDecNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6410 });
+  const directionIsDecNow = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6410 });
   wire(parent, isLddNow.out, directionIsDecNow.a);
   wire(parent, isLddrNow.out, directionIsDecNow.b);
   tieToLabel('LDBLOCK_DEC_DIR_NOW', directionIsDecNow.out, { x: pos.x + 9250, y: pos.y - 6410 }); // anchor — DE's and HL's own pair adder direction lines (far) read this
@@ -4057,7 +4057,7 @@ export function buildZ80Cpu(
   // fresh `BC-1 != 0` value at the `pc` mux chain's own final layer, far
   // below, to decide whether this instruction lands back on its own
   // opcode instead of advancing.
-  const isRepeatVariantNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6440 });
+  const isRepeatVariantNow = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6440 });
   wire(parent, isLdirNow.out, isRepeatVariantNow.a);
   wire(parent, isLddrNow.out, isRepeatVariantNow.b);
   tieToLabel('LDBLOCK_REPEAT_VARIANT_NOW', isRepeatVariantNow.out, { x: pos.x + 9250, y: pos.y - 6440 }); // anchor — the pc mux chain's own final layer (far) reads this
@@ -4077,28 +4077,28 @@ export function buildZ80Cpu(
   // opcode's own work starts one phase later than an unprefixed
   // instruction's equivalent would, the same one-phase shift every
   // prefixed instruction pays.
-  const ldBlockReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6280 });
+  const ldBlockReadNow = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6280 });
   wire(parent, isLdBlockNow.out, ldBlockReadNow.a);
   tieToLabel('PHASE4', ldBlockReadNow.b, { x: pos.x + 9100, y: pos.y - 6280 });
   tieToLabel('LDBLOCK_READ_NOW', ldBlockReadNow.out, { x: pos.x + 9300, y: pos.y - 6280 }); // anchor — ramOeFinal, RAM's own address mux, and ldBlockTemp's own we (all far) read this
   // The identical adjacent-ring-position bus-fight guard `EX (SP),HL`'s
   // own multi-phase sequence above already established, applied here too
   // rather than found live a fourth time.
-  const ldBlockWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6230 });
+  const ldBlockWriteRaw = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6230 });
   wire(parent, isLdBlockNow.out, ldBlockWriteRaw.a);
   tieToLabel('PHASE5', ldBlockWriteRaw.b, { x: pos.x + 9100, y: pos.y - 6230 });
-  const notLdBlockReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6255 });
+  const notLdBlockReadNow = buildNot(parent, { x: pos.x + 9250, y: pos.y - 6255 });
   wire(parent, ldBlockReadNow.out, notLdBlockReadNow.in);
-  const ldBlockWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6230 });
+  const ldBlockWriteNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6230 });
   wire(parent, ldBlockWriteRaw.out, ldBlockWriteNow.a);
   wire(parent, notLdBlockReadNow.out, ldBlockWriteNow.b);
   tieToLabel('LDBLOCK_WRITE_NOW', ldBlockWriteNow.out, { x: pos.x + 9350, y: pos.y - 6230 }); // anchor — ramWeFinal, RAM's own address mux, and ldBlockTemp's own bus-driver bank (all far) read this
-  const ldBlockCommitRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6180 });
+  const ldBlockCommitRaw = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6180 });
   wire(parent, isLdBlockNow.out, ldBlockCommitRaw.a);
   tieToLabel('PHASE6', ldBlockCommitRaw.b, { x: pos.x + 9100, y: pos.y - 6180 });
-  const notLdBlockWriteNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6205 });
+  const notLdBlockWriteNow = buildNot(parent, { x: pos.x + 9250, y: pos.y - 6205 });
   wire(parent, ldBlockWriteNow.out, notLdBlockWriteNow.in);
-  const ldBlockCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6180 });
+  const ldBlockCommitNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6180 });
   wire(parent, ldBlockCommitRaw.out, ldBlockCommitNow.a);
   wire(parent, notLdBlockWriteNow.out, ldBlockCommitNow.b);
   tieToLabel('LDBLOCK_COMMIT_NOW', ldBlockCommitNow.out, { x: pos.x + 9350, y: pos.y - 6180 }); // anchor — B/C/D/E/H/L's own write-back layers and F's own we/per-bit layer (all far) read this
@@ -4114,42 +4114,42 @@ export function buildZ80Cpu(
   // collides for each of the four variants here), it gets its own,
   // entirely separate from that ALU — see the dedicated adder further
   // below for why that's the cheaper, safer choice.
-  const isCpiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6480 });
-  const isCpiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6480 });
+  const isCpiNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6480 });
+  const isCpiStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6480 });
   wire(parent, isEdX2Active.out, isCpiStage.a);
   wire(parent, dec.y[4]!, isCpiStage.b);
   wire(parent, isCpiStage.out, isCpiNow.a);
   wire(parent, dec.z[1]!, isCpiNow.b);
   tieToLabel('IS_CPI_NOW', isCpiNow.out, { x: pos.x + 9150, y: pos.y - 6480 }); // anchor — isCpBlockNow just below reads this
-  const isCpdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6510 });
-  const isCpdStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6510 });
+  const isCpdNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6510 });
+  const isCpdStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6510 });
   wire(parent, isEdX2Active.out, isCpdStage.a);
   wire(parent, dec.y[5]!, isCpdStage.b);
   wire(parent, isCpdStage.out, isCpdNow.a);
   wire(parent, dec.z[1]!, isCpdNow.b);
   tieToLabel('IS_CPD_NOW', isCpdNow.out, { x: pos.x + 9150, y: pos.y - 6510 });
-  const isCpirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6540 });
-  const isCpirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6540 });
+  const isCpirNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6540 });
+  const isCpirStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6540 });
   wire(parent, isEdX2Active.out, isCpirStage.a);
   wire(parent, dec.y[6]!, isCpirStage.b);
   wire(parent, isCpirStage.out, isCpirNow.a);
   wire(parent, dec.z[1]!, isCpirNow.b);
   tieToLabel('IS_CPIR_NOW', isCpirNow.out, { x: pos.x + 9150, y: pos.y - 6540 }); // anchor — cpRepeatVariantNow just below reads this
-  const isCpdrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6570 });
-  const isCpdrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6570 });
+  const isCpdrNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6570 });
+  const isCpdrStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6570 });
   wire(parent, isEdX2Active.out, isCpdrStage.a);
   wire(parent, dec.y[7]!, isCpdrStage.b);
   wire(parent, isCpdrStage.out, isCpdrNow.a);
   wire(parent, dec.z[1]!, isCpdrNow.b);
   tieToLabel('IS_CPDR_NOW', isCpdrNow.out, { x: pos.x + 9150, y: pos.y - 6570 }); // anchor — cpDirectionIsDecNow and cpRepeatVariantNow just below both read this
 
-  const isCpBlockStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6600 });
+  const isCpBlockStage = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6600 });
   wire(parent, isCpiNow.out, isCpBlockStage.a);
   wire(parent, isCpdNow.out, isCpBlockStage.b);
-  const isCpBlockStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6620 });
+  const isCpBlockStage2 = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6620 });
   wire(parent, isCpirNow.out, isCpBlockStage2.a);
   wire(parent, isCpdrNow.out, isCpBlockStage2.b);
-  const isCpBlockNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6610 });
+  const isCpBlockNow = buildOr(parent, { x: pos.x + 9200, y: pos.y - 6610 });
   wire(parent, isCpBlockStage.out, isCpBlockNow.a);
   wire(parent, isCpBlockStage2.out, isCpBlockNow.b);
   tieToLabel('IS_CPBLOCK_NOW', isCpBlockNow.out, { x: pos.x + 9250, y: pos.y - 6610 }); // anchor — phase decode just below, RAM's own oe/address mux, BC/HL's own pair-adder direction+commit, and the F-register layer (all far) read this
@@ -4161,7 +4161,7 @@ export function buildZ80Cpu(
   // `y=4..7`, so only the *decrementing* half needs a widened direction
   // line. `DE` is never touched by this family at all — real `CPI` and
   // friends only ever move `HL`.
-  const cpDirectionIsDecNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6650 });
+  const cpDirectionIsDecNow = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6650 });
   wire(parent, isCpdNow.out, cpDirectionIsDecNow.a);
   wire(parent, isCpdrNow.out, cpDirectionIsDecNow.b);
   tieToLabel('CPBLOCK_DEC_DIR_NOW', cpDirectionIsDecNow.out, { x: pos.x + 9250, y: pos.y - 6650 }); // anchor — HL's own pair adder direction line (far) reads this
@@ -4172,7 +4172,7 @@ export function buildZ80Cpu(
   // opcode instead of advancing. Real Z80 stops repeating the moment
   // *either* condition fails — `BC` reaching `0`, or a match actually
   // found — unlike `LDIR`/`LDDR`, which only ever watches `BC`.
-  const cpRepeatVariantNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6680 });
+  const cpRepeatVariantNow = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6680 });
   wire(parent, isCpirNow.out, cpRepeatVariantNow.a);
   wire(parent, isCpdrNow.out, cpRepeatVariantNow.b);
   tieToLabel('CPBLOCK_REPEAT_VARIANT_NOW', cpRepeatVariantNow.out, { x: pos.x + 9250, y: pos.y - 6680 }); // anchor — the CP-block repeat gate (far, built alongside the dedicated adder) reads this
@@ -4186,11 +4186,11 @@ export function buildZ80Cpu(
   // out, so nothing this family owns ever drives the bus back out, and
   // the adjacent-phase bus-fight guard `LDBLOCK_WRITE_NOW` needs above
   // has nothing to guard here.
-  const cpBlockReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6460 });
+  const cpBlockReadNow = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6460 });
   wire(parent, isCpBlockNow.out, cpBlockReadNow.a);
   tieToLabel('PHASE4', cpBlockReadNow.b, { x: pos.x + 9100, y: pos.y - 6460 });
   tieToLabel('CPBLOCK_READ_NOW', cpBlockReadNow.out, { x: pos.x + 9300, y: pos.y - 6460 }); // anchor — ramOeFinal, RAM's own address mux, and cpBlockTemp's own we (all far) read this
-  const cpBlockCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6430 });
+  const cpBlockCommitNow = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6430 });
   wire(parent, isCpBlockNow.out, cpBlockCommitNow.a);
   tieToLabel('PHASE5', cpBlockCommitNow.b, { x: pos.x + 9100, y: pos.y - 6430 });
   tieToLabel('CPBLOCK_COMMIT_NOW', cpBlockCommitNow.out, { x: pos.x + 9300, y: pos.y - 6430 }); // anchor — B/C/H/L's own write-back layers, F's own we/per-bit layer, and the repeat gate (all far) read this
@@ -4205,42 +4205,42 @@ export function buildZ80Cpu(
   // `ED`-table families above already establish. Real Z80 documents
   // exactly two flag bits for this whole family — see the F-register
   // layer, far below.
-  const isIniNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6710 });
-  const isIniStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6710 });
+  const isIniNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6710 });
+  const isIniStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6710 });
   wire(parent, isEdX2Active.out, isIniStage.a);
   wire(parent, dec.y[4]!, isIniStage.b);
   wire(parent, isIniStage.out, isIniNow.a);
   wire(parent, dec.z[2]!, isIniNow.b);
   tieToLabel('IS_INI_NOW', isIniNow.out, { x: pos.x + 9150, y: pos.y - 6710 });
-  const isIndNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6740 });
-  const isIndStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6740 });
+  const isIndNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6740 });
+  const isIndStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6740 });
   wire(parent, isEdX2Active.out, isIndStage.a);
   wire(parent, dec.y[5]!, isIndStage.b);
   wire(parent, isIndStage.out, isIndNow.a);
   wire(parent, dec.z[2]!, isIndNow.b);
   tieToLabel('IS_IND_NOW', isIndNow.out, { x: pos.x + 9150, y: pos.y - 6740 });
-  const isInirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6770 });
-  const isInirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6770 });
+  const isInirNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6770 });
+  const isInirStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6770 });
   wire(parent, isEdX2Active.out, isInirStage.a);
   wire(parent, dec.y[6]!, isInirStage.b);
   wire(parent, isInirStage.out, isInirNow.a);
   wire(parent, dec.z[2]!, isInirNow.b);
   tieToLabel('IS_INIR_NOW', isInirNow.out, { x: pos.x + 9150, y: pos.y - 6770 }); // anchor — inRepeatVariantNow just below reads this
-  const isIndrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6800 });
-  const isIndrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6800 });
+  const isIndrNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6800 });
+  const isIndrStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6800 });
   wire(parent, isEdX2Active.out, isIndrStage.a);
   wire(parent, dec.y[7]!, isIndrStage.b);
   wire(parent, isIndrStage.out, isIndrNow.a);
   wire(parent, dec.z[2]!, isIndrNow.b);
   tieToLabel('IS_INDR_NOW', isIndrNow.out, { x: pos.x + 9150, y: pos.y - 6800 }); // anchor — inDirectionIsDecNow and inRepeatVariantNow just below both read this
 
-  const isInBlockStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6820 });
+  const isInBlockStage = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6820 });
   wire(parent, isIniNow.out, isInBlockStage.a);
   wire(parent, isIndNow.out, isInBlockStage.b);
-  const isInBlockStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6840 });
+  const isInBlockStage2 = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6840 });
   wire(parent, isInirNow.out, isInBlockStage2.a);
   wire(parent, isIndrNow.out, isInBlockStage2.b);
-  const isInBlockNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6830 });
+  const isInBlockNow = buildOr(parent, { x: pos.x + 9200, y: pos.y - 6830 });
   wire(parent, isInBlockStage.out, isInBlockNow.a);
   wire(parent, isInBlockStage2.out, isInBlockNow.b);
   tieToLabel('IS_INBLOCK_NOW', isInBlockNow.out, { x: pos.x + 9250, y: pos.y - 6830 }); // anchor — phase decode just below and HL's own pair-adder direction line (far) read this
@@ -4249,7 +4249,7 @@ export function buildZ80Cpu(
   // family's own default `++` — the identical "only the decrementing half
   // needs a widened direction line" shape `LDD`/`LDDR`'s own
   // `directionIsDecNow` already establishes for `HL`'s own pair adder.
-  const inDirectionIsDecNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6860 });
+  const inDirectionIsDecNow = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6860 });
   wire(parent, isIndNow.out, inDirectionIsDecNow.a);
   wire(parent, isIndrNow.out, inDirectionIsDecNow.b);
   tieToLabel('INBLOCK_DEC_DIR_NOW', inDirectionIsDecNow.out, { x: pos.x + 9250, y: pos.y - 6860 }); // anchor — HL's own pair adder direction line (far) reads this
@@ -4260,7 +4260,7 @@ export function buildZ80Cpu(
   // one condition to watch, unlike `CPIR`/`CPDR`'s own two — real Z80
   // stops this family purely on `B` reaching `0`, there's no "found it"
   // concept here at all.
-  const inRepeatVariantNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 6890 });
+  const inRepeatVariantNow = buildOr(parent, { x: pos.x + 9150, y: pos.y - 6890 });
   wire(parent, isInirNow.out, inRepeatVariantNow.a);
   wire(parent, isIndrNow.out, inRepeatVariantNow.b);
   tieToLabel('INBLOCK_REPEAT_VARIANT_NOW', inRepeatVariantNow.out, { x: pos.x + 9250, y: pos.y - 6890 }); // anchor — the pc mux chain's own final layer (far) reads this
@@ -4274,25 +4274,25 @@ export function buildZ80Cpu(
   // never widened for `PHASE4` — nothing needs RAM to drive the bus that
   // phase, `C`'s own tri-buf bank (far below) does instead, and letting
   // RAM's `oe` fire too would fight it for the same wire.
-  const inBlockReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6700 });
+  const inBlockReadNow = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6700 });
   wire(parent, isInBlockNow.out, inBlockReadNow.a);
   tieToLabel('PHASE4', inBlockReadNow.b, { x: pos.x + 9100, y: pos.y - 6700 });
   tieToLabel('INBLOCK_READ_NOW', inBlockReadNow.out, { x: pos.x + 9300, y: pos.y - 6700 }); // anchor — C's own bus-driver bank, ioRead, and RAM's own address mux (all far) read this
-  const inBlockWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6670 });
+  const inBlockWriteRaw = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6670 });
   wire(parent, isInBlockNow.out, inBlockWriteRaw.a);
   tieToLabel('PHASE5', inBlockWriteRaw.b, { x: pos.x + 9100, y: pos.y - 6670 });
-  const notInBlockReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6685 });
+  const notInBlockReadNow = buildNot(parent, { x: pos.x + 9250, y: pos.y - 6685 });
   wire(parent, inBlockReadNow.out, notInBlockReadNow.in);
-  const inBlockWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6670 });
+  const inBlockWriteNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6670 });
   wire(parent, inBlockWriteRaw.out, inBlockWriteNow.a);
   wire(parent, notInBlockReadNow.out, inBlockWriteNow.b);
   tieToLabel('INBLOCK_WRITE_NOW', inBlockWriteNow.out, { x: pos.x + 9350, y: pos.y - 6670 }); // anchor — ioPortDataIn's own bus-driver bank, ramWeFinal, and RAM's own address mux (all far) read this
-  const inBlockCommitRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6640 });
+  const inBlockCommitRaw = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6640 });
   wire(parent, isInBlockNow.out, inBlockCommitRaw.a);
   tieToLabel('PHASE6', inBlockCommitRaw.b, { x: pos.x + 9100, y: pos.y - 6640 });
-  const notInBlockWriteNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6655 });
+  const notInBlockWriteNow = buildNot(parent, { x: pos.x + 9250, y: pos.y - 6655 });
   wire(parent, inBlockWriteNow.out, notInBlockWriteNow.in);
-  const inBlockCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6640 });
+  const inBlockCommitNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6640 });
   wire(parent, inBlockCommitRaw.out, inBlockCommitNow.a);
   wire(parent, notInBlockWriteNow.out, inBlockCommitNow.b);
   tieToLabel('INBLOCK_COMMIT_NOW', inBlockCommitNow.out, { x: pos.x + 9350, y: pos.y - 6640 }); // anchor — B's and HL's own write-back layers, F's own we/per-bit layer (all far) read this
@@ -4309,42 +4309,42 @@ export function buildZ80Cpu(
   // own family here — decrementing `B` is the identical operation
   // regardless of which direction the port transfer runs, so nothing new
   // is built for it, only new consumers of what already exists.
-  const isOutiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6920 });
-  const isOutiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6920 });
+  const isOutiNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6920 });
+  const isOutiStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6920 });
   wire(parent, isEdX2Active.out, isOutiStage.a);
   wire(parent, dec.y[4]!, isOutiStage.b);
   wire(parent, isOutiStage.out, isOutiNow.a);
   wire(parent, dec.z[3]!, isOutiNow.b);
   tieToLabel('IS_OUTI_NOW', isOutiNow.out, { x: pos.x + 9150, y: pos.y - 6920 });
-  const isOutdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6950 });
-  const isOutdStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6950 });
+  const isOutdNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6950 });
+  const isOutdStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6950 });
   wire(parent, isEdX2Active.out, isOutdStage.a);
   wire(parent, dec.y[5]!, isOutdStage.b);
   wire(parent, isOutdStage.out, isOutdNow.a);
   wire(parent, dec.z[3]!, isOutdNow.b);
   tieToLabel('IS_OUTD_NOW', isOutdNow.out, { x: pos.x + 9150, y: pos.y - 6950 });
-  const isOtirNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 6980 });
-  const isOtirStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 6980 });
+  const isOtirNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 6980 });
+  const isOtirStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 6980 });
   wire(parent, isEdX2Active.out, isOtirStage.a);
   wire(parent, dec.y[6]!, isOtirStage.b);
   wire(parent, isOtirStage.out, isOtirNow.a);
   wire(parent, dec.z[3]!, isOtirNow.b);
   tieToLabel('IS_OTIR_NOW', isOtirNow.out, { x: pos.x + 9150, y: pos.y - 6980 }); // anchor — outRepeatVariantNow just below reads this
-  const isOtdrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 7010 });
-  const isOtdrStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 7010 });
+  const isOtdrNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 7010 });
+  const isOtdrStage = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 7010 });
   wire(parent, isEdX2Active.out, isOtdrStage.a);
   wire(parent, dec.y[7]!, isOtdrStage.b);
   wire(parent, isOtdrStage.out, isOtdrNow.a);
   wire(parent, dec.z[3]!, isOtdrNow.b);
   tieToLabel('IS_OTDR_NOW', isOtdrNow.out, { x: pos.x + 9150, y: pos.y - 7010 }); // anchor — outDirectionIsDecNow and outRepeatVariantNow just below both read this
 
-  const isOutBlockStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7030 });
+  const isOutBlockStage = buildOr(parent, { x: pos.x + 9150, y: pos.y - 7030 });
   wire(parent, isOutiNow.out, isOutBlockStage.a);
   wire(parent, isOutdNow.out, isOutBlockStage.b);
-  const isOutBlockStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7050 });
+  const isOutBlockStage2 = buildOr(parent, { x: pos.x + 9150, y: pos.y - 7050 });
   wire(parent, isOtirNow.out, isOutBlockStage2.a);
   wire(parent, isOtdrNow.out, isOutBlockStage2.b);
-  const isOutBlockNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7040 });
+  const isOutBlockNow = buildOr(parent, { x: pos.x + 9200, y: pos.y - 7040 });
   wire(parent, isOutBlockStage.out, isOutBlockNow.a);
   wire(parent, isOutBlockStage2.out, isOutBlockNow.b);
   tieToLabel('IS_OUTBLOCK_NOW', isOutBlockNow.out, { x: pos.x + 9250, y: pos.y - 7040 }); // anchor — phase decode just below and HL's own pair-adder direction line (far) read this
@@ -4352,7 +4352,7 @@ export function buildZ80Cpu(
   // `outDirectionIsDecNow`: `OUTD`/`OTDR` want `HL--` instead of the
   // family's own default `++` — the identical shape `IND`/`INDR`'s own
   // `inDirectionIsDecNow` already establishes.
-  const outDirectionIsDecNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7070 });
+  const outDirectionIsDecNow = buildOr(parent, { x: pos.x + 9150, y: pos.y - 7070 });
   wire(parent, isOutdNow.out, outDirectionIsDecNow.a);
   wire(parent, isOtdrNow.out, outDirectionIsDecNow.b);
   tieToLabel('OUTBLOCK_DEC_DIR_NOW', outDirectionIsDecNow.out, { x: pos.x + 9250, y: pos.y - 7070 }); // anchor — HL's own pair adder direction line (far) reads this
@@ -4361,7 +4361,7 @@ export function buildZ80Cpu(
   // shared nonzero bit, far below, the identical shape `INIR`/`INDR`'s
   // own `inRepeatVariantNow` already establishes, just gated by this
   // family's own `y`/`z` decode instead.
-  const outRepeatVariantNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7090 });
+  const outRepeatVariantNow = buildOr(parent, { x: pos.x + 9150, y: pos.y - 7090 });
   wire(parent, isOtirNow.out, outRepeatVariantNow.a);
   wire(parent, isOtdrNow.out, outRepeatVariantNow.b);
   tieToLabel('OUTBLOCK_REPEAT_VARIANT_NOW', outRepeatVariantNow.out, { x: pos.x + 9250, y: pos.y - 7090 }); // anchor — the pc mux chain's own final layer (far) reads this
@@ -4379,25 +4379,25 @@ export function buildZ80Cpu(
   // not through the CPU's main bus at all, since `ioPortDataOut` was
   // never a bus tap to begin with), strobing `ioWrite`. `PHASE6` commits
   // `HL+-1`/`B--`/flags.
-  const outBlockReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6910 });
+  const outBlockReadNow = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6910 });
   wire(parent, isOutBlockNow.out, outBlockReadNow.a);
   tieToLabel('PHASE4', outBlockReadNow.b, { x: pos.x + 9100, y: pos.y - 6910 });
   tieToLabel('OUTBLOCK_READ_NOW', outBlockReadNow.out, { x: pos.x + 9300, y: pos.y - 6910 }); // anchor — ramOeFinal, RAM's own address mux, and outBlockTemp's own we (all far) read this
-  const outBlockWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6880 });
+  const outBlockWriteRaw = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6880 });
   wire(parent, isOutBlockNow.out, outBlockWriteRaw.a);
   tieToLabel('PHASE5', outBlockWriteRaw.b, { x: pos.x + 9100, y: pos.y - 6880 });
-  const notOutBlockReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6895 });
+  const notOutBlockReadNow = buildNot(parent, { x: pos.x + 9250, y: pos.y - 6895 });
   wire(parent, outBlockReadNow.out, notOutBlockReadNow.in);
-  const outBlockWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6880 });
+  const outBlockWriteNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6880 });
   wire(parent, outBlockWriteRaw.out, outBlockWriteNow.a);
   wire(parent, notOutBlockReadNow.out, outBlockWriteNow.b);
   tieToLabel('OUTBLOCK_WRITE_NOW', outBlockWriteNow.out, { x: pos.x + 9350, y: pos.y - 6880 }); // anchor — C's own bus-driver bank, ioPortDataOut's own mux, and ioWrite (all far) read this
-  const outBlockCommitRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 6850 });
+  const outBlockCommitRaw = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 6850 });
   wire(parent, isOutBlockNow.out, outBlockCommitRaw.a);
   tieToLabel('PHASE6', outBlockCommitRaw.b, { x: pos.x + 9100, y: pos.y - 6850 });
-  const notOutBlockWriteNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 6865 });
+  const notOutBlockWriteNow = buildNot(parent, { x: pos.x + 9250, y: pos.y - 6865 });
   wire(parent, outBlockWriteNow.out, notOutBlockWriteNow.in);
-  const outBlockCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6850 });
+  const outBlockCommitNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 6850 });
   wire(parent, outBlockCommitRaw.out, outBlockCommitNow.a);
   wire(parent, notOutBlockWriteNow.out, outBlockCommitNow.b);
   tieToLabel('OUTBLOCK_COMMIT_NOW', outBlockCommitNow.out, { x: pos.x + 9350, y: pos.y - 6850 }); // anchor — B's and HL's own write-back layers, F's own we/per-bit layer (all far) read this
@@ -4430,7 +4430,7 @@ export function buildZ80Cpu(
   // well-documented "undocumented duplicate" quirk, not a gap — so
   // `isNegNow` reads `isEdX1Active`/`dec.z[4]` only, deliberately
   // widening past `dec.y[0]` alone.
-  const isNegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 7130 });
+  const isNegNow = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 7130 });
   wire(parent, isEdX1Active.out, isNegNow.a);
   wire(parent, dec.z[4]!, isNegNow.b);
   tieToLabel('IS_NEG_NOW', isNegNow.out, { x: pos.x + 9150, y: pos.y - 7130 });
@@ -4439,7 +4439,7 @@ export function buildZ80Cpu(
   // — see the prefix mechanism's own doc comment above) — real `NEG`
   // commits everything (`A`, every flag bit) on this single edge, no
   // holding register or multi-phase sequencing needed at all.
-  const negNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 7150 });
+  const negNow = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 7150 });
   wire(parent, isNegNow.out, negNow.a);
   tieToLabel('PHASE4', negNow.b, { x: pos.x + 9050, y: pos.y - 7150 });
   tieToLabel('NEG_NOW', negNow.out, { x: pos.x + 9250, y: pos.y - 7150 }); // anchor — A's own write mux and F's own we/per-bit layer (all far) read this
@@ -4459,7 +4459,7 @@ export function buildZ80Cpu(
   tiePowerRail(parent, 'VCC', negAdder.cin);
   for (let i = 0; i < 8; i++) {
     tiePowerRail(parent, 'GND', negAdder.a[i]!);
-    const negBInv = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7300 + i * 20 });
+    const negBInv = buildNot(parent, { x: pos.x + 9250, y: pos.y - 7300 + i * 20 });
     wire(parent, a.q[i]!, negBInv.in);
     wire(parent, negBInv.out, negAdder.b[i]!);
   }
@@ -4468,23 +4468,23 @@ export function buildZ80Cpu(
   const negYBit = negAdder.out[5]!;
   let negZChain: Pin = negAdder.out[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7150 + i * 20 });
+    const orGate = buildOr(parent, { x: pos.x + 9350, y: pos.y - 7150 + i * 20 });
     wire(parent, negZChain, orGate.a);
     wire(parent, negAdder.out[i]!, orGate.b);
     negZChain = orGate.out;
   }
-  const negZBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 7130 });
+  const negZBit = buildNot(parent, { x: pos.x + 9400, y: pos.y - 7130 });
   wire(parent, negZChain, negZBit.in);
   // H: the identical `NOT(carries[3])` half-borrow idiom `cpBlockAdder`'s
   // own `cpHBit` already establishes — this adder never computes
   // anything but a subtract either.
-  const negHBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 7110 });
+  const negHBit = buildNot(parent, { x: pos.x + 9400, y: pos.y - 7110 });
   wire(parent, negAdder.carries[3]!, negHBit.in);
   // P/V: real Z80 sets this for `NEG` on overflow alone (`A` was `0x80`,
   // the one value whose negation doesn't fit back into a signed byte) —
   // the identical `XOR(carries[6], carries[7])` overflow idiom the
   // shared ALU's own `pvOverflow` already establishes.
-  const negPvBit = buildXor(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 7090 });
+  const negPvBit = buildXor(parent, { x: pos.x + 9400, y: pos.y - 7090 });
   wire(parent, negAdder.carries[6]!, negPvBit.a);
   wire(parent, negAdder.carries[7]!, negPvBit.b);
   // C: real Z80 sets this whenever `A` was nonzero before the operation
@@ -4494,7 +4494,7 @@ export function buildZ80Cpu(
   // or `B`.
   let negCChain: Pin = a.q[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 7150 + i * 20 });
+    const orGate = buildOr(parent, { x: pos.x + 9450, y: pos.y - 7150 + i * 20 });
     wire(parent, negCChain, orGate.a);
     wire(parent, a.q[i]!, orGate.b);
     negCChain = orGate.out;
@@ -4507,52 +4507,52 @@ export function buildZ80Cpu(
   // ED prefix: copy A→I/R, or I/R→A with S/Z/H=0/N=0/P/V=0 (IFF2 exists
   // for thin IM1 IRQ but is not copied into P/V here — Known Simplifications)
   // / X/Y from the transferred byte; C held.
-  const isLdIA = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5680 });
-  const isLdIAStage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5680 });
+  const isLdIA = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5680 });
+  const isLdIAStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5680 });
   wire(parent, isEdX1Active.out, isLdIAStage.a);
   wire(parent, dec.y[0]!, isLdIAStage.b);
   wire(parent, isLdIAStage.out, isLdIA.a);
   wire(parent, dec.z[7]!, isLdIA.b);
   tieToLabel('IS_LDIA_NOW', isLdIA.out, { x: pos.x - 850, y: pos.y - 5680 });
-  const isLdRA = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5700 });
-  const isLdRAStage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5700 });
+  const isLdRA = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5700 });
+  const isLdRAStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5700 });
   wire(parent, isEdX1Active.out, isLdRAStage.a);
   wire(parent, dec.y[1]!, isLdRAStage.b);
   wire(parent, isLdRAStage.out, isLdRA.a);
   wire(parent, dec.z[7]!, isLdRA.b);
   tieToLabel('IS_LDRA_NOW', isLdRA.out, { x: pos.x - 850, y: pos.y - 5700 });
-  const isLdAI = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5720 });
-  const isLdAIStage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5720 });
+  const isLdAI = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5720 });
+  const isLdAIStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5720 });
   wire(parent, isEdX1Active.out, isLdAIStage.a);
   wire(parent, dec.y[2]!, isLdAIStage.b);
   wire(parent, isLdAIStage.out, isLdAI.a);
   wire(parent, dec.z[7]!, isLdAI.b);
   tieToLabel('IS_LDAI_NOW', isLdAI.out, { x: pos.x - 850, y: pos.y - 5720 });
-  const isLdAR = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5740 });
-  const isLdARStage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5740 });
+  const isLdAR = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5740 });
+  const isLdARStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5740 });
   wire(parent, isEdX1Active.out, isLdARStage.a);
   wire(parent, dec.y[3]!, isLdARStage.b);
   wire(parent, isLdARStage.out, isLdAR.a);
   wire(parent, dec.z[7]!, isLdAR.b);
   tieToLabel('IS_LDAR_NOW', isLdAR.out, { x: pos.x - 850, y: pos.y - 5740 });
 
-  const ldIANow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5680 });
+  const ldIANow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5680 });
   wire(parent, isLdIA.out, ldIANow.a);
   tieToLabel('PHASE4', ldIANow.b, { x: pos.x - 950, y: pos.y - 5660 });
   tieToLabel('LDIA_NOW', ldIANow.out, { x: pos.x - 800, y: pos.y - 5680 });
-  const ldRANow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5700 });
+  const ldRANow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5700 });
   wire(parent, isLdRA.out, ldRANow.a);
   tieToLabel('PHASE4', ldRANow.b, { x: pos.x - 950, y: pos.y - 5690 });
   tieToLabel('LDRA_NOW', ldRANow.out, { x: pos.x - 800, y: pos.y - 5700 });
-  const ldAINow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5720 });
+  const ldAINow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5720 });
   wire(parent, isLdAI.out, ldAINow.a);
   tieToLabel('PHASE4', ldAINow.b, { x: pos.x - 950, y: pos.y - 5710 });
   tieToLabel('LDAI_NOW', ldAINow.out, { x: pos.x - 800, y: pos.y - 5720 });
-  const ldARNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5740 });
+  const ldARNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5740 });
   wire(parent, isLdAR.out, ldARNow.a);
   tieToLabel('PHASE4', ldARNow.b, { x: pos.x - 950, y: pos.y - 5730 });
   tieToLabel('LDAR_NOW', ldARNow.out, { x: pos.x - 800, y: pos.y - 5740 });
-  const ldAIrNow = buildOr(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5730 });
+  const ldAIrNow = buildOr(parent, { x: pos.x - 750, y: pos.y - 5730 });
   wire(parent, ldAINow.out, ldAIrNow.a);
   wire(parent, ldARNow.out, ldAIrNow.b);
   tieToLabel('LDAIR_NOW', ldAIrNow.out, { x: pos.x - 700, y: pos.y - 5730 }); // anchor — A's we/mux + F we/layer
@@ -4560,23 +4560,23 @@ export function buildZ80Cpu(
   // Thin IRQ: `IM 1` (ED 0x56 — y=2, z=6) and `RETI` (ED 0x4D — y=1, z=5).
   // Both commit on PHASE4 like every other ED x=01 body. RETI reuses RET's
   // stack-pop/PC-capture path (widened below); IM 1 only sets the mode latch.
-  const isIm1 = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5780 });
-  const isIm1Stage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5780 });
+  const isIm1 = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5780 });
+  const isIm1Stage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5780 });
   wire(parent, isEdX1Active.out, isIm1Stage.a);
   wire(parent, dec.y[2]!, isIm1Stage.b);
   wire(parent, isIm1Stage.out, isIm1.a);
   wire(parent, dec.z[6]!, isIm1.b);
-  const im1Now = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5780 });
+  const im1Now = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5780 });
   wire(parent, isIm1.out, im1Now.a);
   tieToLabel('PHASE4', im1Now.b, { x: pos.x - 950, y: pos.y - 5760 });
   tieToLabel('IM1_NOW', im1Now.out, { x: pos.x - 800, y: pos.y - 5780 }); // anchor — im1's own write mux
-  const isReti = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5800 });
-  const isRetiStage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5800 });
+  const isReti = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5800 });
+  const isRetiStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5800 });
   wire(parent, isEdX1Active.out, isRetiStage.a);
   wire(parent, dec.y[1]!, isRetiStage.b);
   wire(parent, isRetiStage.out, isReti.a);
   wire(parent, dec.z[5]!, isReti.b);
-  const retiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5800 });
+  const retiNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5800 });
   wire(parent, isReti.out, retiNow.a);
   tieToLabel('PHASE4', retiNow.b, { x: pos.x - 950, y: pos.y - 5780 });
   tieToLabel('RETI_NOW', retiNow.out, { x: pos.x - 800, y: pos.y - 5800 }); // anchor — readNow / retMux / IFF1←IFF2
@@ -4587,21 +4587,21 @@ export function buildZ80Cpu(
   // without touching every byte's own high nibble. Collides with real
   // unprefixed `LD y,A` (`x=01`, `z=7` picks `A` as the source) for
   // every destination `y` picks.
-  const isRrdNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5560 });
-  const isRrdStage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5560 });
+  const isRrdNow = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5560 });
+  const isRrdStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5560 });
   wire(parent, isEdX1Active.out, isRrdStage.a);
   wire(parent, dec.y[4]!, isRrdStage.b);
   wire(parent, isRrdStage.out, isRrdNow.a);
   wire(parent, dec.z[7]!, isRrdNow.b);
   tieToLabel('IS_RRD_NOW', isRrdNow.out, { x: pos.x - 850, y: pos.y - 5560 });
-  const isRldNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5580 });
-  const isRldStage = buildAnd(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5580 });
+  const isRldNow = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5580 });
+  const isRldStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5580 });
   wire(parent, isEdX1Active.out, isRldStage.a);
   wire(parent, dec.y[5]!, isRldStage.b);
   wire(parent, isRldStage.out, isRldNow.a);
   wire(parent, dec.z[7]!, isRldNow.b);
   tieToLabel('IS_RLD_NOW', isRldNow.out, { x: pos.x - 850, y: pos.y - 5580 }); // anchor — the shared nibble muxes and F's own P/V-vs-parity-mux-adjacent layer (all near/far) read this
-  const isRrdRldNow = buildOr(parent, vcc3, gnd3, { x: pos.x - 800, y: pos.y - 5570 });
+  const isRrdRldNow = buildOr(parent, { x: pos.x - 800, y: pos.y - 5570 });
   wire(parent, isRrdNow.out, isRrdRldNow.a);
   wire(parent, isRldNow.out, isRrdRldNow.b);
   tieToLabel('IS_RRDRLD_NOW', isRrdRldNow.out, { x: pos.x - 750, y: pos.y - 5570 }); // anchor — phase decode just below, RAM's own oe/we/address mux, A's own write mux, and F's own we/per-bit layer (all far) read this
@@ -4612,25 +4612,25 @@ export function buildZ80Cpu(
   // read and write share one address here, so both phases reuse a
   // single address-mux layer below rather than needing two), `PHASE6`
   // commits `A`'s own low nibble and every flag bit but `C`.
-  const rrdRldReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5600 });
+  const rrdRldReadNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5600 });
   wire(parent, isRrdRldNow.out, rrdRldReadNow.a);
   tieToLabel('PHASE4', rrdRldReadNow.b, { x: pos.x - 950, y: pos.y - 5600 });
   tieToLabel('RRDRLD_READ_NOW', rrdRldReadNow.out, { x: pos.x - 800, y: pos.y - 5600 }); // anchor — ramOeFinal, RAM's own address mux, and rrdRldTemp's own we (all far) read this
-  const rrdRldWriteRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5620 });
+  const rrdRldWriteRaw = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5620 });
   wire(parent, isRrdRldNow.out, rrdRldWriteRaw.a);
   tieToLabel('PHASE5', rrdRldWriteRaw.b, { x: pos.x - 950, y: pos.y - 5620 });
-  const notRrdRldReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x - 800, y: pos.y - 5610 });
+  const notRrdRldReadNow = buildNot(parent, { x: pos.x - 800, y: pos.y - 5610 });
   wire(parent, rrdRldReadNow.out, notRrdRldReadNow.in);
-  const rrdRldWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5620 });
+  const rrdRldWriteNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5620 });
   wire(parent, rrdRldWriteRaw.out, rrdRldWriteNow.a);
   wire(parent, notRrdRldReadNow.out, rrdRldWriteNow.b);
   tieToLabel('RRDRLD_WRITE_NOW', rrdRldWriteNow.out, { x: pos.x - 700, y: pos.y - 5620 }); // anchor — ramWeFinal, RAM's own address mux, and the rotated-byte bus-driver bank (all far) read this
-  const rrdRldCommitRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5640 });
+  const rrdRldCommitRaw = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5640 });
   wire(parent, isRrdRldNow.out, rrdRldCommitRaw.a);
   tieToLabel('PHASE6', rrdRldCommitRaw.b, { x: pos.x - 950, y: pos.y - 5640 });
-  const notRrdRldWriteNow = buildNot(parent, vcc3, gnd3, { x: pos.x - 800, y: pos.y - 5630 });
+  const notRrdRldWriteNow = buildNot(parent, { x: pos.x - 800, y: pos.y - 5630 });
   wire(parent, rrdRldWriteNow.out, notRrdRldWriteNow.in);
-  const rrdRldCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5640 });
+  const rrdRldCommitNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5640 });
   wire(parent, rrdRldCommitRaw.out, rrdRldCommitNow.a);
   wire(parent, notRrdRldWriteNow.out, rrdRldCommitNow.b);
   tieToLabel('RRDRLD_COMMIT_NOW', rrdRldCommitNow.out, { x: pos.x - 700, y: pos.y - 5640 }); // anchor — A's own write mux and F's own we/per-bit layer (all far) read this
@@ -4684,33 +4684,33 @@ export function buildZ80Cpu(
   const rrdRldSBit = rrdRldNewAHigh[3]!;
   let rrdRldZChain: Pin = rrdRldNewALow[0]!;
   for (let i = 1; i < 4; i++) {
-    const or1 = buildOr(parent, vcc3, gnd3, { x: pos.x - 550, y: pos.y - 5600 + i * 20 });
+    const or1 = buildOr(parent, { x: pos.x - 550, y: pos.y - 5600 + i * 20 });
     wire(parent, rrdRldZChain, or1.a);
     wire(parent, rrdRldNewALow[i]!, or1.b);
     rrdRldZChain = or1.out;
   }
   for (let i = 0; i < 4; i++) {
-    const or2 = buildOr(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 5600 + i * 20 });
+    const or2 = buildOr(parent, { x: pos.x - 500, y: pos.y - 5600 + i * 20 });
     wire(parent, rrdRldZChain, or2.a);
     wire(parent, rrdRldNewAHigh[i]!, or2.b);
     rrdRldZChain = or2.out;
   }
-  const rrdRldZBit = buildNot(parent, vcc3, gnd3, { x: pos.x - 450, y: pos.y - 5580 });
+  const rrdRldZBit = buildNot(parent, { x: pos.x - 450, y: pos.y - 5580 });
   wire(parent, rrdRldZChain, rrdRldZBit.in);
   let rrdRldPChain: Pin = rrdRldNewALow[0]!;
   for (let i = 1; i < 4; i++) {
-    const xor1 = buildXor(parent, vcc3, gnd3, { x: pos.x - 550, y: pos.y - 5540 + i * 20 });
+    const xor1 = buildXor(parent, { x: pos.x - 550, y: pos.y - 5540 + i * 20 });
     wire(parent, rrdRldPChain, xor1.a);
     wire(parent, rrdRldNewALow[i]!, xor1.b);
     rrdRldPChain = xor1.out;
   }
   for (let i = 0; i < 4; i++) {
-    const xor2 = buildXor(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 5540 + i * 20 });
+    const xor2 = buildXor(parent, { x: pos.x - 500, y: pos.y - 5540 + i * 20 });
     wire(parent, rrdRldPChain, xor2.a);
     wire(parent, rrdRldNewAHigh[i]!, xor2.b);
     rrdRldPChain = xor2.out;
   }
-  const rrdRldPBit = buildNot(parent, vcc3, gnd3, { x: pos.x - 450, y: pos.y - 5520 });
+  const rrdRldPBit = buildNot(parent, { x: pos.x - 450, y: pos.y - 5520 });
   wire(parent, rrdRldPChain, rrdRldPBit.in);
 
   // x=01, z=0/z=1: IN r,(C) / OUT (C),r (real 0xED 0x40..0x78 / 0x41..0x79)
@@ -4724,29 +4724,29 @@ export function buildZ80Cpu(
   // external `ioPortDataIn` byte into the destination (and F). Address and
   // data ride different nets (BUS vs raw `ioPortDataIn` / `ioPortDataOut`),
   // the identical shape `IN A,(n)` already established at PHASE2.
-  const isInRcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5450 });
+  const isInRcNow = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5450 });
   wire(parent, isEdX1Active.out, isInRcNow.a);
   wire(parent, dec.z[0]!, isInRcNow.b);
   tieToLabel('IS_INRC_NOW', isInRcNow.out, { x: pos.x - 850, y: pos.y - 5450 });
-  const isOutRcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5480 });
+  const isOutRcNow = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5480 });
   wire(parent, isEdX1Active.out, isOutRcNow.a);
   wire(parent, dec.z[1]!, isOutRcNow.b);
   tieToLabel('IS_OUTRC_NOW', isOutRcNow.out, { x: pos.x - 850, y: pos.y - 5480 });
 
-  const inRcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5450 });
+  const inRcNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5450 });
   wire(parent, isInRcNow.out, inRcNow.a);
   tieToLabel('PHASE4', inRcNow.b, { x: pos.x - 950, y: pos.y - 5450 });
   tieToLabel('INRC_NOW', inRcNow.out, { x: pos.x - 800, y: pos.y - 5450 }); // anchor — ioRead, C-onto-bus, reg we, F layer
-  const outRcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5480 });
+  const outRcNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5480 });
   wire(parent, isOutRcNow.out, outRcNow.a);
   tieToLabel('PHASE4', outRcNow.b, { x: pos.x - 950, y: pos.y - 5480 });
   tieToLabel('OUTRC_NOW', outRcNow.out, { x: pos.x - 800, y: pos.y - 5480 }); // anchor — ioWrite, C-onto-bus, ioPortDataOut mux
 
   // Per-destination WE for IN (y≠6). y=6 still asserts INRC_NOW for the
   // port read + flags, but never lands a register write.
-  const notInRcY6 = buildNot(parent, vcc3, gnd3, { x: pos.x - 800, y: pos.y - 5420 });
+  const notInRcY6 = buildNot(parent, { x: pos.x - 800, y: pos.y - 5420 });
   wire(parent, dec.y[6]!, notInRcY6.in);
-  const inRcRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5420 });
+  const inRcRegNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5420 });
   wire(parent, inRcNow.out, inRcRegNow.a);
   wire(parent, notInRcY6.out, inRcRegNow.b);
   tieToLabel('INRC_REG_NOW', inRcRegNow.out, { x: pos.x - 700, y: pos.y - 5420 });
@@ -4760,14 +4760,14 @@ export function buildZ80Cpu(
     { y: dec.y[7]!, label: 'INRC_WE_A_NOW' },
   ];
   inRcWeSpecs.forEach(({ y, label }, i) => {
-    const gate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 5420 - i * 25 });
+    const gate = buildAnd(parent, { x: pos.x - 650, y: pos.y - 5420 - i * 25 });
     wire(parent, inRcRegNow.out, gate.a);
     wire(parent, y, gate.b);
     tieToLabel(label, gate.out, { x: pos.x - 600, y: pos.y - 5420 - i * 25 });
   });
 
   // OUT (C),0 — y=6 forces a literal zero onto ioPortDataOut.
-  const outRcZeroNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5480 });
+  const outRcZeroNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5480 });
   wire(parent, outRcNow.out, outRcZeroNow.a);
   wire(parent, dec.y[6]!, outRcZeroNow.b);
   tieToLabel('OUTRC_ZERO_NOW', outRcZeroNow.out, { x: pos.x - 700, y: pos.y - 5480 });
@@ -4781,7 +4781,7 @@ export function buildZ80Cpu(
     { y: dec.y[7]!, label: 'OUTRC_BUS_A_NOW' },
   ];
   outRcBusSpecs.forEach(({ y, label }, i) => {
-    const gate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 5600 - i * 25 });
+    const gate = buildAnd(parent, { x: pos.x - 650, y: pos.y - 5600 - i * 25 });
     wire(parent, outRcNow.out, gate.a);
     wire(parent, y, gate.b);
     tieToLabel(label, gate.out, { x: pos.x - 600, y: pos.y - 5600 - i * 25 });
@@ -4801,156 +4801,156 @@ export function buildZ80Cpu(
   //   PHASE6: advance PC past the instruction; data low (write or read)
   //   PHASE7: data high (write or read)
   // y even = LD (nn),dd; y odd = LD dd,(nn); y>>1 picks BC/DE/HL/SP.
-  const isEdLdNnDd = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5800 });
+  const isEdLdNnDd = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5800 });
   wire(parent, isEdX1Active.out, isEdLdNnDd.a);
   wire(parent, dec.z[3]!, isEdLdNnDd.b);
   tieToLabel('IS_EDLDNNDD_NOW', isEdLdNnDd.out, { x: pos.x - 850, y: pos.y - 5800 });
 
-  const edNnImmLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5830 });
+  const edNnImmLowNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5830 });
   wire(parent, isEdLdNnDd.out, edNnImmLowNow.a);
   tieToLabel('PHASE4', edNnImmLowNow.b, { x: pos.x - 950, y: pos.y - 5830 });
   tieToLabel('EDNN_IMM_LOW_NOW', edNnImmLowNow.out, { x: pos.x - 800, y: pos.y - 5830 }); // anchor — ramOe, nnAddr we, nnAddr low-byte mux
 
-  const edNnImmHighRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5860 });
+  const edNnImmHighRaw = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5860 });
   wire(parent, isEdLdNnDd.out, edNnImmHighRaw.a);
   tieToLabel('PHASE5', edNnImmHighRaw.b, { x: pos.x - 950, y: pos.y - 5860 });
-  const notEdNnImmLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x - 800, y: pos.y - 5845 });
+  const notEdNnImmLowNow = buildNot(parent, { x: pos.x - 800, y: pos.y - 5845 });
   wire(parent, edNnImmLowNow.out, notEdNnImmLowNow.in);
-  const edNnImmHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5860 });
+  const edNnImmHighNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5860 });
   wire(parent, edNnImmHighRaw.out, edNnImmHighNow.a);
   wire(parent, notEdNnImmLowNow.out, edNnImmHighNow.b);
   tieToLabel('EDNN_IMM_HIGH_NOW', edNnImmHighNow.out, { x: pos.x - 700, y: pos.y - 5860 }); // anchor — ramOe, nnAddr we, PC+1 addr mux, pcHold advance #1
 
-  const edNnDataLowRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5890 });
+  const edNnDataLowRaw = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5890 });
   wire(parent, isEdLdNnDd.out, edNnDataLowRaw.a);
   tieToLabel('PHASE6', edNnDataLowRaw.b, { x: pos.x - 950, y: pos.y - 5890 });
-  const notEdNnImmHighNow = buildNot(parent, vcc3, gnd3, { x: pos.x - 800, y: pos.y - 5875 });
+  const notEdNnImmHighNow = buildNot(parent, { x: pos.x - 800, y: pos.y - 5875 });
   wire(parent, edNnImmHighNow.out, notEdNnImmHighNow.in);
-  const edNnDataLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5890 });
+  const edNnDataLowNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5890 });
   wire(parent, edNnDataLowRaw.out, edNnDataLowNow.a);
   wire(parent, notEdNnImmHighNow.out, edNnDataLowNow.b);
   tieToLabel('EDNN_DATA_LOW_NOW', edNnDataLowNow.out, { x: pos.x - 700, y: pos.y - 5890 }); // anchor — data write/read low, pcHold advance #2, nnAddr data addr
 
-  const edNnDataHighRaw = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5920 });
+  const edNnDataHighRaw = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5920 });
   wire(parent, isEdLdNnDd.out, edNnDataHighRaw.a);
   tieToLabel('PHASE7', edNnDataHighRaw.b, { x: pos.x - 950, y: pos.y - 5920 });
-  const notEdNnDataLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x - 800, y: pos.y - 5905 });
+  const notEdNnDataLowNow = buildNot(parent, { x: pos.x - 800, y: pos.y - 5905 });
   wire(parent, edNnDataLowNow.out, notEdNnDataLowNow.in);
-  const edNnDataHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5920 });
+  const edNnDataHighNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5920 });
   wire(parent, edNnDataHighRaw.out, edNnDataHighNow.a);
   wire(parent, notEdNnDataLowNow.out, edNnDataHighNow.b);
   tieToLabel('EDNN_DATA_HIGH_NOW', edNnDataHighNow.out, { x: pos.x - 700, y: pos.y - 5920 }); // anchor — data write/read high, nnAddr+1 data addr
 
   // Direction: even y = store (nn),dd; odd y = load dd,(nn).
-  const edNnStoreY = buildOr(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5950 });
+  const edNnStoreY = buildOr(parent, { x: pos.x - 900, y: pos.y - 5950 });
   wire(parent, dec.y[0]!, edNnStoreY.a);
   wire(parent, dec.y[2]!, edNnStoreY.b);
-  const edNnStoreY2 = buildOr(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5970 });
+  const edNnStoreY2 = buildOr(parent, { x: pos.x - 900, y: pos.y - 5970 });
   wire(parent, edNnStoreY.out, edNnStoreY2.a);
   wire(parent, dec.y[4]!, edNnStoreY2.b);
-  const edNnStoreYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5990 });
+  const edNnStoreYFold = buildOr(parent, { x: pos.x - 900, y: pos.y - 5990 });
   wire(parent, edNnStoreY2.out, edNnStoreYFold.a);
   wire(parent, dec.y[6]!, edNnStoreYFold.b);
-  const edNnStoreNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5970 });
+  const edNnStoreNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5970 });
   wire(parent, isEdLdNnDd.out, edNnStoreNow.a);
   wire(parent, edNnStoreYFold.out, edNnStoreNow.b);
   tieToLabel('EDNN_STORE_NOW', edNnStoreNow.out, { x: pos.x - 800, y: pos.y - 5970 });
 
-  const edNnLoadY = buildOr(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 6010 });
+  const edNnLoadY = buildOr(parent, { x: pos.x - 900, y: pos.y - 6010 });
   wire(parent, dec.y[1]!, edNnLoadY.a);
   wire(parent, dec.y[3]!, edNnLoadY.b);
-  const edNnLoadY2 = buildOr(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 6030 });
+  const edNnLoadY2 = buildOr(parent, { x: pos.x - 900, y: pos.y - 6030 });
   wire(parent, edNnLoadY.out, edNnLoadY2.a);
   wire(parent, dec.y[5]!, edNnLoadY2.b);
-  const edNnLoadYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 6050 });
+  const edNnLoadYFold = buildOr(parent, { x: pos.x - 900, y: pos.y - 6050 });
   wire(parent, edNnLoadY2.out, edNnLoadYFold.a);
   wire(parent, dec.y[7]!, edNnLoadYFold.b);
-  const edNnLoadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 6030 });
+  const edNnLoadNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 6030 });
   wire(parent, isEdLdNnDd.out, edNnLoadNow.a);
   wire(parent, edNnLoadYFold.out, edNnLoadNow.b);
   tieToLabel('EDNN_LOAD_NOW', edNnLoadNow.out, { x: pos.x - 800, y: pos.y - 6030 });
 
   // Store/load × low/high phase enables (AND with data phases).
-  const edNnWriteLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5950 });
+  const edNnWriteLowNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5950 });
   wire(parent, edNnStoreNow.out, edNnWriteLowNow.a);
   wire(parent, edNnDataLowNow.out, edNnWriteLowNow.b);
   tieToLabel('EDNN_WRITE_LOW_NOW', edNnWriteLowNow.out, { x: pos.x - 700, y: pos.y - 5950 }); // ram we + bus drivers
-  const edNnWriteHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5980 });
+  const edNnWriteHighNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5980 });
   wire(parent, edNnStoreNow.out, edNnWriteHighNow.a);
   wire(parent, edNnDataHighNow.out, edNnWriteHighNow.b);
   tieToLabel('EDNN_WRITE_HIGH_NOW', edNnWriteHighNow.out, { x: pos.x - 700, y: pos.y - 5980 });
-  const edNnReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 6010 });
+  const edNnReadLowNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 6010 });
   wire(parent, edNnLoadNow.out, edNnReadLowNow.a);
   wire(parent, edNnDataLowNow.out, edNnReadLowNow.b);
   tieToLabel('EDNN_READ_LOW_NOW', edNnReadLowNow.out, { x: pos.x - 700, y: pos.y - 6010 }); // ram oe + register we
-  const edNnReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 6040 });
+  const edNnReadHighNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 6040 });
   wire(parent, edNnLoadNow.out, edNnReadHighNow.a);
   wire(parent, edNnDataHighNow.out, edNnReadHighNow.b);
   tieToLabel('EDNN_READ_HIGH_NOW', edNnReadHighNow.out, { x: pos.x - 700, y: pos.y - 6040 });
 
   // Per-register bus-drive (store) and we (load) enables.
-  const edNnBusC = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6070 });
+  const edNnBusC = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6070 });
   wire(parent, edNnWriteLowNow.out, edNnBusC.a);
   wire(parent, dec.y[0]!, edNnBusC.b);
   tieToLabel('EDNN_BUS_C_NOW', edNnBusC.out, { x: pos.x - 600, y: pos.y - 6070 });
-  const edNnBusB = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6090 });
+  const edNnBusB = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6090 });
   wire(parent, edNnWriteHighNow.out, edNnBusB.a);
   wire(parent, dec.y[0]!, edNnBusB.b);
   tieToLabel('EDNN_BUS_B_NOW', edNnBusB.out, { x: pos.x - 600, y: pos.y - 6090 });
-  const edNnBusE = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6110 });
+  const edNnBusE = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6110 });
   wire(parent, edNnWriteLowNow.out, edNnBusE.a);
   wire(parent, dec.y[2]!, edNnBusE.b);
   tieToLabel('EDNN_BUS_E_NOW', edNnBusE.out, { x: pos.x - 600, y: pos.y - 6110 });
-  const edNnBusD = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6130 });
+  const edNnBusD = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6130 });
   wire(parent, edNnWriteHighNow.out, edNnBusD.a);
   wire(parent, dec.y[2]!, edNnBusD.b);
   tieToLabel('EDNN_BUS_D_NOW', edNnBusD.out, { x: pos.x - 600, y: pos.y - 6130 });
-  const edNnBusL = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6150 });
+  const edNnBusL = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6150 });
   wire(parent, edNnWriteLowNow.out, edNnBusL.a);
   wire(parent, dec.y[4]!, edNnBusL.b);
   tieToLabel('EDNN_BUS_L_NOW', edNnBusL.out, { x: pos.x - 600, y: pos.y - 6150 });
-  const edNnBusH = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6170 });
+  const edNnBusH = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6170 });
   wire(parent, edNnWriteHighNow.out, edNnBusH.a);
   wire(parent, dec.y[4]!, edNnBusH.b);
   tieToLabel('EDNN_BUS_H_NOW', edNnBusH.out, { x: pos.x - 600, y: pos.y - 6170 });
-  const edNnBusSpLow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6190 });
+  const edNnBusSpLow = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6190 });
   wire(parent, edNnWriteLowNow.out, edNnBusSpLow.a);
   wire(parent, dec.y[6]!, edNnBusSpLow.b);
   tieToLabel('EDNN_BUS_SPLO_NOW', edNnBusSpLow.out, { x: pos.x - 600, y: pos.y - 6190 });
-  const edNnBusSpHigh = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6210 });
+  const edNnBusSpHigh = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6210 });
   wire(parent, edNnWriteHighNow.out, edNnBusSpHigh.a);
   wire(parent, dec.y[6]!, edNnBusSpHigh.b);
   tieToLabel('EDNN_BUS_SPHI_NOW', edNnBusSpHigh.out, { x: pos.x - 600, y: pos.y - 6210 });
 
-  const edNnWeC = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6230 });
+  const edNnWeC = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6230 });
   wire(parent, edNnReadLowNow.out, edNnWeC.a);
   wire(parent, dec.y[1]!, edNnWeC.b);
   tieToLabel('EDNN_WE_C_NOW', edNnWeC.out, { x: pos.x - 600, y: pos.y - 6230 });
-  const edNnWeB = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6250 });
+  const edNnWeB = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6250 });
   wire(parent, edNnReadHighNow.out, edNnWeB.a);
   wire(parent, dec.y[1]!, edNnWeB.b);
   tieToLabel('EDNN_WE_B_NOW', edNnWeB.out, { x: pos.x - 600, y: pos.y - 6250 });
-  const edNnWeE = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6270 });
+  const edNnWeE = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6270 });
   wire(parent, edNnReadLowNow.out, edNnWeE.a);
   wire(parent, dec.y[3]!, edNnWeE.b);
   tieToLabel('EDNN_WE_E_NOW', edNnWeE.out, { x: pos.x - 600, y: pos.y - 6270 });
-  const edNnWeD = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6290 });
+  const edNnWeD = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6290 });
   wire(parent, edNnReadHighNow.out, edNnWeD.a);
   wire(parent, dec.y[3]!, edNnWeD.b);
   tieToLabel('EDNN_WE_D_NOW', edNnWeD.out, { x: pos.x - 600, y: pos.y - 6290 });
-  const edNnWeL = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6310 });
+  const edNnWeL = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6310 });
   wire(parent, edNnReadLowNow.out, edNnWeL.a);
   wire(parent, dec.y[5]!, edNnWeL.b);
   tieToLabel('EDNN_WE_L_NOW', edNnWeL.out, { x: pos.x - 600, y: pos.y - 6310 });
-  const edNnWeH = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6330 });
+  const edNnWeH = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6330 });
   wire(parent, edNnReadHighNow.out, edNnWeH.a);
   wire(parent, dec.y[5]!, edNnWeH.b);
   tieToLabel('EDNN_WE_H_NOW', edNnWeH.out, { x: pos.x - 600, y: pos.y - 6330 });
-  const edNnWeSpLow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6350 });
+  const edNnWeSpLow = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6350 });
   wire(parent, edNnReadLowNow.out, edNnWeSpLow.a);
   wire(parent, dec.y[7]!, edNnWeSpLow.b);
   tieToLabel('EDNN_WE_SPLO_NOW', edNnWeSpLow.out, { x: pos.x - 600, y: pos.y - 6350 });
-  const edNnWeSpHigh = buildAnd(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 6370 });
+  const edNnWeSpHigh = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6370 });
   wire(parent, edNnReadHighNow.out, edNnWeSpHigh.a);
   wire(parent, dec.y[7]!, edNnWeSpHigh.b);
   tieToLabel('EDNN_WE_SPHI_NOW', edNnWeSpHigh.out, { x: pos.x - 600, y: pos.y - 6370 });
@@ -4960,14 +4960,14 @@ export function buildZ80Cpu(
   // shared bus already carries the right value by the time this fires"
   // reasoning `LDIMM8_READ_NOW` relies on for every register that reads an
   // immediate operand off it, except here the *destination* is `ir` itself.
-  const irWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 4300 });
+  const irWe = buildOr(parent, { x: pos.x + 9050, y: pos.y - 4300 });
   tieToLabel('PHASE0', irWe.a, { x: pos.x + 8950, y: pos.y - 4300 });
   wire(parent, prefixReadNow.out, irWe.b);
   // DD CB / FD CB second IR-only op recapture — never touches activePrefix.we.
-  const ddFdCbOpRead = buildOr(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 4280 });
+  const ddFdCbOpRead = buildOr(parent, { x: pos.x + 9050, y: pos.y - 4280 });
   tieToLabel('DDCB_OP_READ_NOW', ddFdCbOpRead.a, { x: pos.x + 8950, y: pos.y - 4280 });
   tieToLabel('FDCB_OP_READ_NOW', ddFdCbOpRead.b, { x: pos.x + 8950, y: pos.y - 4260 });
-  const irWe2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 4300 });
+  const irWe2 = buildOr(parent, { x: pos.x + 9100, y: pos.y - 4300 });
   wire(parent, irWe.out, irWe2.a);
   wire(parent, ddFdCbOpRead.out, irWe2.b);
   wire(parent, irWe2.out, ir.we);
@@ -5026,20 +5026,20 @@ export function buildZ80Cpu(
   // directly (verified: `dec.x[` has exactly these four call sites in the
   // whole file).
   const rawAluGroup = dec.x[2]!;
-  const isAluGroupGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y - 220 });
+  const isAluGroupGate = buildAnd(parent, { x: pos.x + 8950, y: pos.y - 220 });
   wire(parent, rawAluGroup, isAluGroupGate.a);
   tieToLabel('NOT_PREFIX_ACTIVE', isAluGroupGate.b, { x: pos.x + 8850, y: pos.y - 220 });
   const isAluGroup = isAluGroupGate.out;
-  const aluGroupNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y - 200 });
+  const aluGroupNow = buildAnd(parent, { x: pos.x + 9000, y: pos.y - 200 });
   wire(parent, isAluGroup, aluGroupNow.a);
   tieToLabel('PHASE2', aluGroupNow.b, { x: pos.x + 8900, y: pos.y - 200 });
 
   const rawLdGroup = dec.x[1]!;
-  const isLdGroupGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 8950, y: pos.y + 130 });
+  const isLdGroupGate = buildAnd(parent, { x: pos.x + 8950, y: pos.y + 130 });
   wire(parent, rawLdGroup, isLdGroupGate.a);
   tieToLabel('NOT_PREFIX_ACTIVE', isLdGroupGate.b, { x: pos.x + 8850, y: pos.y + 130 });
   const isLdGroup = isLdGroupGate.out;
-  const ldGroupNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9000, y: pos.y + 150 });
+  const ldGroupNow = buildAnd(parent, { x: pos.x + 9000, y: pos.y + 150 });
   wire(parent, isLdGroup, ldGroupNow.a);
   tieToLabel('PHASE2', ldGroupNow.b, { x: pos.x + 8900, y: pos.y + 150 });
 
@@ -5047,7 +5047,7 @@ export function buildZ80Cpu(
   // off "one of the two groups this slice executes is decoding right now",
   // not just the ALU one anymore — see the doc comment above ("What's
   // shared between the two groups").
-  const groupActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 25 });
+  const groupActive = buildOr(parent, { x: pos.x + 9150, y: pos.y - 25 });
   wire(parent, aluGroupNow.out, groupActive.a);
   wire(parent, ldGroupNow.out, groupActive.b);
   // x=00, z=3: INC BC/DE/HL/SP, DEC BC/DE/HL/SP — see the doc comment above
@@ -5057,42 +5057,42 @@ export function buildZ80Cpu(
   // register file directly, so none of the bus-fight machinery those two
   // signals exist for applies here.
   const rawX0Group = dec.x[0]!;
-  const isX0GroupGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9050, y: pos.y - 720 });
+  const isX0GroupGate = buildAnd(parent, { x: pos.x + 9050, y: pos.y - 720 });
   wire(parent, rawX0Group, isX0GroupGate.a);
   tieToLabel('NOT_PREFIX_ACTIVE', isX0GroupGate.b, { x: pos.x + 8950, y: pos.y - 720 });
   const isX0Group = isX0GroupGate.out;
-  const isIncDecRr = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 700 });
+  const isIncDecRr = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 700 });
   wire(parent, isX0Group, isIncDecRr.a);
   wire(parent, dec.z[3]!, isIncDecRr.b);
-  const incDecRrNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 700 });
+  const incDecRrNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 700 });
   wire(parent, isIncDecRr.out, incDecRrNow.a);
   tieToLabel('PHASE2', incDecRrNow.b, { x: pos.x + 9200, y: pos.y - 730 });
 
   // Pair select: y>>1 picks BC/DE/HL/SP (y=0,1 -> BC; 2,3 -> DE; 4,5 -> HL;
   // 6,7 -> SP); within each pair the odd y-line is DEC, the even one INC.
-  const pairBC = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 850 });
+  const pairBC = buildOr(parent, { x: pos.x + 9400, y: pos.y - 850 });
   wire(parent, dec.y[0]!, pairBC.a);
   wire(parent, dec.y[1]!, pairBC.b);
-  const pairDE = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 800 });
+  const pairDE = buildOr(parent, { x: pos.x + 9400, y: pos.y - 800 });
   wire(parent, dec.y[2]!, pairDE.a);
   wire(parent, dec.y[3]!, pairDE.b);
-  const pairHL = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 750 });
+  const pairHL = buildOr(parent, { x: pos.x + 9400, y: pos.y - 750 });
   wire(parent, dec.y[4]!, pairHL.a);
   wire(parent, dec.y[5]!, pairHL.b);
-  const pairSP = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 700 });
+  const pairSP = buildOr(parent, { x: pos.x + 9400, y: pos.y - 700 });
   wire(parent, dec.y[6]!, pairSP.a);
   wire(parent, dec.y[7]!, pairSP.b);
 
-  const incDecBcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 850 });
+  const incDecBcNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 850 });
   wire(parent, incDecRrNow.out, incDecBcNow.a);
   wire(parent, pairBC.out, incDecBcNow.b);
-  const incDecDeNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 800 });
+  const incDecDeNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 800 });
   wire(parent, incDecRrNow.out, incDecDeNow.a);
   wire(parent, pairDE.out, incDecDeNow.b);
-  const incDecHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 750 });
+  const incDecHlNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 750 });
   wire(parent, incDecRrNow.out, incDecHlNow.a);
   wire(parent, pairHL.out, incDecHlNow.b);
-  const incDecSpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 700 });
+  const incDecSpNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 700 });
   wire(parent, incDecRrNow.out, incDecSpNow.a);
   wire(parent, pairSP.out, incDecSpNow.b);
   // DEC SP specifically (not INC SP) — spAdder's own direction control
@@ -5100,7 +5100,7 @@ export function buildZ80Cpu(
   // BC/DE/HL's own pair adders below, which read dec.y[1]/[3]/[5] directly
   // since they're built right next to `dec` (no label needed there); this
   // one has to cross to spAdder's own location, hence the label.
-  const decSpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 650 });
+  const decSpNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 650 });
   wire(parent, incDecRrNow.out, decSpNow.a);
   wire(parent, dec.y[7]!, decSpNow.b);
 
@@ -5128,7 +5128,7 @@ export function buildZ80Cpu(
     const adder = buildAlu(parent, library, 16, adderPos);
     tiePowerRail(parent, 'GND', adder.op0);
     tiePowerRail(parent, 'GND', adder.op1);
-    const notDecY = buildNot(parent, vcc4, gnd4, { x: adderPos.x - 100, y: adderPos.y - 50 });
+    const notDecY = buildNot(parent, { x: adderPos.x - 100, y: adderPos.y - 50 });
     wire(parent, decY, notDecY.in);
     wire(parent, notDecY.out, adder.cin);
     for (let i = 0; i < 8; i++) {
@@ -5158,35 +5158,35 @@ export function buildZ80Cpu(
   // the `LDI` family does — one more `OR` term, not a replacement, the
   // same "mutually exclusive by construction, never need to be told
   // apart" reasoning `isLdBlockNow` itself already relies on here.
-  const bcDecYStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 8800, y: pos.y - 1320 });
+  const bcDecYStage = buildOr(parent, { x: pos.x + 8800, y: pos.y - 1320 });
   wire(parent, dec.y[1]!, bcDecYStage.a);
   wire(parent, isLdBlockNow.out, bcDecYStage.b);
-  const bcDecY = buildOr(parent, vcc3, gnd3, { x: pos.x + 8850, y: pos.y - 1320 });
+  const bcDecY = buildOr(parent, { x: pos.x + 8850, y: pos.y - 1320 });
   wire(parent, bcDecYStage.out, bcDecY.a);
   wire(parent, isCpBlockNow.out, bcDecY.b);
-  const deDecY = buildOr(parent, vcc3, gnd3, { x: pos.x + 8850, y: pos.y - 920 });
+  const deDecY = buildOr(parent, { x: pos.x + 8850, y: pos.y - 920 });
   wire(parent, dec.y[3]!, deDecY.a);
   wire(parent, directionIsDecNow.out, deDecY.b);
   // `HL`'s own direction line needs a third term too: `CPD`/`CPDR`'s own
   // `cpDirectionIsDecNow` — `CPI`/`CPIR` get their `+1` for free, exactly
   // the same "default direction needs no widening" shape `LDI`/`LDIR`
   // already established for this same adder.
-  const hlDecYStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 8800, y: pos.y - 520 });
+  const hlDecYStage = buildOr(parent, { x: pos.x + 8800, y: pos.y - 520 });
   wire(parent, dec.y[5]!, hlDecYStage.a);
   wire(parent, directionIsDecNow.out, hlDecYStage.b);
-  const hlDecYStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 8820, y: pos.y - 520 });
+  const hlDecYStage2 = buildOr(parent, { x: pos.x + 8820, y: pos.y - 520 });
   wire(parent, hlDecYStage.out, hlDecYStage2.a);
   wire(parent, cpDirectionIsDecNow.out, hlDecYStage2.b);
   // `HL`'s own direction line needs a fourth term: `IND`/`INDR`'s own
   // `inDirectionIsDecNow` — `INI`/`INIR` get their `+1` for free, the
   // identical "default direction needs no widening" shape every earlier
   // family here already established for this same adder.
-  const hlDecYStage3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 8830, y: pos.y - 520 });
+  const hlDecYStage3 = buildOr(parent, { x: pos.x + 8830, y: pos.y - 520 });
   wire(parent, hlDecYStage2.out, hlDecYStage3.a);
   wire(parent, inDirectionIsDecNow.out, hlDecYStage3.b);
   // A fifth and final term: `OUTD`/`OTDR`'s own `outDirectionIsDecNow` —
   // `OUTI`/`OTIR` get their `+1` for free, the same reasoning once more.
-  const hlDecY = buildOr(parent, vcc3, gnd3, { x: pos.x + 8850, y: pos.y - 520 });
+  const hlDecY = buildOr(parent, { x: pos.x + 8850, y: pos.y - 520 });
   wire(parent, hlDecYStage3.out, hlDecY.a);
   wire(parent, outDirectionIsDecNow.out, hlDecY.b);
   buildPairAdder('REGB', 'REGC', 'BCADD', bcDecY.out, { x: pos.x + 8900, y: pos.y - 1300 });
@@ -5203,28 +5203,28 @@ export function buildZ80Cpu(
   // same encoding `x=10`'s `z` and `x=01`'s `y`/`z` already use. `(HL)`
   // (`y=6`) now gets its own real read-modify-write through RAM — see
   // "x=00: INC (HL)/DEC (HL)/LD (HL),n" above.
-  const isIncR8 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 1600 });
+  const isIncR8 = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 1600 });
   wire(parent, isX0Group, isIncR8.a);
   wire(parent, dec.z[4]!, isIncR8.b);
-  const isDecR8 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 1550 });
+  const isDecR8 = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 1550 });
   wire(parent, isX0Group, isDecR8.a);
   wire(parent, dec.z[5]!, isDecR8.b);
   // DD/FD INC/DEC (IX+d)/(IY+d) + HL8 IXH/IXL/IYH/IYL: isX0Group is dead
   // under prefix — OR DEC direction from parallel decode into the shared
   // r8Adder cin/b and R8_N/H path.
-  const isDecR8DdFdMem = buildOr(parent, vcc3, gnd3, { x: pos.x + 9180, y: pos.y - 1525 });
+  const isDecR8DdFdMem = buildOr(parent, { x: pos.x + 9180, y: pos.y - 1525 });
   tieToLabel('DDMEM_IS_DEC', isDecR8DdFdMem.a, { x: pos.x + 9080, y: pos.y - 1525 });
   tieToLabel('FDMEM_IS_DEC', isDecR8DdFdMem.b, { x: pos.x + 9080, y: pos.y - 1505 });
-  const isDecR8DdFdHl8 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9180, y: pos.y - 1505 });
+  const isDecR8DdFdHl8 = buildOr(parent, { x: pos.x + 9180, y: pos.y - 1505 });
   tieToLabel('DDIX_HL8_IS_DEC', isDecR8DdFdHl8.a, { x: pos.x + 9080, y: pos.y - 1505 });
   tieToLabel('FDIY_HL8_IS_DEC', isDecR8DdFdHl8.b, { x: pos.x + 9080, y: pos.y - 1485 });
-  const isDecR8DdFd = buildOr(parent, vcc3, gnd3, { x: pos.x + 9220, y: pos.y - 1515 });
+  const isDecR8DdFd = buildOr(parent, { x: pos.x + 9220, y: pos.y - 1515 });
   wire(parent, isDecR8DdFdMem.out, isDecR8DdFd.a);
   wire(parent, isDecR8DdFdHl8.out, isDecR8DdFd.b);
-  const isDecR8Any = buildOr(parent, vcc3, gnd3, { x: pos.x + 9240, y: pos.y - 1535 });
+  const isDecR8Any = buildOr(parent, { x: pos.x + 9240, y: pos.y - 1535 });
   wire(parent, isDecR8.out, isDecR8Any.a);
   wire(parent, isDecR8DdFd.out, isDecR8Any.b);
-  const isIncDecR8 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 1575 });
+  const isIncDecR8 = buildOr(parent, { x: pos.x + 9300, y: pos.y - 1575 });
   wire(parent, isIncR8.out, isIncDecR8.a);
   wire(parent, isDecR8.out, isIncDecR8.b);
   // `(HL)` (`y=6`) now gets its own real read-modify-write (see "x=00:
@@ -5237,16 +5237,16 @@ export function buildZ80Cpu(
   // per-register commits below check `y=6`) — only `F`'s own flags would
   // transiently glitch, `INCDEC_HLMEM_NOW`'s own later, correct commit
   // fixing it a phase after.
-  const isIncDecHlMem = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 1650 });
+  const isIncDecHlMem = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 1650 });
   wire(parent, isIncDecR8.out, isIncDecHlMem.a);
   wire(parent, dec.y[6]!, isIncDecHlMem.b);
   tieToLabel('IS_INCDEC_HLMEM', isIncDecHlMem.out, { x: pos.x + 9360, y: pos.y - 1650 }); // anchor — RAM's own address mux (far) reads this
-  const notY6ForIncDecR8 = buildNot(parent, vcc3, gnd3, { x: pos.x + 9380, y: pos.y - 1620 });
+  const notY6ForIncDecR8 = buildNot(parent, { x: pos.x + 9380, y: pos.y - 1620 });
   wire(parent, dec.y[6]!, notY6ForIncDecR8.in);
-  const incDecR8Stage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 1575 });
+  const incDecR8Stage = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 1575 });
   wire(parent, isIncDecR8.out, incDecR8Stage.a);
   tieToLabel('PHASE2', incDecR8Stage.b, { x: pos.x + 9300, y: pos.y - 1600 });
-  const incDecR8Now = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 1575 });
+  const incDecR8Now = buildAnd(parent, { x: pos.x + 9420, y: pos.y - 1575 });
   wire(parent, incDecR8Stage.out, incDecR8Now.a);
   wire(parent, notY6ForIncDecR8.out, incDecR8Now.b);
 
@@ -5255,36 +5255,36 @@ export function buildZ80Cpu(
   // addresses it, widened below) into `hlMemTemp` — a *sixth* dedicated
   // holding register, the same "the bus moves on, so hold what's on it
   // now" reason every earlier target register in this file needed one.
-  const hlMemReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 1650 });
+  const hlMemReadNow = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 1650 });
   wire(parent, isIncDecHlMem.out, hlMemReadNow.a);
   tieToLabel('PHASE2', hlMemReadNow.b, { x: pos.x + 9300, y: pos.y - 1620 });
   const hlMemTemp = buildRegister(parent, library, 8, { x: pos.x - 700, y: pos.y - 6200 });
   // INC/DEC (HL) read OR CB BIT (HL) read — mutually exclusive by
   // NOT_PREFIX_ACTIVE vs isCbActive; share one holding register.
-  const hlMemTempWe = buildOr(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 6220 });
+  const hlMemTempWe = buildOr(parent, { x: pos.x - 750, y: pos.y - 6220 });
   wire(parent, hlMemReadNow.out, hlMemTempWe.a);
   tiePowerRail(parent, 'GND', hlMemTempWe.b); // never leave OR inputs floating (found live)
-  const hlMemTempWe2 = buildOr(parent, vcc3, gnd3, { x: pos.x - 720, y: pos.y - 6220 });
+  const hlMemTempWe2 = buildOr(parent, { x: pos.x - 720, y: pos.y - 6220 });
   wire(parent, hlMemTempWe.out, hlMemTempWe2.a);
   tieToLabel('BIT_HL_READ_NOW', hlMemTempWe2.b, { x: pos.x - 850, y: pos.y - 6220 });
-  const hlMemTempWe3 = buildOr(parent, vcc3, gnd3, { x: pos.x - 690, y: pos.y - 6220 });
+  const hlMemTempWe3 = buildOr(parent, { x: pos.x - 690, y: pos.y - 6220 });
   wire(parent, hlMemTempWe2.out, hlMemTempWe3.a);
   tieToLabel('SETRES_HL_READ_NOW', hlMemTempWe3.b, { x: pos.x - 850, y: pos.y - 6240 });
-  const hlMemTempWe4 = buildOr(parent, vcc3, gnd3, { x: pos.x - 660, y: pos.y - 6220 });
+  const hlMemTempWe4 = buildOr(parent, { x: pos.x - 660, y: pos.y - 6220 });
   wire(parent, hlMemTempWe3.out, hlMemTempWe4.a);
   tieToLabel('CBROT_HL_READ_NOW', hlMemTempWe4.b, { x: pos.x - 850, y: pos.y - 6260 });
   // DD/FD INC/DEC (IX+d)/(IY+d) PHASE6 read into shared hlMemTemp.
-  const hlMemTempWeDdFd = buildOr(parent, vcc3, gnd3, { x: pos.x - 630, y: pos.y - 6220 });
+  const hlMemTempWeDdFd = buildOr(parent, { x: pos.x - 630, y: pos.y - 6220 });
   tieToLabel('DDMEM_INCDEC_READ_NOW', hlMemTempWeDdFd.a, { x: pos.x - 850, y: pos.y - 6280 });
   tieToLabel('FDMEM_INCDEC_READ_NOW', hlMemTempWeDdFd.b, { x: pos.x - 850, y: pos.y - 6300 });
-  const hlMemTempWe5 = buildOr(parent, vcc3, gnd3, { x: pos.x - 600, y: pos.y - 6220 });
+  const hlMemTempWe5 = buildOr(parent, { x: pos.x - 600, y: pos.y - 6220 });
   wire(parent, hlMemTempWe4.out, hlMemTempWe5.a);
   wire(parent, hlMemTempWeDdFd.out, hlMemTempWe5.b);
   // DD/FD CB SET/RES (IX+d)/(IY+d) PHASE7 read into shared hlMemTemp.
-  const hlMemTempWeDdCb = buildOr(parent, vcc3, gnd3, { x: pos.x - 570, y: pos.y - 6220 });
+  const hlMemTempWeDdCb = buildOr(parent, { x: pos.x - 570, y: pos.y - 6220 });
   tieToLabel('SETRES_IX_READ_NOW', hlMemTempWeDdCb.a, { x: pos.x - 850, y: pos.y - 6320 });
   tieToLabel('SETRES_IY_READ_NOW', hlMemTempWeDdCb.b, { x: pos.x - 850, y: pos.y - 6340 });
-  const hlMemTempWe6 = buildOr(parent, vcc3, gnd3, { x: pos.x - 540, y: pos.y - 6220 });
+  const hlMemTempWe6 = buildOr(parent, { x: pos.x - 540, y: pos.y - 6220 });
   wire(parent, hlMemTempWe5.out, hlMemTempWe6.a);
   wire(parent, hlMemTempWeDdCb.out, hlMemTempWe6.b);
   wire(parent, hlMemTempWe6.out, hlMemTemp.we);
@@ -5297,21 +5297,21 @@ export function buildZ80Cpu(
   // internal WZ here; documented simplification).
   let bitHlTest: Pin | null = null;
   for (let yi = 0; yi < 8; yi++) {
-    const andGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 600, y: pos.y - 6400 + yi * 20 });
+    const andGate = buildAnd(parent, { x: pos.x - 600, y: pos.y - 6400 + yi * 20 });
     tieToLabel(`HLMEM${yi}`, andGate.a, { x: pos.x - 700, y: pos.y - 6400 + yi * 20 });
     wire(parent, dec.y[yi]!, andGate.b);
     if (bitHlTest === null) {
       bitHlTest = andGate.out;
     } else {
-      const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x - 550, y: pos.y - 6400 + yi * 20 });
+      const orGate = buildOr(parent, { x: pos.x - 550, y: pos.y - 6400 + yi * 20 });
       wire(parent, bitHlTest, orGate.a);
       wire(parent, andGate.out, orGate.b);
       bitHlTest = orGate.out;
     }
   }
-  const bitHlZBit = buildNot(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 6420 });
+  const bitHlZBit = buildNot(parent, { x: pos.x - 500, y: pos.y - 6420 });
   wire(parent, bitHlTest!, bitHlZBit.in);
-  const bitHlSBit = buildAnd(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 6400 });
+  const bitHlSBit = buildAnd(parent, { x: pos.x - 500, y: pos.y - 6400 });
   wire(parent, bitHlTest!, bitHlSBit.a);
   wire(parent, dec.y[7]!, bitHlSBit.b);
   const bitHlPBit = bitHlZBit.out;
@@ -5322,21 +5322,21 @@ export function buildZ80Cpu(
   // (IX+d)/(IY+d) at PHASE7 (same-phase commit, no hlMemTemp hold).
   let bitIxTest: Pin | null = null;
   for (let yi = 0; yi < 8; yi++) {
-    const andGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 600, y: pos.y - 6550 + yi * 20 });
+    const andGate = buildAnd(parent, { x: pos.x - 600, y: pos.y - 6550 + yi * 20 });
     tieToLabel(`BUS${yi}`, andGate.a, { x: pos.x - 700, y: pos.y - 6550 + yi * 20 });
     wire(parent, dec.y[yi]!, andGate.b);
     if (bitIxTest === null) {
       bitIxTest = andGate.out;
     } else {
-      const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x - 550, y: pos.y - 6550 + yi * 20 });
+      const orGate = buildOr(parent, { x: pos.x - 550, y: pos.y - 6550 + yi * 20 });
       wire(parent, bitIxTest, orGate.a);
       wire(parent, andGate.out, orGate.b);
       bitIxTest = orGate.out;
     }
   }
-  const bitIxZBit = buildNot(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 6570 });
+  const bitIxZBit = buildNot(parent, { x: pos.x - 500, y: pos.y - 6570 });
   wire(parent, bitIxTest!, bitIxZBit.in);
-  const bitIxSBit = buildAnd(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 6550 });
+  const bitIxSBit = buildAnd(parent, { x: pos.x - 500, y: pos.y - 6550 });
   wire(parent, bitIxTest!, bitIxSBit.a);
   wire(parent, dec.y[7]!, bitIxSBit.b);
   const bitIxPBit = bitIxZBit.out;
@@ -5355,24 +5355,24 @@ export function buildZ80Cpu(
     wire(parent, dec.z[6]!, srcMux.pins[muxDef.ports[0]!]!);
     wire(parent, bitRegByte[i]!, srcMux.pins[muxDef.ports[1]!]!);
     wire(parent, hlMemTemp.q[i]!, srcMux.pins[muxDef.ports[2]!]!);
-    const isSetBit = buildAnd(parent, vcc3, gnd3, { x: pos.x - 300, y: pos.y - 6600 + i * 40 });
+    const isSetBit = buildAnd(parent, { x: pos.x - 300, y: pos.y - 6600 + i * 40 });
     wire(parent, setResCommitLabel.pins.net, isSetBit.a);
-    const setY = buildAnd(parent, vcc3, gnd3, { x: pos.x - 250, y: pos.y - 6600 + i * 40 });
+    const setY = buildAnd(parent, { x: pos.x - 250, y: pos.y - 6600 + i * 40 });
     wire(parent, isCbX3Active.out, setY.a);
     wire(parent, dec.y[i]!, setY.b);
     wire(parent, setY.out, isSetBit.b);
-    const isResBit = buildAnd(parent, vcc3, gnd3, { x: pos.x - 300, y: pos.y - 6580 + i * 40 });
+    const isResBit = buildAnd(parent, { x: pos.x - 300, y: pos.y - 6580 + i * 40 });
     wire(parent, setResCommitLabel.pins.net, isResBit.a);
-    const resY = buildAnd(parent, vcc3, gnd3, { x: pos.x - 250, y: pos.y - 6580 + i * 40 });
+    const resY = buildAnd(parent, { x: pos.x - 250, y: pos.y - 6580 + i * 40 });
     wire(parent, isCbX2Active.out, resY.a);
     wire(parent, dec.y[i]!, resY.b);
     wire(parent, resY.out, isResBit.b);
-    const notResBit = buildNot(parent, vcc3, gnd3, { x: pos.x - 200, y: pos.y - 6580 + i * 40 });
+    const notResBit = buildNot(parent, { x: pos.x - 200, y: pos.y - 6580 + i * 40 });
     wire(parent, isResBit.out, notResBit.in);
-    const cleared = buildAnd(parent, vcc3, gnd3, { x: pos.x - 150, y: pos.y - 6600 + i * 40 });
+    const cleared = buildAnd(parent, { x: pos.x - 150, y: pos.y - 6600 + i * 40 });
     wire(parent, srcMux.pins[muxDef.ports[3]!]!, cleared.a);
     wire(parent, notResBit.out, cleared.b);
-    const result = buildOr(parent, vcc3, gnd3, { x: pos.x - 100, y: pos.y - 6600 + i * 40 });
+    const result = buildOr(parent, { x: pos.x - 100, y: pos.y - 6600 + i * 40 });
     wire(parent, cleared.out, result.a);
     wire(parent, isSetBit.out, result.b);
     tieToLabel(`SETRESRESULT${i}`, result.out, { x: pos.x - 50, y: pos.y - 6600 + i * 40 });
@@ -5394,90 +5394,90 @@ export function buildZ80Cpu(
   cbRotHold.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 6900 + i * 20 }));
   const memBit: Pin[] = [];
   for (let i = 0; i < 8; i++) {
-    const g = buildAnd(parent, vcc3, gnd3, { x: pos.x - 350, y: pos.y - 7000 + i * 40 });
+    const g = buildAnd(parent, { x: pos.x - 350, y: pos.y - 7000 + i * 40 });
     wire(parent, cbRotHold.q[i]!, g.a);
     tieToLabel('CBROT_MEM_WRITE_ANY', g.b, { x: pos.x - 450, y: pos.y - 7000 + i * 40 });
     memBit.push(g.out);
   }
 
   const buildCbRotTree = (src: Pin[], _labelPrefix: string, xBase: number): { result: Pin[]; c: Pin } => {
-    const leftY = buildOr(parent, vcc3, gnd3, { x: xBase - 400, y: pos.y - 6980 });
+    const leftY = buildOr(parent, { x: xBase - 400, y: pos.y - 6980 });
     wire(parent, dec.y[0]!, leftY.a);
     wire(parent, dec.y[2]!, leftY.b);
-    const leftY2 = buildOr(parent, vcc3, gnd3, { x: xBase - 380, y: pos.y - 6980 });
+    const leftY2 = buildOr(parent, { x: xBase - 380, y: pos.y - 6980 });
     wire(parent, leftY.out, leftY2.a);
     wire(parent, dec.y[4]!, leftY2.b);
-    const isLeft = buildOr(parent, vcc3, gnd3, { x: xBase - 360, y: pos.y - 6980 });
+    const isLeft = buildOr(parent, { x: xBase - 360, y: pos.y - 6980 });
     wire(parent, leftY2.out, isLeft.a);
     wire(parent, dec.y[6]!, isLeft.b);
-    const rightY = buildOr(parent, vcc3, gnd3, { x: xBase - 400, y: pos.y - 6960 });
+    const rightY = buildOr(parent, { x: xBase - 400, y: pos.y - 6960 });
     wire(parent, dec.y[1]!, rightY.a);
     wire(parent, dec.y[3]!, rightY.b);
-    const rightY2 = buildOr(parent, vcc3, gnd3, { x: xBase - 380, y: pos.y - 6960 });
+    const rightY2 = buildOr(parent, { x: xBase - 380, y: pos.y - 6960 });
     wire(parent, rightY.out, rightY2.a);
     wire(parent, dec.y[5]!, rightY2.b);
-    const isRight = buildOr(parent, vcc3, gnd3, { x: xBase - 360, y: pos.y - 6960 });
+    const isRight = buildOr(parent, { x: xBase - 360, y: pos.y - 6960 });
     wire(parent, rightY2.out, isRight.a);
     wire(parent, dec.y[7]!, isRight.b);
-    const cLeft = buildAnd(parent, vcc3, gnd3, { x: xBase - 300, y: pos.y - 6980 });
+    const cLeft = buildAnd(parent, { x: xBase - 300, y: pos.y - 6980 });
     wire(parent, isLeft.out, cLeft.a);
     wire(parent, src[7]!, cLeft.b);
-    const cRight = buildAnd(parent, vcc3, gnd3, { x: xBase - 300, y: pos.y - 6960 });
+    const cRight = buildAnd(parent, { x: xBase - 300, y: pos.y - 6960 });
     wire(parent, isRight.out, cRight.a);
     wire(parent, src[0]!, cRight.b);
-    const c = buildOr(parent, vcc3, gnd3, { x: xBase - 250, y: pos.y - 6970 });
+    const c = buildOr(parent, { x: xBase - 250, y: pos.y - 6970 });
     wire(parent, cLeft.out, c.a);
     wire(parent, cRight.out, c.b);
     const result: Pin[] = [];
     for (let i = 0; i < 8; i++) {
       const prev = src[(i + 7) % 8]!;
       const next = src[(i + 1) % 8]!;
-      const rlcTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 200, y: pos.y - 7100 + i * 100 });
+      const rlcTerm = buildAnd(parent, { x: xBase - 200, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[0]!, rlcTerm.a);
       wire(parent, prev, rlcTerm.b);
-      const rrcTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 180, y: pos.y - 7100 + i * 100 });
+      const rrcTerm = buildAnd(parent, { x: xBase - 180, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[1]!, rrcTerm.a);
       wire(parent, next, rrcTerm.b);
-      const rlTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 160, y: pos.y - 7100 + i * 100 });
+      const rlTerm = buildAnd(parent, { x: xBase - 160, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[2]!, rlTerm.a);
       wire(parent, i === 0 ? f.q[0]! : prev, rlTerm.b);
-      const rrTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 140, y: pos.y - 7100 + i * 100 });
+      const rrTerm = buildAnd(parent, { x: xBase - 140, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[3]!, rrTerm.a);
       wire(parent, i === 7 ? f.q[0]! : next, rrTerm.b);
-      const slaTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 120, y: pos.y - 7100 + i * 100 });
+      const slaTerm = buildAnd(parent, { x: xBase - 120, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[4]!, slaTerm.a);
       if (i === 0) tiePowerRail(parent, 'GND', slaTerm.b);
       else wire(parent, prev, slaTerm.b);
-      const sraTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 100, y: pos.y - 7100 + i * 100 });
+      const sraTerm = buildAnd(parent, { x: xBase - 100, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[5]!, sraTerm.a);
       wire(parent, i === 7 ? src[7]! : next, sraTerm.b);
-      const sllTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 80, y: pos.y - 7100 + i * 100 });
+      const sllTerm = buildAnd(parent, { x: xBase - 80, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[6]!, sllTerm.a);
       if (i === 0) tiePowerRail(parent, 'VCC', sllTerm.b);
       else wire(parent, prev, sllTerm.b);
-      const srlTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 60, y: pos.y - 7100 + i * 100 });
+      const srlTerm = buildAnd(parent, { x: xBase - 60, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[7]!, srlTerm.a);
       if (i === 7) tiePowerRail(parent, 'GND', srlTerm.b);
       else wire(parent, next, srlTerm.b);
-      const s1 = buildOr(parent, vcc3, gnd3, { x: xBase - 40, y: pos.y - 7100 + i * 100 });
+      const s1 = buildOr(parent, { x: xBase - 40, y: pos.y - 7100 + i * 100 });
       wire(parent, rlcTerm.out, s1.a);
       wire(parent, rrcTerm.out, s1.b);
-      const s2 = buildOr(parent, vcc3, gnd3, { x: xBase - 20, y: pos.y - 7100 + i * 100 });
+      const s2 = buildOr(parent, { x: xBase - 20, y: pos.y - 7100 + i * 100 });
       wire(parent, rlTerm.out, s2.a);
       wire(parent, rrTerm.out, s2.b);
-      const s3 = buildOr(parent, vcc3, gnd3, { x: xBase + 0, y: pos.y - 7100 + i * 100 });
+      const s3 = buildOr(parent, { x: xBase + 0, y: pos.y - 7100 + i * 100 });
       wire(parent, slaTerm.out, s3.a);
       wire(parent, sraTerm.out, s3.b);
-      const s4 = buildOr(parent, vcc3, gnd3, { x: xBase + 20, y: pos.y - 7100 + i * 100 });
+      const s4 = buildOr(parent, { x: xBase + 20, y: pos.y - 7100 + i * 100 });
       wire(parent, sllTerm.out, s4.a);
       wire(parent, srlTerm.out, s4.b);
-      const s5 = buildOr(parent, vcc3, gnd3, { x: xBase + 40, y: pos.y - 7100 + i * 100 });
+      const s5 = buildOr(parent, { x: xBase + 40, y: pos.y - 7100 + i * 100 });
       wire(parent, s1.out, s5.a);
       wire(parent, s2.out, s5.b);
-      const s6 = buildOr(parent, vcc3, gnd3, { x: xBase + 60, y: pos.y - 7100 + i * 100 });
+      const s6 = buildOr(parent, { x: xBase + 60, y: pos.y - 7100 + i * 100 });
       wire(parent, s3.out, s6.a);
       wire(parent, s4.out, s6.b);
-      const final = buildOr(parent, vcc3, gnd3, { x: xBase + 80, y: pos.y - 7100 + i * 100 });
+      const final = buildOr(parent, { x: xBase + 80, y: pos.y - 7100 + i * 100 });
       wire(parent, s5.out, final.a);
       wire(parent, s6.out, final.b);
       result.push(final.out);
@@ -5515,22 +5515,22 @@ export function buildZ80Cpu(
   tieToLabel('CBROT_C', cbRotCPick.pins[muxDef.ports[3]!]!, { x: pos.x + 550, y: pos.y - 6970 });
   let cbRotZChain: Pin = cbRotResult[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 560, y: pos.y - 7100 + i * 40 });
+    const orGate = buildOr(parent, { x: pos.x + 560, y: pos.y - 7100 + i * 40 });
     wire(parent, cbRotZChain, orGate.a);
     wire(parent, cbRotResult[i]!, orGate.b);
     cbRotZChain = orGate.out;
   }
-  const cbRotZBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 600, y: pos.y - 7100 });
+  const cbRotZBit = buildNot(parent, { x: pos.x + 600, y: pos.y - 7100 });
   wire(parent, cbRotZChain, cbRotZBit.in);
   tieToLabel('CBROT_Z', cbRotZBit.out, { x: pos.x + 640, y: pos.y - 7100 });
   let cbRotPChain: Pin = cbRotResult[0]!;
   for (let i = 1; i < 8; i++) {
-    const xorGate = buildXor(parent, vcc3, gnd3, { x: pos.x + 560, y: pos.y - 7500 + i * 40 });
+    const xorGate = buildXor(parent, { x: pos.x + 560, y: pos.y - 7500 + i * 40 });
     wire(parent, cbRotPChain, xorGate.a);
     wire(parent, cbRotResult[i]!, xorGate.b);
     cbRotPChain = xorGate.out;
   }
-  const cbRotPBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 600, y: pos.y - 7500 });
+  const cbRotPBit = buildNot(parent, { x: pos.x + 600, y: pos.y - 7500 });
   wire(parent, cbRotPChain, cbRotPBit.in);
   tieToLabel('CBROT_P', cbRotPBit.out, { x: pos.x + 640, y: pos.y - 7500 });
   tieToLabel('CBROT_S', cbRotResult[7]!, { x: pos.x + 640, y: pos.y - 7480 });
@@ -5548,32 +5548,32 @@ export function buildZ80Cpu(
   // write-back, below) are adjacent ring positions, so the identical
   // transient bus-fight risk applies here too, pre-empted this time
   // instead of found live again.
-  const isIncDecHlMemPhase3 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 1700 });
+  const isIncDecHlMemPhase3 = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 1700 });
   wire(parent, isIncDecHlMem.out, isIncDecHlMemPhase3.a);
   tieToLabel('PHASE3', isIncDecHlMemPhase3.b, { x: pos.x + 9300, y: pos.y - 1670 });
-  const notHlMemReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 1680 });
+  const notHlMemReadNow = buildNot(parent, { x: pos.x + 9420, y: pos.y - 1680 });
   wire(parent, hlMemReadNow.out, notHlMemReadNow.in);
-  const incDecHlMemNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9440, y: pos.y - 1700 });
+  const incDecHlMemNow = buildAnd(parent, { x: pos.x + 9440, y: pos.y - 1700 });
   wire(parent, isIncDecHlMemPhase3.out, incDecHlMemNow.a);
   wire(parent, notHlMemReadNow.out, incDecHlMemNow.b);
   tieToLabel('HLMEM_READ_NOW', hlMemReadNow.out, { x: pos.x + 9450, y: pos.y - 1650 }); // anchor — ramOeStage and RAM's own address mux (far) both read this
   tieToLabel('INCDEC_HLMEM_NOW', incDecHlMemNow.out, { x: pos.x + 9460, y: pos.y - 1700 }); // anchor — ramWe/RAM's own address mux, F's own INCDEC_R8_NOW widening, and the R8RESULT-onto-bus bank (all far) read this
 
-  const incDecR8NowFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9440, y: pos.y - 1580 });
+  const incDecR8NowFinal = buildOr(parent, { x: pos.x + 9440, y: pos.y - 1580 });
   wire(parent, incDecR8Now.out, incDecR8NowFinal.a);
   wire(parent, incDecHlMemNow.out, incDecR8NowFinal.b);
   // DD/FD INC/DEC (IX+d)/(IY+d) PHASE7 write — same F commit as INCDEC_HLMEM.
-  const incDecDdFdWrite = buildOr(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 1560 });
+  const incDecDdFdWrite = buildOr(parent, { x: pos.x + 9420, y: pos.y - 1560 });
   tieToLabel('DDMEM_INCDEC_WRITE_NOW', incDecDdFdWrite.a, { x: pos.x + 9320, y: pos.y - 1560 });
   tieToLabel('FDMEM_INCDEC_WRITE_NOW', incDecDdFdWrite.b, { x: pos.x + 9320, y: pos.y - 1540 });
   // DD/FD INC/DEC IXH/IXL/IYH/IYL @ PHASE4 — parallel (incDecR8Now dead under prefix).
-  const incDecDdFdHl8 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9420, y: pos.y - 1540 });
+  const incDecDdFdHl8 = buildOr(parent, { x: pos.x + 9420, y: pos.y - 1540 });
   tieToLabel('DDIX_HL8_INC_NOW', incDecDdFdHl8.a, { x: pos.x + 9320, y: pos.y - 1540 });
   tieToLabel('FDIY_HL8_INC_NOW', incDecDdFdHl8.b, { x: pos.x + 9320, y: pos.y - 1520 });
-  const incDecDdFdAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9460, y: pos.y - 1550 });
+  const incDecDdFdAny = buildOr(parent, { x: pos.x + 9460, y: pos.y - 1550 });
   wire(parent, incDecDdFdWrite.out, incDecDdFdAny.a);
   wire(parent, incDecDdFdHl8.out, incDecDdFdAny.b);
-  const incDecR8NowFinal2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9480, y: pos.y - 1570 });
+  const incDecR8NowFinal2 = buildOr(parent, { x: pos.x + 9480, y: pos.y - 1570 });
   wire(parent, incDecR8NowFinal.out, incDecR8NowFinal2.a);
   wire(parent, incDecDdFdAny.out, incDecR8NowFinal2.b);
   tieToLabel('INCDEC_R8_NOW', incDecR8NowFinal2.out, { x: pos.x + 9580, y: pos.y - 1570 }); // anchor — F's own mux (far away) reads this via the label
@@ -5591,15 +5591,15 @@ export function buildZ80Cpu(
   // composite has otherwise avoided by always-compute-gate-the-commit.
   // Under DD/FD HL8 INC, H/L select is suppressed and IXH/IXL/IYH/IYL
   // feed the adder instead (never OR H with IXH).
-  const ddFdHl8IncAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9120, y: pos.y - 1880 });
+  const ddFdHl8IncAny = buildOr(parent, { x: pos.x + 9120, y: pos.y - 1880 });
   tieToLabel('DDIX_HL8_INC_NOW', ddFdHl8IncAny.a, { x: pos.x + 9020, y: pos.y - 1880 });
   tieToLabel('FDIY_HL8_INC_NOW', ddFdHl8IncAny.b, { x: pos.x + 9020, y: pos.y - 1860 });
-  const notDdFdHl8Inc = buildNot(parent, vcc3, gnd3, { x: pos.x + 9160, y: pos.y - 1870 });
+  const notDdFdHl8Inc = buildNot(parent, { x: pos.x + 9160, y: pos.y - 1870 });
   wire(parent, ddFdHl8IncAny.out, notDdFdHl8Inc.in);
-  const regHSel = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9180, y: pos.y - 1860 });
+  const regHSel = buildAnd(parent, { x: pos.x + 9180, y: pos.y - 1860 });
   wire(parent, dec.y[4]!, regHSel.a);
   wire(parent, notDdFdHl8Inc.out, regHSel.b);
-  const regLSel = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9180, y: pos.y - 1840 });
+  const regLSel = buildAnd(parent, { x: pos.x + 9180, y: pos.y - 1840 });
   wire(parent, dec.y[5]!, regLSel.a);
   wire(parent, notDdFdHl8Inc.out, regLSel.b);
   const r8Select: [string, Pin][] = [
@@ -5622,29 +5622,29 @@ export function buildZ80Cpu(
   const r8Adder = buildAlu(parent, library, 8, { x: pos.x + 9600, y: pos.y - 1900 });
   tiePowerRail(parent, 'GND', r8Adder.op0);
   tiePowerRail(parent, 'GND', r8Adder.op1);
-  const notIsDecR8 = buildNot(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1950 });
+  const notIsDecR8 = buildNot(parent, { x: pos.x + 9500, y: pos.y - 1950 });
   wire(parent, isDecR8Any.out, notIsDecR8.in);
   wire(parent, notIsDecR8.out, r8Adder.cin);
   for (let i = 0; i < 8; i++) {
     let term: Pin | null = null;
     for (const [regName, y] of r8Select) {
-      const and = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 1900 + i * 60 });
+      const and = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 1900 + i * 60 });
       tieToLabel(`${regName}${i}`, and.a, { x: pos.x + 9100, y: pos.y - 1900 + i * 60 });
       wire(parent, y, and.b);
       if (term === null) {
         term = and.out;
       } else {
-        const or = buildOr(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 1900 + i * 60 });
+        const or = buildOr(parent, { x: pos.x + 9250, y: pos.y - 1900 + i * 60 });
         wire(parent, term, or.a);
         wire(parent, and.out, or.b);
         term = or.out;
       }
     }
     for (const [regName, enLabel] of r8SelectIxIy) {
-      const and = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9280, y: pos.y - 1900 + i * 60 });
+      const and = buildAnd(parent, { x: pos.x + 9280, y: pos.y - 1900 + i * 60 });
       tieToLabel(`${regName}${i}`, and.a, { x: pos.x + 9180, y: pos.y - 1900 + i * 60 });
       tieToLabel(enLabel, and.b, { x: pos.x + 9180, y: pos.y - 1880 + i * 60 });
-      const or = buildOr(parent, vcc3, gnd3, { x: pos.x + 9320, y: pos.y - 1900 + i * 60 });
+      const or = buildOr(parent, { x: pos.x + 9320, y: pos.y - 1900 + i * 60 });
       wire(parent, term!, or.a);
       wire(parent, and.out, or.b);
       term = or.out;
@@ -5662,12 +5662,12 @@ export function buildZ80Cpu(
   // "computed" C instead of a freshly-derived one.
   let r8ZChain: Pin = r8Adder.out[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 1900 + i * 60 });
+    const orGate = buildOr(parent, { x: pos.x + 9800, y: pos.y - 1900 + i * 60 });
     wire(parent, r8ZChain, orGate.a);
     wire(parent, r8Adder.out[i]!, orGate.b);
     r8ZChain = orGate.out;
   }
-  const r8ZBit = buildNot(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 1400 });
+  const r8ZBit = buildNot(parent, { x: pos.x + 9900, y: pos.y - 1400 });
   wire(parent, r8ZChain, r8ZBit.in);
   // `INC r`/`DEC r` are purely arithmetic — real Z80 never gives this
   // family a parity variant the way the main ALU group's `AND`/`XOR`/`OR`
@@ -5676,7 +5676,7 @@ export function buildZ80Cpu(
   // (further down) has to. Same `XOR(carry into the sign bit, carry out
   // of the sign bit)` identity that mux's own `pvOverflow` uses, read off
   // `r8Adder.carries` instead of `alu.carries`.
-  const r8Overflow = buildXor(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y - 1400 });
+  const r8Overflow = buildXor(parent, { x: pos.x + 9950, y: pos.y - 1400 });
   wire(parent, r8Adder.carries[6]!, r8Overflow.a);
   wire(parent, r8Adder.carries[7]!, r8Overflow.b);
   tieToLabel('R8_Z', r8ZBit.out, { x: pos.x + 9900, y: pos.y - 1350 });
@@ -5689,32 +5689,32 @@ export function buildZ80Cpu(
   // `isSubtractLike`: INC is the "ADD" direction, DEC the "SUB" one, the
   // same +1/-1-via-adder trick `r8Adder`'s own `cin`/`b` wiring above
   // already uses), X/Y a straight mirror of the result's own bits.
-  const r8HRaw = buildXor(parent, vcc3, gnd3, { x: pos.x + 9850, y: pos.y - 1300 });
+  const r8HRaw = buildXor(parent, { x: pos.x + 9850, y: pos.y - 1300 });
   wire(parent, r8Adder.carries[3]!, r8HRaw.a);
   wire(parent, isDecR8Any.out, r8HRaw.b);
   tieToLabel('R8_H', r8HRaw.out, { x: pos.x + 9850, y: pos.y - 1280 });
   tieToLabel('R8_X', r8Adder.out[3]!, { x: pos.x + 9750, y: pos.y - 1260 });
   tieToLabel('R8_Y', r8Adder.out[5]!, { x: pos.x + 9800, y: pos.y - 1260 });
 
-  const incDecBNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1200 });
+  const incDecBNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 1200 });
   wire(parent, incDecR8Now.out, incDecBNow.a);
   wire(parent, dec.y[0]!, incDecBNow.b);
-  const incDecCNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1150 });
+  const incDecCNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 1150 });
   wire(parent, incDecR8Now.out, incDecCNow.a);
   wire(parent, dec.y[1]!, incDecCNow.b);
-  const incDecDNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1100 });
+  const incDecDNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 1100 });
   wire(parent, incDecR8Now.out, incDecDNow.a);
   wire(parent, dec.y[2]!, incDecDNow.b);
-  const incDecENow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1050 });
+  const incDecENow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 1050 });
   wire(parent, incDecR8Now.out, incDecENow.a);
   wire(parent, dec.y[3]!, incDecENow.b);
-  const incDecHNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1000 });
+  const incDecHNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 1000 });
   wire(parent, incDecR8Now.out, incDecHNow.a);
   wire(parent, dec.y[4]!, incDecHNow.b);
-  const incDecLNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 950 });
+  const incDecLNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 950 });
   wire(parent, incDecR8Now.out, incDecLNow.a);
   wire(parent, dec.y[5]!, incDecLNow.b);
-  const incDecANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 900 });
+  const incDecANow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 900 });
   wire(parent, incDecR8Now.out, incDecANow.a);
   wire(parent, dec.y[7]!, incDecANow.b);
   tieToLabel('INCDEC_B_NOW', incDecBNow.out, { x: pos.x + 9600, y: pos.y - 1200 });
@@ -5733,13 +5733,13 @@ export function buildZ80Cpu(
   // — instead of "commit, then a no-op." `(HL)` (`y=6`, `LD (HL),n`) now
   // gets its own real write, stacked on top of the read this mechanism
   // already does — see "x=00: INC (HL)/DEC (HL)/LD (HL),n" above.
-  const isLdImm8 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 2200 });
+  const isLdImm8 = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 2200 });
   wire(parent, isX0Group, isLdImm8.a);
   wire(parent, dec.z[6]!, isLdImm8.b);
-  const ldImm8ReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2200 });
+  const ldImm8ReadNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2200 });
   wire(parent, isLdImm8.out, ldImm8ReadNow.a);
   tieToLabel('PHASE2', ldImm8ReadNow.b, { x: pos.x + 9200, y: pos.y - 2170 });
-  const ldImm8AdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2150 });
+  const ldImm8AdvanceNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2150 });
   wire(parent, isLdImm8.out, ldImm8AdvanceNow.a);
   tieToLabel('PHASE3', ldImm8AdvanceNow.b, { x: pos.x + 9200, y: pos.y - 2120 });
   tieToLabel('LDIMM8_READ_NOW', ldImm8ReadNow.out, { x: pos.x + 9400, y: pos.y - 2200 }); // anchor — ramOeStage2 (above) and every register's own commit below read this
@@ -5756,7 +5756,7 @@ export function buildZ80Cpu(
   // own pre-empted one above) — RAM driving the bus for the read at
   // `PHASE2`, this write's own buffer driving it right back at `PHASE3`,
   // adjacent ring positions either way.
-  const ldHlNReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 2250 });
+  const ldHlNReadNow = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 2250 });
   wire(parent, ldImm8ReadNow.out, ldHlNReadNow.a);
   wire(parent, dec.y[6]!, ldHlNReadNow.b);
   const ldHlNImm = buildRegister(parent, library, 8, { x: pos.x - 700, y: pos.y - 6400 });
@@ -5764,36 +5764,36 @@ export function buildZ80Cpu(
   ldHlNImm.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 6400 + i * 20 }));
   ldHlNImm.q.forEach((q, i) => tieToLabel(`LDHLNIMM${i}`, q, { x: pos.x - 800, y: pos.y - 6380 + i * 20 })); // anchor — the write-back bus-driver bank (far) reads this
   tieToLabel('CLK', ldHlNImm.clk, { x: pos.x - 700, y: pos.y - 6420 }); // learned from jpTarget's own missing-CLK bug, several features back — checked off explicitly, every time, no exceptions
-  const ldHlNWriteStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 2300 });
+  const ldHlNWriteStage = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 2300 });
   wire(parent, ldImm8AdvanceNow.out, ldHlNWriteStage.a);
   wire(parent, dec.y[6]!, ldHlNWriteStage.b);
-  const notLdHlNReadNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9370, y: pos.y - 2270 });
+  const notLdHlNReadNow = buildNot(parent, { x: pos.x + 9370, y: pos.y - 2270 });
   wire(parent, ldHlNReadNow.out, notLdHlNReadNow.in);
-  const ldHlNWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9390, y: pos.y - 2300 });
+  const ldHlNWriteNow = buildAnd(parent, { x: pos.x + 9390, y: pos.y - 2300 });
   wire(parent, ldHlNWriteStage.out, ldHlNWriteNow.a);
   wire(parent, notLdHlNReadNow.out, ldHlNWriteNow.b);
   tieToLabel('LDHLN_WRITE_NOW', ldHlNWriteNow.out, { x: pos.x + 9400, y: pos.y - 2300 }); // anchor — ramWe/RAM's own address mux (both far) and ldHlNImm's own bus-driver bank (far) read this
   tieToLabel('LDIMM8_ADVANCE_NOW', ldImm8AdvanceNow.out, { x: pos.x + 9400, y: pos.y - 2150 }); // anchor — PC's own hold/advance (far) reads this
 
-  const ldImm8BNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2300 });
+  const ldImm8BNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2300 });
   wire(parent, ldImm8ReadNow.out, ldImm8BNow.a);
   wire(parent, dec.y[0]!, ldImm8BNow.b);
-  const ldImm8CNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2250 });
+  const ldImm8CNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2250 });
   wire(parent, ldImm8ReadNow.out, ldImm8CNow.a);
   wire(parent, dec.y[1]!, ldImm8CNow.b);
-  const ldImm8DNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2200 });
+  const ldImm8DNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2200 });
   wire(parent, ldImm8ReadNow.out, ldImm8DNow.a);
   wire(parent, dec.y[2]!, ldImm8DNow.b);
-  const ldImm8ENow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2150 });
+  const ldImm8ENow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2150 });
   wire(parent, ldImm8ReadNow.out, ldImm8ENow.a);
   wire(parent, dec.y[3]!, ldImm8ENow.b);
-  const ldImm8HNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2100 });
+  const ldImm8HNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2100 });
   wire(parent, ldImm8ReadNow.out, ldImm8HNow.a);
   wire(parent, dec.y[4]!, ldImm8HNow.b);
-  const ldImm8LNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2050 });
+  const ldImm8LNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2050 });
   wire(parent, ldImm8ReadNow.out, ldImm8LNow.a);
   wire(parent, dec.y[5]!, ldImm8LNow.b);
-  const ldImm8ANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2000 });
+  const ldImm8ANow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2000 });
   wire(parent, ldImm8ReadNow.out, ldImm8ANow.a);
   wire(parent, dec.y[7]!, ldImm8ANow.b);
   tieToLabel('LDIMM8_B_NOW', ldImm8BNow.out, { x: pos.x + 9600, y: pos.y - 2300 });
@@ -5819,31 +5819,31 @@ export function buildZ80Cpu(
   // immediate bytes to skip. Never triggered before now because no test
   // or program byte sequence had ever actually included one of these
   // opcodes.
-  const isX0Z1 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2650 });
+  const isX0Z1 = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 2650 });
   wire(parent, isX0Group, isX0Z1.a);
   wire(parent, dec.z[1]!, isX0Z1.b);
-  const isLdDdNnYValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2620 });
+  const isLdDdNnYValid1 = buildOr(parent, { x: pos.x + 9150, y: pos.y - 2620 });
   wire(parent, dec.y[0]!, isLdDdNnYValid1.a);
   wire(parent, dec.y[2]!, isLdDdNnYValid1.b);
-  const isLdDdNnYValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2610 });
+  const isLdDdNnYValid2 = buildOr(parent, { x: pos.x + 9150, y: pos.y - 2610 });
   wire(parent, isLdDdNnYValid1.out, isLdDdNnYValid2.a);
   wire(parent, dec.y[4]!, isLdDdNnYValid2.b);
-  const isLdDdNnYValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2605 });
+  const isLdDdNnYValid = buildOr(parent, { x: pos.x + 9150, y: pos.y - 2605 });
   wire(parent, isLdDdNnYValid2.out, isLdDdNnYValid.a);
   wire(parent, dec.y[6]!, isLdDdNnYValid.b);
-  const isLdDdNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 2600 });
+  const isLdDdNn = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 2600 });
   wire(parent, isX0Z1.out, isLdDdNn.a);
   wire(parent, isLdDdNnYValid.out, isLdDdNn.b);
-  const ldDdNnLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2600 });
+  const ldDdNnLowNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2600 });
   wire(parent, isLdDdNn.out, ldDdNnLowNow.a);
   tieToLabel('PHASE2', ldDdNnLowNow.b, { x: pos.x + 9200, y: pos.y - 2570 });
-  const ldDdNnLowAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2550 });
+  const ldDdNnLowAdvanceNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2550 });
   wire(parent, isLdDdNn.out, ldDdNnLowAdvanceNow.a);
   tieToLabel('PHASE3', ldDdNnLowAdvanceNow.b, { x: pos.x + 9200, y: pos.y - 2520 });
-  const ldDdNnHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2500 });
+  const ldDdNnHighNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2500 });
   wire(parent, isLdDdNn.out, ldDdNnHighNow.a);
   tieToLabel('PHASE4', ldDdNnHighNow.b, { x: pos.x + 9200, y: pos.y - 2470 });
-  const ldDdNnHighAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2450 });
+  const ldDdNnHighAdvanceNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2450 });
   wire(parent, isLdDdNn.out, ldDdNnHighAdvanceNow.a);
   tieToLabel('PHASE5', ldDdNnHighAdvanceNow.b, { x: pos.x + 9200, y: pos.y - 2420 });
   tieToLabel('LDDDNN_LOW_NOW', ldDdNnLowNow.out, { x: pos.x + 9400, y: pos.y - 2600 }); // anchor — ramOeStage (far) reads this
@@ -5858,22 +5858,22 @@ export function buildZ80Cpu(
   // monolithic register, not two independently-addressable ones the way
   // `BC`/`DE`/`HL` are, and gets its own write-back mechanism entirely,
   // below (see "x=00, z=1: LD dd,nn" above for why).
-  const ldDdNnLowCNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2650 });
+  const ldDdNnLowCNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2650 });
   wire(parent, ldDdNnLowNow.out, ldDdNnLowCNow.a);
   wire(parent, dec.y[0]!, ldDdNnLowCNow.b);
-  const ldDdNnLowENow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2600 });
+  const ldDdNnLowENow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2600 });
   wire(parent, ldDdNnLowNow.out, ldDdNnLowENow.a);
   wire(parent, dec.y[2]!, ldDdNnLowENow.b);
-  const ldDdNnLowLNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2550 });
+  const ldDdNnLowLNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2550 });
   wire(parent, ldDdNnLowNow.out, ldDdNnLowLNow.a);
   wire(parent, dec.y[4]!, ldDdNnLowLNow.b);
-  const ldDdNnHighBNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2500 });
+  const ldDdNnHighBNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2500 });
   wire(parent, ldDdNnHighNow.out, ldDdNnHighBNow.a);
   wire(parent, dec.y[0]!, ldDdNnHighBNow.b);
-  const ldDdNnHighDNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2450 });
+  const ldDdNnHighDNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2450 });
   wire(parent, ldDdNnHighNow.out, ldDdNnHighDNow.a);
   wire(parent, dec.y[2]!, ldDdNnHighDNow.b);
-  const ldDdNnHighHNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 2400 });
+  const ldDdNnHighHNow = buildAnd(parent, { x: pos.x + 9500, y: pos.y - 2400 });
   wire(parent, ldDdNnHighNow.out, ldDdNnHighHNow.a);
   wire(parent, dec.y[4]!, ldDdNnHighHNow.b);
   tieToLabel('LDDDNN_LOW_C_NOW', ldDdNnLowCNow.out, { x: pos.x + 9600, y: pos.y - 2650 });
@@ -5890,19 +5890,19 @@ export function buildZ80Cpu(
   // exact complement of `LD dd,nn`'s own even-`y` gate at this same `z`,
   // so between the two, every `y` value at `z=1` is now covered by
   // exactly one of them, none left ambiguously double-decoded.
-  const isAddHlYValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2350 });
+  const isAddHlYValid1 = buildOr(parent, { x: pos.x + 9150, y: pos.y - 2350 });
   wire(parent, dec.y[1]!, isAddHlYValid1.a);
   wire(parent, dec.y[3]!, isAddHlYValid1.b);
-  const isAddHlYValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2320 });
+  const isAddHlYValid2 = buildOr(parent, { x: pos.x + 9150, y: pos.y - 2320 });
   wire(parent, isAddHlYValid1.out, isAddHlYValid2.a);
   wire(parent, dec.y[5]!, isAddHlYValid2.b);
-  const isAddHlYValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 2300 });
+  const isAddHlYValid = buildOr(parent, { x: pos.x + 9150, y: pos.y - 2300 });
   wire(parent, isAddHlYValid2.out, isAddHlYValid.a);
   wire(parent, dec.y[7]!, isAddHlYValid.b);
-  const isAddHlRr = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 2300 });
+  const isAddHlRr = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 2300 });
   wire(parent, isX0Z1.out, isAddHlRr.a);
   wire(parent, isAddHlYValid.out, isAddHlRr.b);
-  const addHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2300 });
+  const addHlNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2300 });
   wire(parent, isAddHlRr.out, addHlNow.a);
   tieToLabel('PHASE2', addHlNow.b, { x: pos.x + 9250, y: pos.y - 2270 }); // single-byte opcode — the same commit phase INC r/DEC r's own incDecR8Now already uses
   tieToLabel('ADDHL_NOW', addHlNow.out, { x: pos.x + 9400, y: pos.y - 2300 }); // anchor — H's and L's own fifth write-back layer (far) and F's own C-bit mux (far) both read this
@@ -5932,17 +5932,17 @@ export function buildZ80Cpu(
   // simply its complement, no new parity check needed. Collides with
   // real unprefixed `LD y,D` (`x=01` is the entire `LD r,r'` table,
   // `z=2` picks `D` as the source) for every destination `y` picks.
-  const isAdcSbcHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5400 });
+  const isAdcSbcHlNow = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5400 });
   wire(parent, isEdX1Active.out, isAdcSbcHlNow.a);
   wire(parent, dec.z[2]!, isAdcSbcHlNow.b);
   tieToLabel('IS_ADCSBCHL_NOW', isAdcSbcHlNow.out, { x: pos.x - 850, y: pos.y - 5400 });
-  const isAdcHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5420 });
+  const isAdcHlNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5420 });
   wire(parent, isAdcSbcHlNow.out, isAdcHlNow.a);
   wire(parent, isAddHlYValid.out, isAdcHlNow.b);
   tieToLabel('IS_ADCHL_NOW', isAdcHlNow.out, { x: pos.x - 800, y: pos.y - 5420 });
-  const notAddHlYValid = buildNot(parent, vcc3, gnd3, { x: pos.x - 870, y: pos.y - 5440 });
+  const notAddHlYValid = buildNot(parent, { x: pos.x - 870, y: pos.y - 5440 });
   wire(parent, isAddHlYValid.out, notAddHlYValid.in);
-  const isSbcHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5440 });
+  const isSbcHlNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5440 });
   wire(parent, isAdcSbcHlNow.out, isSbcHlNow.a);
   wire(parent, notAddHlYValid.out, isSbcHlNow.b);
   tieToLabel('IS_SBCHL_NOW', isSbcHlNow.out, { x: pos.x - 800, y: pos.y - 5440 }); // anchor — the shared adder's own cin/b-invert and F's own N-bit (all near) read this
@@ -5951,33 +5951,33 @@ export function buildZ80Cpu(
   // is always odd, one-hot per pair already), so each pair gets its own
   // fresh 2-way `y`-fold here rather than reusing `addHlPairs`'s own
   // per-pair `y` line directly.
-  const isAdcSbcHlBcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5460 });
-  const bcYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5460 });
+  const isAdcSbcHlBcNow = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5460 });
+  const bcYFold = buildOr(parent, { x: pos.x - 950, y: pos.y - 5460 });
   wire(parent, dec.y[0]!, bcYFold.a);
   wire(parent, dec.y[1]!, bcYFold.b);
   wire(parent, isAdcSbcHlNow.out, isAdcSbcHlBcNow.a);
   wire(parent, bcYFold.out, isAdcSbcHlBcNow.b);
-  const isAdcSbcHlDeNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5480 });
-  const deYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5480 });
+  const isAdcSbcHlDeNow = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5480 });
+  const deYFold = buildOr(parent, { x: pos.x - 950, y: pos.y - 5480 });
   wire(parent, dec.y[2]!, deYFold.a);
   wire(parent, dec.y[3]!, deYFold.b);
   wire(parent, isAdcSbcHlNow.out, isAdcSbcHlDeNow.a);
   wire(parent, deYFold.out, isAdcSbcHlDeNow.b);
-  const isAdcSbcHlHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5500 });
-  const hlYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5500 });
+  const isAdcSbcHlHlNow = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5500 });
+  const hlYFold = buildOr(parent, { x: pos.x - 950, y: pos.y - 5500 });
   wire(parent, dec.y[4]!, hlYFold.a);
   wire(parent, dec.y[5]!, hlYFold.b);
   wire(parent, isAdcSbcHlNow.out, isAdcSbcHlHlNow.a);
   wire(parent, hlYFold.out, isAdcSbcHlHlNow.b);
-  const isAdcSbcHlSpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 900, y: pos.y - 5520 });
-  const spYFold = buildOr(parent, vcc3, gnd3, { x: pos.x - 950, y: pos.y - 5520 });
+  const isAdcSbcHlSpNow = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5520 });
+  const spYFold = buildOr(parent, { x: pos.x - 950, y: pos.y - 5520 });
   wire(parent, dec.y[6]!, spYFold.a);
   wire(parent, dec.y[7]!, spYFold.b);
   wire(parent, isAdcSbcHlNow.out, isAdcSbcHlSpNow.a);
   wire(parent, spYFold.out, isAdcSbcHlSpNow.b);
   // One phase, the first available one for any `ED`-prefixed opcode —
   // the identical timing `NEG` above already establishes.
-  const adcSbcHlCommitNow = buildAnd(parent, vcc3, gnd3, { x: pos.x - 850, y: pos.y - 5540 });
+  const adcSbcHlCommitNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5540 });
   wire(parent, isAdcSbcHlNow.out, adcSbcHlCommitNow.a);
   tieToLabel('PHASE4', adcSbcHlCommitNow.b, { x: pos.x - 950, y: pos.y - 5540 });
   tieToLabel('ADCSBCHL_COMMIT_NOW', adcSbcHlCommitNow.out, { x: pos.x - 800, y: pos.y - 5540 }); // anchor — H's/L's own sixth write-back layer and F's own we/per-bit layer (all far) read this
@@ -5989,36 +5989,36 @@ export function buildZ80Cpu(
   // old `C` inverted for `SBC HL,rr` — the identical `ADC`/`SBC` recipe
   // "x=10: ADC/SBC" above already establishes for the 8-bit ALU group,
   // just reused here for the 16-bit case.
-  const adcHlCin = buildAnd(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5320 });
+  const adcHlCin = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5320 });
   wire(parent, isAdcHlNow.out, adcHlCin.a);
   wire(parent, f.q[0]!, adcHlCin.b);
-  const notOldCForSbcHl = buildNot(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 5340 });
+  const notOldCForSbcHl = buildNot(parent, { x: pos.x - 750, y: pos.y - 5340 });
   wire(parent, f.q[0]!, notOldCForSbcHl.in);
-  const sbcHlCin = buildAnd(parent, vcc3, gnd3, { x: pos.x - 700, y: pos.y - 5340 });
+  const sbcHlCin = buildAnd(parent, { x: pos.x - 700, y: pos.y - 5340 });
   wire(parent, isSbcHlNow.out, sbcHlCin.a);
   wire(parent, notOldCForSbcHl.out, sbcHlCin.b);
-  const addHlCinFinal = buildOr(parent, vcc3, gnd3, { x: pos.x - 650, y: pos.y - 5330 });
+  const addHlCinFinal = buildOr(parent, { x: pos.x - 650, y: pos.y - 5330 });
   wire(parent, adcHlCin.out, addHlCinFinal.a);
   wire(parent, sbcHlCin.out, addHlCinFinal.b);
   wire(parent, addHlCinFinal.out, addHlAdder.cin);
-  const addHlBcY = buildOr(parent, vcc3, gnd3, { x: pos.x - 620, y: pos.y - 5360 });
+  const addHlBcY = buildOr(parent, { x: pos.x - 620, y: pos.y - 5360 });
   wire(parent, dec.y[1]!, addHlBcY.a);
   wire(parent, isAdcSbcHlBcNow.out, addHlBcY.b);
-  const addHlDeY = buildOr(parent, vcc3, gnd3, { x: pos.x - 620, y: pos.y - 5370 });
+  const addHlDeY = buildOr(parent, { x: pos.x - 620, y: pos.y - 5370 });
   wire(parent, dec.y[3]!, addHlDeY.a);
   wire(parent, isAdcSbcHlDeNow.out, addHlDeY.b);
-  const addHlHlY = buildOr(parent, vcc3, gnd3, { x: pos.x - 620, y: pos.y - 5380 });
+  const addHlHlY = buildOr(parent, { x: pos.x - 620, y: pos.y - 5380 });
   wire(parent, dec.y[5]!, addHlHlY.a);
   wire(parent, isAdcSbcHlHlNow.out, addHlHlY.b);
-  const addHlSpY = buildOr(parent, vcc3, gnd3, { x: pos.x - 620, y: pos.y - 5390 });
+  const addHlSpY = buildOr(parent, { x: pos.x - 620, y: pos.y - 5390 });
   wire(parent, dec.y[7]!, addHlSpY.a);
   wire(parent, isAdcSbcHlSpNow.out, addHlSpY.b);
   // HL-pair `b` slot under DD/FD: ADD IX,IX / ADD IY,IY need IX/IY as
   // the second operand when y=5, not live HL (which must stay untouched).
-  const anyIxIyAddActive = buildOr(parent, vcc3, gnd3, { x: pos.x - 680, y: pos.y - 5410 });
+  const anyIxIyAddActive = buildOr(parent, { x: pos.x - 680, y: pos.y - 5410 });
   wire(parent, isDdActive, anyIxIyAddActive.a);
   wire(parent, isFdActive, anyIxIyAddActive.b);
-  const notIxIyAddActive = buildNot(parent, vcc3, gnd3, { x: pos.x - 660, y: pos.y - 5410 });
+  const notIxIyAddActive = buildNot(parent, { x: pos.x - 660, y: pos.y - 5410 });
   wire(parent, anyIxIyAddActive.out, notIxIyAddActive.in);
   const addHlPairs: { y: Pin; lowQ: Pin[]; highQ: Pin[] | null }[] = [
     { y: addHlBcY.out, lowQ: rC.q, highQ: rB.q },
@@ -6032,19 +6032,19 @@ export function buildZ80Cpu(
     const aHl = i < 8 ? rL.q[i]! : rH.q[i - 8]!;
     const aIx = i < 8 ? rIXL.q[i]! : rIXH.q[i - 8]!;
     const aIy = i < 8 ? rIYL.q[i]! : rIYH.q[i - 8]!;
-    const aHlGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 640, y: pos.y - 5300 + i * 60 });
+    const aHlGate = buildAnd(parent, { x: pos.x - 640, y: pos.y - 5300 + i * 60 });
     wire(parent, notIxIyAddActive.out, aHlGate.a);
     wire(parent, aHl, aHlGate.b);
-    const aIxGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 630, y: pos.y - 5300 + i * 60 });
+    const aIxGate = buildAnd(parent, { x: pos.x - 630, y: pos.y - 5300 + i * 60 });
     wire(parent, isDdActive, aIxGate.a);
     wire(parent, aIx, aIxGate.b);
-    const aIyGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 620, y: pos.y - 5300 + i * 60 });
+    const aIyGate = buildAnd(parent, { x: pos.x - 620, y: pos.y - 5300 + i * 60 });
     wire(parent, isFdActive, aIyGate.a);
     wire(parent, aIy, aIyGate.b);
-    const aIxIy = buildOr(parent, vcc3, gnd3, { x: pos.x - 610, y: pos.y - 5300 + i * 60 });
+    const aIxIy = buildOr(parent, { x: pos.x - 610, y: pos.y - 5300 + i * 60 });
     wire(parent, aIxGate.out, aIxIy.a);
     wire(parent, aIyGate.out, aIxIy.b);
-    const aFinal = buildOr(parent, vcc3, gnd3, { x: pos.x - 600, y: pos.y - 5300 + i * 60 });
+    const aFinal = buildOr(parent, { x: pos.x - 600, y: pos.y - 5300 + i * 60 });
     wire(parent, aHlGate.out, aFinal.a);
     wire(parent, aIxIy.out, aFinal.b);
     wire(parent, aFinal.out, addHlAdder.a[i]!);
@@ -6062,29 +6062,29 @@ export function buildZ80Cpu(
               : railPin(parent, 'GND', { x: pos.x - 540, y: pos.y - 5300 + i * 60 });
       // Pair slot HL (index 2): under DD use IX, under FD use IY.
       if (pairIdx === 2) {
-        const bHlGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 590, y: pos.y - 5300 + i * 60 });
+        const bHlGate = buildAnd(parent, { x: pos.x - 590, y: pos.y - 5300 + i * 60 });
         wire(parent, notIxIyAddActive.out, bHlGate.a);
         wire(parent, bit, bHlGate.b);
-        const bIxGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 580, y: pos.y - 5300 + i * 60 });
+        const bIxGate = buildAnd(parent, { x: pos.x - 580, y: pos.y - 5300 + i * 60 });
         wire(parent, isDdActive, bIxGate.a);
         wire(parent, aIx, bIxGate.b);
-        const bIyGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 570, y: pos.y - 5300 + i * 60 });
+        const bIyGate = buildAnd(parent, { x: pos.x - 570, y: pos.y - 5300 + i * 60 });
         wire(parent, isFdActive, bIyGate.a);
         wire(parent, aIy, bIyGate.b);
-        const bIxIy = buildOr(parent, vcc3, gnd3, { x: pos.x - 560, y: pos.y - 5300 + i * 60 });
+        const bIxIy = buildOr(parent, { x: pos.x - 560, y: pos.y - 5300 + i * 60 });
         wire(parent, bIxGate.out, bIxIy.a);
         wire(parent, bIyGate.out, bIxIy.b);
-        const bFinal = buildOr(parent, vcc3, gnd3, { x: pos.x - 550, y: pos.y - 5300 + i * 60 });
+        const bFinal = buildOr(parent, { x: pos.x - 550, y: pos.y - 5300 + i * 60 });
         wire(parent, bHlGate.out, bFinal.a);
         wire(parent, bIxIy.out, bFinal.b);
         bit = bFinal.out;
       }
-      const and = buildAnd(parent, vcc3, gnd3, { x: pos.x - 540, y: pos.y - 5300 + i * 60 });
+      const and = buildAnd(parent, { x: pos.x - 540, y: pos.y - 5300 + i * 60 });
       wire(parent, y, and.a);
       wire(parent, bit, and.b);
       if (term === null) term = and.out;
       else {
-        const or = buildOr(parent, vcc3, gnd3, { x: pos.x - 530, y: pos.y - 5300 + i * 60 });
+        const or = buildOr(parent, { x: pos.x - 530, y: pos.y - 5300 + i * 60 });
         wire(parent, term, or.a);
         wire(parent, and.out, or.b);
         term = or.out;
@@ -6093,7 +6093,7 @@ export function buildZ80Cpu(
     // `SBC HL,rr` needs its own operand inverted too — the identical
     // "invert `b` for a real subtract" shape `bInv` already establishes
     // for the 8-bit ALU group's own `SUB`/`SBC`.
-    const addHlBInv = buildXor(parent, vcc3, gnd3, { x: pos.x - 520, y: pos.y - 5300 + i * 60 });
+    const addHlBInv = buildXor(parent, { x: pos.x - 520, y: pos.y - 5300 + i * 60 });
     wire(parent, term!, addHlBInv.a);
     wire(parent, isSbcHlNow.out, addHlBInv.b);
     wire(parent, addHlBInv.out, addHlAdder.b[i]!);
@@ -6115,20 +6115,20 @@ export function buildZ80Cpu(
   const addHlSBit = addHlAdder.out[15]!;
   let addHlZChain: Pin = addHlAdder.out[0]!;
   for (let i = 1; i < 16; i++) {
-    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x - 450, y: pos.y - 5200 + i * 30 });
+    const orGate = buildOr(parent, { x: pos.x - 450, y: pos.y - 5200 + i * 30 });
     wire(parent, addHlZChain, orGate.a);
     wire(parent, addHlAdder.out[i]!, orGate.b);
     addHlZChain = orGate.out;
   }
-  const addHlZBit = buildNot(parent, vcc3, gnd3, { x: pos.x - 400, y: pos.y - 4700 });
+  const addHlZBit = buildNot(parent, { x: pos.x - 400, y: pos.y - 4700 });
   wire(parent, addHlZChain, addHlZBit.in);
-  const addHlHBitRaw = buildXor(parent, vcc3, gnd3, { x: pos.x - 400, y: pos.y - 4680 });
+  const addHlHBitRaw = buildXor(parent, { x: pos.x - 400, y: pos.y - 4680 });
   wire(parent, addHlAdder.carries[11]!, addHlHBitRaw.a);
   wire(parent, isSbcHlNow.out, addHlHBitRaw.b);
-  const addHlPvBit = buildXor(parent, vcc3, gnd3, { x: pos.x - 400, y: pos.y - 4660 });
+  const addHlPvBit = buildXor(parent, { x: pos.x - 400, y: pos.y - 4660 });
   wire(parent, addHlAdder.carries[14]!, addHlPvBit.a);
   wire(parent, addHlAdder.carries[15]!, addHlPvBit.b);
-  const addHlCBitFresh = buildXor(parent, vcc3, gnd3, { x: pos.x - 400, y: pos.y - 4640 });
+  const addHlCBitFresh = buildXor(parent, { x: pos.x - 400, y: pos.y - 4640 });
   wire(parent, addHlAdder.cout, addHlCBitFresh.a);
   wire(parent, isSbcHlNow.out, addHlCBitFresh.b);
   tieToLabel('ADCSBCHL_S', addHlSBit, { x: pos.x - 350, y: pos.y - 4700 });
@@ -6142,35 +6142,35 @@ export function buildZ80Cpu(
   // derivation. All 8 `y` values are real, valid opcodes here (no gap to
   // exclude) — `y=0..3` are single-byte, register-indirect through `BC`/
   // `DE`; `y=4..7` are 3-byte, through a freshly-read absolute `nn`.
-  const isX0Z2 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9100, y: pos.y - 5400 });
+  const isX0Z2 = buildAnd(parent, { x: pos.x + 9100, y: pos.y - 5400 });
   wire(parent, isX0Group, isX0Z2.a);
   wire(parent, dec.z[2]!, isX0Z2.b);
 
   // y=0..3: LD (BC),A / LD A,(BC) / LD (DE),A / LD A,(DE) — single-byte,
   // committing at PHASE2, the same commit phase INC r/DEC r's own
   // incDecR8Now already uses for a 1-byte opcode.
-  const isLdBcA = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5450 });
+  const isLdBcA = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 5450 });
   wire(parent, isX0Z2.out, isLdBcA.a);
   wire(parent, dec.y[0]!, isLdBcA.b);
-  const ldBcANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5450 });
+  const ldBcANow = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5450 });
   wire(parent, isLdBcA.out, ldBcANow.a);
   tieToLabel('PHASE2', ldBcANow.b, { x: pos.x + 9150, y: pos.y - 5420 });
-  const isLdABc = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5400 });
+  const isLdABc = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 5400 });
   wire(parent, isX0Z2.out, isLdABc.a);
   wire(parent, dec.y[1]!, isLdABc.b);
-  const ldABcNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5400 });
+  const ldABcNow = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5400 });
   wire(parent, isLdABc.out, ldABcNow.a);
   tieToLabel('PHASE2', ldABcNow.b, { x: pos.x + 9150, y: pos.y - 5370 });
-  const isLdDeA = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5350 });
+  const isLdDeA = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 5350 });
   wire(parent, isX0Z2.out, isLdDeA.a);
   wire(parent, dec.y[2]!, isLdDeA.b);
-  const ldDeANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5350 });
+  const ldDeANow = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5350 });
   wire(parent, isLdDeA.out, ldDeANow.a);
   tieToLabel('PHASE2', ldDeANow.b, { x: pos.x + 9150, y: pos.y - 5320 });
-  const isLdADe = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5300 });
+  const isLdADe = buildAnd(parent, { x: pos.x + 9150, y: pos.y - 5300 });
   wire(parent, isX0Z2.out, isLdADe.a);
   wire(parent, dec.y[3]!, isLdADe.b);
-  const ldADeNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5300 });
+  const ldADeNow = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5300 });
   wire(parent, isLdADe.out, ldADeNow.a);
   tieToLabel('PHASE2', ldADeNow.b, { x: pos.x + 9150, y: pos.y - 5270 });
   tieToLabel('LDBCA_NOW', ldBcANow.out, { x: pos.x + 9250, y: pos.y - 5450 }); // anchor — RAM's own we/address mux and A-onto-bus bank (far) read this
@@ -6184,29 +6184,29 @@ export function buildZ80Cpu(
   // committing at PHASE6 (single-byte data: `A`) or PHASE6+PHASE7
   // (2-byte data: `HL`, low byte first) — the full 8-phase budget, no FSM
   // widening needed.
-  const isNnGroupStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5500 });
+  const isNnGroupStage = buildOr(parent, { x: pos.x + 9150, y: pos.y - 5500 });
   wire(parent, dec.y[4]!, isNnGroupStage.a);
   wire(parent, dec.y[5]!, isNnGroupStage.b);
-  const isNnGroupStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5530 });
+  const isNnGroupStage2 = buildOr(parent, { x: pos.x + 9150, y: pos.y - 5530 });
   wire(parent, isNnGroupStage.out, isNnGroupStage2.a);
   wire(parent, dec.y[6]!, isNnGroupStage2.b);
-  const isNnGroup = buildOr(parent, vcc3, gnd3, { x: pos.x + 9150, y: pos.y - 5560 });
+  const isNnGroup = buildOr(parent, { x: pos.x + 9150, y: pos.y - 5560 });
   wire(parent, isNnGroupStage2.out, isNnGroup.a);
   wire(parent, dec.y[7]!, isNnGroup.b);
-  const isNnZ2 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5500 });
+  const isNnZ2 = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5500 });
   wire(parent, isX0Z2.out, isNnZ2.a);
   wire(parent, isNnGroup.out, isNnZ2.b);
 
-  const nnReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5500 });
+  const nnReadLowNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5500 });
   wire(parent, isNnZ2.out, nnReadLowNow.a);
   tieToLabel('PHASE2', nnReadLowNow.b, { x: pos.x + 9200, y: pos.y - 5470 });
-  const nnAdvanceLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5550 });
+  const nnAdvanceLowNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5550 });
   wire(parent, isNnZ2.out, nnAdvanceLowNow.a);
   tieToLabel('PHASE3', nnAdvanceLowNow.b, { x: pos.x + 9200, y: pos.y - 5520 });
-  const nnReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5600 });
+  const nnReadHighNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5600 });
   wire(parent, isNnZ2.out, nnReadHighNow.a);
   tieToLabel('PHASE4', nnReadHighNow.b, { x: pos.x + 9200, y: pos.y - 5570 });
-  const nnAdvanceHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5650 });
+  const nnAdvanceHighNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5650 });
   wire(parent, isNnZ2.out, nnAdvanceHighNow.a);
   tieToLabel('PHASE5', nnAdvanceHighNow.b, { x: pos.x + 9200, y: pos.y - 5620 });
   tieToLabel('NN_READ_LOW_NOW', nnReadLowNow.out, { x: pos.x + 9350, y: pos.y - 5500 }); // anchor — ramOeStage and nnAddr's own write-back (far) read this
@@ -6221,24 +6221,24 @@ export function buildZ80Cpu(
   // two bytes, so the freshly-read address has to live somewhere else
   // until the data phase actually needs it.
   const nnAddr = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 5500 });
-  const nnAddrWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5800 });
+  const nnAddrWe = buildOr(parent, { x: pos.x - 700, y: pos.y - 5800 });
   tieToLabel('NN_READ_LOW_NOW', nnAddrWe.a, { x: pos.x - 800, y: pos.y - 5800 });
   tieToLabel('NN_READ_HIGH_NOW', nnAddrWe.b, { x: pos.x - 800, y: pos.y - 5770 });
-  const nnAddrWe2 = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5740 });
+  const nnAddrWe2 = buildOr(parent, { x: pos.x - 700, y: pos.y - 5740 });
   wire(parent, nnAddrWe.out, nnAddrWe2.a);
   tieToLabel('EDNN_IMM_LOW_NOW', nnAddrWe2.b, { x: pos.x - 800, y: pos.y - 5740 });
-  const nnAddrWe3 = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5710 });
+  const nnAddrWe3 = buildOr(parent, { x: pos.x - 700, y: pos.y - 5710 });
   wire(parent, nnAddrWe2.out, nnAddrWe3.a);
   tieToLabel('EDNN_IMM_HIGH_NOW', nnAddrWe3.b, { x: pos.x - 800, y: pos.y - 5710 });
   wire(parent, nnAddrWe3.out, nnAddr.we);
   // Hold-select for each half: unprefixed high-read OR ED high-read (and
   // symmetrically for the low half) — either path writing the other half
   // must hold this one.
-  const nnAddrHoldHigh = buildOr(parent, vcc, gnd, { x: pos.x - 800, y: pos.y - 5680 });
+  const nnAddrHoldHigh = buildOr(parent, { x: pos.x - 800, y: pos.y - 5680 });
   tieToLabel('NN_READ_HIGH_NOW', nnAddrHoldHigh.a, { x: pos.x - 900, y: pos.y - 5680 });
   tieToLabel('EDNN_IMM_HIGH_NOW', nnAddrHoldHigh.b, { x: pos.x - 900, y: pos.y - 5660 });
   tieToLabel('NNADDR_HOLD_HIGH', nnAddrHoldHigh.out, { x: pos.x - 750, y: pos.y - 5680 });
-  const nnAddrHoldLow = buildOr(parent, vcc, gnd, { x: pos.x - 800, y: pos.y - 5640 });
+  const nnAddrHoldLow = buildOr(parent, { x: pos.x - 800, y: pos.y - 5640 });
   tieToLabel('NN_READ_LOW_NOW', nnAddrHoldLow.a, { x: pos.x - 900, y: pos.y - 5640 });
   tieToLabel('EDNN_IMM_LOW_NOW', nnAddrHoldLow.b, { x: pos.x - 900, y: pos.y - 5620 });
   tieToLabel('NNADDR_HOLD_LOW', nnAddrHoldLow.out, { x: pos.x - 750, y: pos.y - 5640 });
@@ -6271,10 +6271,10 @@ export function buildZ80Cpu(
     tiePowerRail(parent, 'GND', nnAddrPlusOne.b[i]!);
   });
 
-  const isLdNnHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5700 });
+  const isLdNnHl = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5700 });
   wire(parent, isNnZ2.out, isLdNnHl.a);
   wire(parent, dec.y[4]!, isLdNnHl.b);
-  const ldNnHlLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5700 });
+  const ldNnHlLowNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5700 });
   wire(parent, isLdNnHl.out, ldNnHlLowNow.a);
   tieToLabel('PHASE6', ldNnHlLowNow.b, { x: pos.x + 9200, y: pos.y - 5670 });
   // `ldNnHlHighNow` explicitly excludes `ldNnHlLowNow` (not bare PHASE7) —
@@ -6291,36 +6291,36 @@ export function buildZ80Cpu(
   // (exactly the failure mode this file's own `ramOe`/`hlNow` doc comment
   // already warned about). The fix mirrors `pushLowNow`'s own shape
   // exactly: the *later*-executing signal excludes the *earlier* one.
-  const notLdNnHlLowNow = buildNot(parent, vcc3, gnd3, { x: pos.x + 9280, y: pos.y - 5730 });
+  const notLdNnHlLowNow = buildNot(parent, { x: pos.x + 9280, y: pos.y - 5730 });
   wire(parent, ldNnHlLowNow.out, notLdNnHlLowNow.in);
-  const ldNnHlHighStage = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5750 });
+  const ldNnHlHighStage = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5750 });
   wire(parent, isLdNnHl.out, ldNnHlHighStage.a);
   tieToLabel('PHASE7', ldNnHlHighStage.b, { x: pos.x + 9200, y: pos.y - 5720 });
-  const ldNnHlHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 5750 });
+  const ldNnHlHighNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 5750 });
   wire(parent, ldNnHlHighStage.out, ldNnHlHighNow.a);
   wire(parent, notLdNnHlLowNow.out, ldNnHlHighNow.b);
 
-  const isLdHlNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5800 });
+  const isLdHlNn = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5800 });
   wire(parent, isNnZ2.out, isLdHlNn.a);
   wire(parent, dec.y[5]!, isLdHlNn.b);
-  const ldHlNnLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5800 });
+  const ldHlNnLowNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5800 });
   wire(parent, isLdHlNn.out, ldHlNnLowNow.a);
   tieToLabel('PHASE6', ldHlNnLowNow.b, { x: pos.x + 9200, y: pos.y - 5770 });
-  const ldHlNnHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5850 });
+  const ldHlNnHighNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5850 });
   wire(parent, isLdHlNn.out, ldHlNnHighNow.a);
   tieToLabel('PHASE7', ldHlNnHighNow.b, { x: pos.x + 9200, y: pos.y - 5820 });
 
-  const isLdNnA = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5900 });
+  const isLdNnA = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5900 });
   wire(parent, isNnZ2.out, isLdNnA.a);
   wire(parent, dec.y[6]!, isLdNnA.b);
-  const ldNnANow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5900 });
+  const ldNnANow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5900 });
   wire(parent, isLdNnA.out, ldNnANow.a);
   tieToLabel('PHASE6', ldNnANow.b, { x: pos.x + 9200, y: pos.y - 5870 });
 
-  const isLdANn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5950 });
+  const isLdANn = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 5950 });
   wire(parent, isNnZ2.out, isLdANn.a);
   wire(parent, dec.y[7]!, isLdANn.b);
-  const ldANnNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 5950 });
+  const ldANnNow = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 5950 });
   wire(parent, isLdANn.out, ldANnNow.a);
   tieToLabel('PHASE6', ldANnNow.b, { x: pos.x + 9200, y: pos.y - 5920 });
 
@@ -6336,33 +6336,33 @@ export function buildZ80Cpu(
   // `OR`-fold over every phase that needs that particular address source,
   // read by the far-away `bcMux`/`deMux`/`nnLowMux`/`nnHighMux` override
   // layers via the label, not a ~9000-unit wire.
-  const isBcAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6050 });
+  const isBcAddrNow = buildOr(parent, { x: pos.x + 9300, y: pos.y - 6050 });
   wire(parent, ldBcANow.out, isBcAddrNow.a);
   wire(parent, ldABcNow.out, isBcAddrNow.b);
   tieToLabel('LDBC_ADDR_NOW', isBcAddrNow.out, { x: pos.x + 9400, y: pos.y - 6050 });
-  const isDeAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6100 });
+  const isDeAddrNow = buildOr(parent, { x: pos.x + 9300, y: pos.y - 6100 });
   wire(parent, ldDeANow.out, isDeAddrNow.a);
   wire(parent, ldADeNow.out, isDeAddrNow.b);
   tieToLabel('LDDE_ADDR_NOW', isDeAddrNow.out, { x: pos.x + 9400, y: pos.y - 6100 });
-  const isNnDataAddrStage1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6150 });
+  const isNnDataAddrStage1 = buildOr(parent, { x: pos.x + 9300, y: pos.y - 6150 });
   wire(parent, ldNnANow.out, isNnDataAddrStage1.a);
   wire(parent, ldANnNow.out, isNnDataAddrStage1.b);
-  const isNnDataAddrStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6200 });
+  const isNnDataAddrStage2 = buildOr(parent, { x: pos.x + 9300, y: pos.y - 6200 });
   wire(parent, isNnDataAddrStage1.out, isNnDataAddrStage2.a);
   wire(parent, ldNnHlLowNow.out, isNnDataAddrStage2.b);
-  const isNnDataAddrStage3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6225 });
+  const isNnDataAddrStage3 = buildOr(parent, { x: pos.x + 9300, y: pos.y - 6225 });
   wire(parent, isNnDataAddrStage2.out, isNnDataAddrStage3.a);
   wire(parent, ldHlNnLowNow.out, isNnDataAddrStage3.b);
   // ED LD (nn),dd / LD dd,(nn) data-low phase (see "x=01, z=3: LD (nn),dd")
   // — same nnAddr, whether writing or reading.
-  const isNnDataAddrNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6250 });
+  const isNnDataAddrNow = buildOr(parent, { x: pos.x + 9300, y: pos.y - 6250 });
   wire(parent, isNnDataAddrStage3.out, isNnDataAddrNow.a);
   tieToLabel('EDNN_DATA_LOW_NOW', isNnDataAddrNow.b, { x: pos.x + 9200, y: pos.y - 6250 });
   tieToLabel('NN_DATA_ADDR_NOW', isNnDataAddrNow.out, { x: pos.x + 9400, y: pos.y - 6250 });
-  const isNnDataAddrPlusOneNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6300 });
+  const isNnDataAddrPlusOneNow = buildOr(parent, { x: pos.x + 9300, y: pos.y - 6300 });
   wire(parent, ldNnHlHighNow.out, isNnDataAddrPlusOneNow.a);
   wire(parent, ldHlNnHighNow.out, isNnDataAddrPlusOneNow.b);
-  const isNnDataAddrPlusOneNow2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 6325 });
+  const isNnDataAddrPlusOneNow2 = buildOr(parent, { x: pos.x + 9300, y: pos.y - 6325 });
   wire(parent, isNnDataAddrPlusOneNow.out, isNnDataAddrPlusOneNow2.a);
   tieToLabel('EDNN_DATA_HIGH_NOW', isNnDataAddrPlusOneNow2.b, { x: pos.x + 9200, y: pos.y - 6325 });
   tieToLabel('NN_DATA_ADDR_PLUS_ONE_NOW', isNnDataAddrPlusOneNow2.out, { x: pos.x + 9400, y: pos.y - 6300 });
@@ -6374,11 +6374,11 @@ export function buildZ80Cpu(
   // for why); `isStackGroup` here is the excluded one every real x=11
   // feature below reads, the same "AND with NOT_PREFIX_ACTIVE" treatment
   // `isX0Group`/`isLdGroup`/`isAluGroup` already got.
-  const isStackGroupGate = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 6350 });
+  const isStackGroupGate = buildAnd(parent, { x: pos.x + 9350, y: pos.y - 6350 });
   wire(parent, rawStackGroup, isStackGroupGate.a);
   tieToLabel('NOT_PREFIX_ACTIVE', isStackGroupGate.b, { x: pos.x + 9250, y: pos.y - 6350 });
   const isStackGroup = isStackGroupGate.out;
-  const execPhaseActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 500 });
+  const execPhaseActive = buildOr(parent, { x: pos.x + 9700, y: pos.y + 500 });
   tieToLabel('PHASE2', execPhaseActive.a, { x: pos.x + 9600, y: pos.y + 500 });
   tieToLabel('PHASE3', execPhaseActive.b, { x: pos.x + 9600, y: pos.y + 530 });
 
@@ -6388,55 +6388,55 @@ export function buildZ80Cpu(
   // own logic — see "CB/ED/DD/FD prefix bytes"); excluding the latter here
   // keeps this PUSH-specific decode from misfiring on them, same as it
   // always did before the prefix bytes had any meaning of their own.
-  const pushValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 650 });
+  const pushValid1 = buildOr(parent, { x: pos.x + 9700, y: pos.y + 650 });
   wire(parent, dec.y[0]!, pushValid1.a);
   wire(parent, dec.y[2]!, pushValid1.b);
-  const pushValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 700 });
+  const pushValid2 = buildOr(parent, { x: pos.x + 9700, y: pos.y + 700 });
   wire(parent, pushValid1.out, pushValid2.a);
   wire(parent, dec.y[4]!, pushValid2.b);
-  const isPushValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 750 });
+  const isPushValid = buildOr(parent, { x: pos.x + 9700, y: pos.y + 750 });
   wire(parent, pushValid2.out, isPushValid.a);
   wire(parent, dec.y[6]!, isPushValid.b);
-  const isPushZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y + 650 });
+  const isPushZ = buildAnd(parent, { x: pos.x + 9750, y: pos.y + 650 });
   wire(parent, isStackGroup, isPushZ.a);
   wire(parent, dec.z[5]!, isPushZ.b);
-  const isPush = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y + 650 });
+  const isPush = buildAnd(parent, { x: pos.x + 9800, y: pos.y + 650 });
   wire(parent, isPushZ.out, isPush.a);
   wire(parent, isPushValid.out, isPush.b);
 
   // POP rp / RET share z=001 — y=000,010,100,110 is POP, y=001 is RET.
   // y=011/101/111 are EXX / JP (HL) / LD SP,HL (implemented separately;
   // this stack-read decode deliberately excludes them).
-  const readValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 850 });
+  const readValid1 = buildOr(parent, { x: pos.x + 9700, y: pos.y + 850 });
   wire(parent, dec.y[0]!, readValid1.a);
   wire(parent, dec.y[1]!, readValid1.b);
-  const readValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 900 });
+  const readValid2 = buildOr(parent, { x: pos.x + 9700, y: pos.y + 900 });
   wire(parent, readValid1.out, readValid2.a);
   wire(parent, dec.y[2]!, readValid2.b);
-  const readValid3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 950 });
+  const readValid3 = buildOr(parent, { x: pos.x + 9700, y: pos.y + 950 });
   wire(parent, readValid2.out, readValid3.a);
   wire(parent, dec.y[4]!, readValid3.b);
-  const isStackReadValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 1000 });
+  const isStackReadValid = buildOr(parent, { x: pos.x + 9700, y: pos.y + 1000 });
   wire(parent, readValid3.out, isStackReadValid.a);
   wire(parent, dec.y[6]!, isStackReadValid.b);
-  const isStackReadZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y + 850 });
+  const isStackReadZ = buildAnd(parent, { x: pos.x + 9750, y: pos.y + 850 });
   wire(parent, isStackGroup, isStackReadZ.a);
   wire(parent, dec.z[1]!, isStackReadZ.b);
-  const isStackRead = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y + 850 });
+  const isStackRead = buildAnd(parent, { x: pos.x + 9800, y: pos.y + 850 });
   wire(parent, isStackReadZ.out, isStackRead.a);
   wire(parent, isStackReadValid.out, isStackRead.b);
 
-  const isRet = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 850 });
+  const isRet = buildAnd(parent, { x: pos.x + 9900, y: pos.y + 850 });
   wire(parent, isStackRead.out, isRet.a);
   wire(parent, dec.y[1]!, isRet.b);
-  const notIsRet = buildNot(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 900 });
+  const notIsRet = buildNot(parent, { x: pos.x + 9900, y: pos.y + 900 });
   wire(parent, isRet.out, notIsRet.in);
-  const isPop = buildAnd(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y + 850 });
+  const isPop = buildAnd(parent, { x: pos.x + 10000, y: pos.y + 850 });
   wire(parent, isStackRead.out, isPop.a);
   wire(parent, notIsRet.out, isPop.b);
 
   // RST n: z=111, every y is a real (fixed) target — no reserved slot.
-  const isRst = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y + 1100 });
+  const isRst = buildAnd(parent, { x: pos.x + 9800, y: pos.y + 1100 });
   wire(parent, isStackGroup, isRst.a);
   wire(parent, dec.z[7]!, isRst.b);
 
@@ -6445,14 +6445,14 @@ export function buildZ80Cpu(
   // advance shape `LD r,n`'s own `isLdImm8`/`ldImm8ReadNow`/
   // `ldImm8AdvanceNow` above already established, just gated by `x=11`
   // instead of `x=00`.
-  const isAluImm8 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y + 1300 });
+  const isAluImm8 = buildAnd(parent, { x: pos.x + 9200, y: pos.y + 1300 });
   wire(parent, isStackGroup, isAluImm8.a);
   wire(parent, dec.z[6]!, isAluImm8.b);
-  const aluImm8ReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y + 1300 });
+  const aluImm8ReadNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y + 1300 });
   wire(parent, isAluImm8.out, aluImm8ReadNow.a);
   tieToLabel('PHASE2', aluImm8ReadNow.b, { x: pos.x + 9200, y: pos.y + 1330 });
   tieToLabel('ALUIMM8_READ_NOW', aluImm8ReadNow.out, { x: pos.x + 9400, y: pos.y + 1300 }); // anchor — ramOeStage (far) reads this via the label; the ALU group's own commit-gate widening (aluAnyGroupNow, right below) reads aluImm8ReadNow directly, same scope, no label needed
-  const aluImm8AdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y + 1350 });
+  const aluImm8AdvanceNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y + 1350 });
   wire(parent, isAluImm8.out, aluImm8AdvanceNow.a);
   tieToLabel('PHASE3', aluImm8AdvanceNow.b, { x: pos.x + 9200, y: pos.y + 1380 });
   tieToLabel('ALUIMM8_ADVANCE_NOW', aluImm8AdvanceNow.out, { x: pos.x + 9400, y: pos.y + 1350 }); // anchor — pcHold (far) reads this
@@ -6470,25 +6470,25 @@ export function buildZ80Cpu(
   // `groupActive` (the *register*-operand bus enable) deliberately stays
   // narrow — there is no register operand here, the bus is already
   // correctly driven by RAM instead.
-  const aluAnyGroupNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y + 1250 });
+  const aluAnyGroupNowStage = buildOr(parent, { x: pos.x + 9350, y: pos.y + 1250 });
   wire(parent, aluGroupNow.out, aluAnyGroupNowStage.a);
   wire(parent, aluImm8ReadNow.out, aluAnyGroupNowStage.b);
   // DD/FD ALU A,(IX+d)/(IY+d) PHASE6 + ALU A,IXH/IXL/IYH/IYL PHASE4 —
   // parallel commit (aluGroupNow dead under prefix).
-  const aluDdFdMemNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9330, y: pos.y + 1270 });
+  const aluDdFdMemNow = buildOr(parent, { x: pos.x + 9330, y: pos.y + 1270 });
   tieToLabel('DDMEM_ALU_NOW', aluDdFdMemNow.a, { x: pos.x + 9230, y: pos.y + 1270 });
   tieToLabel('FDMEM_ALU_NOW', aluDdFdMemNow.b, { x: pos.x + 9230, y: pos.y + 1290 });
-  const aluDdFdHl8Now = buildOr(parent, vcc3, gnd3, { x: pos.x + 9330, y: pos.y + 1290 });
+  const aluDdFdHl8Now = buildOr(parent, { x: pos.x + 9330, y: pos.y + 1290 });
   tieToLabel('DDIX_HL8_ALU_NOW', aluDdFdHl8Now.a, { x: pos.x + 9230, y: pos.y + 1290 });
   tieToLabel('FDIY_HL8_ALU_NOW', aluDdFdHl8Now.b, { x: pos.x + 9230, y: pos.y + 1310 });
-  const aluDdFdAnyNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9370, y: pos.y + 1280 });
+  const aluDdFdAnyNow = buildOr(parent, { x: pos.x + 9370, y: pos.y + 1280 });
   wire(parent, aluDdFdMemNow.out, aluDdFdAnyNow.a);
   wire(parent, aluDdFdHl8Now.out, aluDdFdAnyNow.b);
-  const aluAnyGroupNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y + 1260 });
+  const aluAnyGroupNow = buildOr(parent, { x: pos.x + 9400, y: pos.y + 1260 });
   wire(parent, aluAnyGroupNowStage.out, aluAnyGroupNow.a);
   wire(parent, aluDdFdAnyNow.out, aluAnyGroupNow.b);
 
-  const pushNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 650 });
+  const pushNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y + 650 });
   wire(parent, isPush.out, pushNow.a);
   wire(parent, execPhaseActive.out, pushNow.b);
   // POP's own 2 register bytes need both EXEC1 and EXEC2, same as PUSH —
@@ -6496,10 +6496,10 @@ export function buildZ80Cpu(
   // the identical reason RST is (PC fits in one stack byte here): without
   // this split, RET's own PC-capture and SP-increment would fire a SECOND,
   // spurious time during EXEC2, off a since-incremented (wrong) address.
-  const popReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y + 800 });
+  const popReadNow = buildAnd(parent, { x: pos.x + 10050, y: pos.y + 800 });
   wire(parent, isPop.out, popReadNow.a);
   wire(parent, execPhaseActive.out, popReadNow.b);
-  const retNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y + 900 });
+  const retNow = buildAnd(parent, { x: pos.x + 10050, y: pos.y + 900 });
   wire(parent, isRet.out, retNow.a);
   tieToLabel('PHASE2', retNow.b, { x: pos.x + 9950, y: pos.y + 900 });
   // popReadNow OR retNow — widened further below (see "x=11: RET cc") once
@@ -6507,13 +6507,13 @@ export function buildZ80Cpu(
   // `conditionTrue`, itself only built later inside "x=11: JP cc,nn", so
   // the *final* `readNow` const lives down there, not here. RETI (ED 0x4D)
   // joins here as a fourth pop source — same SP+/PC-from-bus shape as RET.
-  const readNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 850 });
+  const readNowStage = buildOr(parent, { x: pos.x + 10100, y: pos.y + 850 });
   wire(parent, popReadNow.out, readNowStage.a);
   wire(parent, retNow.out, readNowStage.b);
-  const readNowStageReti = buildOr(parent, vcc3, gnd3, { x: pos.x + 10150, y: pos.y + 850 });
+  const readNowStageReti = buildOr(parent, { x: pos.x + 10150, y: pos.y + 850 });
   wire(parent, readNowStage.out, readNowStageReti.a);
   tieToLabel('RETI_NOW', readNowStageReti.b, { x: pos.x + 10050, y: pos.y + 850 });
-  const retOrRetiNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 920 });
+  const retOrRetiNow = buildOr(parent, { x: pos.x + 10100, y: pos.y + 920 });
   wire(parent, retNow.out, retOrRetiNow.a);
   tieToLabel('RETI_NOW', retOrRetiNow.b, { x: pos.x + 10000, y: pos.y + 920 });
   tieToLabel('RET_OR_RETI_NOW', retOrRetiNow.out, { x: pos.x + 10200, y: pos.y + 920 }); // anchor — PC's own retMux (far)
@@ -6527,10 +6527,10 @@ export function buildZ80Cpu(
   // RST target instead of resuming after it. Splitting the push (EXEC1,
   // `rstNow`) from the jump (EXEC2, `rstJumpNow`) gives PC's own capture a
   // clean edge that nothing else is racing.
-  const rstNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 1100 });
+  const rstNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y + 1100 });
   wire(parent, isRst.out, rstNow.a);
   tieToLabel('PHASE2', rstNow.b, { x: pos.x + 9800, y: pos.y + 1100 });
-  const rstJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 1200 });
+  const rstJumpNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y + 1200 });
   wire(parent, isRst.out, rstJumpNow.a);
   tieToLabel('PHASE3', rstJumpNow.b, { x: pos.x + 9800, y: pos.y + 1200 });
 
@@ -6546,36 +6546,36 @@ export function buildZ80Cpu(
   // `LDDDNN_HIGH_ADVANCE_NOW`, which *is* PHASE5-gated, but only fires
   // for `LD dd,nn`'s own opcode — one-hot `dec.z` keeps the two from
   // ever overlapping).
-  const isX11Z3 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 2900 });
+  const isX11Z3 = buildAnd(parent, { x: pos.x + 9200, y: pos.y - 2900 });
   wire(parent, isStackGroup, isX11Z3.a);
   wire(parent, dec.z[3]!, isX11Z3.b);
-  const isDi = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 2980 });
+  const isDi = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 2980 });
   wire(parent, isX11Z3.out, isDi.a);
   wire(parent, dec.y[6]!, isDi.b);
-  const diNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2980 });
+  const diNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2980 });
   wire(parent, isDi.out, diNow.a);
   tieToLabel('PHASE2', diNow.b, { x: pos.x + 9200, y: pos.y - 2960 });
   tieToLabel('DI_NOW', diNow.out, { x: pos.x + 9400, y: pos.y - 2980 }); // anchor — IFF1/IFF2 clear
-  const isEi = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 3010 });
+  const isEi = buildAnd(parent, { x: pos.x + 9250, y: pos.y - 3010 });
   wire(parent, isX11Z3.out, isEi.a);
   wire(parent, dec.y[7]!, isEi.b);
-  const eiNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 3010 });
+  const eiNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 3010 });
   wire(parent, isEi.out, eiNow.a);
   tieToLabel('PHASE2', eiNow.b, { x: pos.x + 9200, y: pos.y - 2990 });
   tieToLabel('EI_NOW', eiNow.out, { x: pos.x + 9400, y: pos.y - 3010 }); // anchor — IFF1/IFF2 set
-  const isJpNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 2900 });
+  const isJpNn = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2900 });
   wire(parent, isX11Z3.out, isJpNn.a);
   wire(parent, dec.y[0]!, isJpNn.b);
-  const jpReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 2900 });
+  const jpReadLowNow = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 2900 });
   wire(parent, isJpNn.out, jpReadLowNow.a);
   tieToLabel('PHASE2', jpReadLowNow.b, { x: pos.x + 9350, y: pos.y - 2870 });
-  const jpAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 2850 });
+  const jpAdvanceNow = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 2850 });
   wire(parent, isJpNn.out, jpAdvanceNow.a);
   tieToLabel('PHASE3', jpAdvanceNow.b, { x: pos.x + 9350, y: pos.y - 2820 });
-  const jpReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 2800 });
+  const jpReadHighNow = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 2800 });
   wire(parent, isJpNn.out, jpReadHighNow.a);
   tieToLabel('PHASE4', jpReadHighNow.b, { x: pos.x + 9350, y: pos.y - 2770 });
-  const jpJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9400, y: pos.y - 2750 });
+  const jpJumpNow = buildAnd(parent, { x: pos.x + 9400, y: pos.y - 2750 });
   wire(parent, isJpNn.out, jpJumpNow.a);
   tieToLabel('PHASE5', jpJumpNow.b, { x: pos.x + 9350, y: pos.y - 2720 });
   tieToLabel('JP_READ_LOW_NOW', jpReadLowNow.out, { x: pos.x + 9500, y: pos.y - 2900 }); // anchor — ramOeStage (far) and jpTarget's own write-back (far) read this
@@ -6589,25 +6589,25 @@ export function buildZ80Cpu(
   // why this needs a *seventh* and *eighth* phase (`isPushZ` — `x=11`,
   // `z=5` — is already built above; reused directly rather than
   // recomputed).
-  const isCallNn = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3200 });
+  const isCallNn = buildAnd(parent, { x: pos.x + 9700, y: pos.y - 3200 });
   wire(parent, isPushZ.out, isCallNn.a);
   wire(parent, dec.y[1]!, isCallNn.b);
-  const callReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3200 });
+  const callReadLowNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3200 });
   wire(parent, isCallNn.out, callReadLowNow.a);
   tieToLabel('PHASE2', callReadLowNow.b, { x: pos.x + 9750, y: pos.y - 3170 });
-  const callAdvanceLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3150 });
+  const callAdvanceLowNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3150 });
   wire(parent, isCallNn.out, callAdvanceLowNow.a);
   tieToLabel('PHASE3', callAdvanceLowNow.b, { x: pos.x + 9750, y: pos.y - 3120 });
-  const callReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3100 });
+  const callReadHighNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3100 });
   wire(parent, isCallNn.out, callReadHighNow.a);
   tieToLabel('PHASE4', callReadHighNow.b, { x: pos.x + 9750, y: pos.y - 3070 });
-  const callAdvanceHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3050 });
+  const callAdvanceHighNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3050 });
   wire(parent, isCallNn.out, callAdvanceHighNow.a);
   tieToLabel('PHASE5', callAdvanceHighNow.b, { x: pos.x + 9750, y: pos.y - 3020 });
-  const callPushNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3000 });
+  const callPushNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3000 });
   wire(parent, isCallNn.out, callPushNow.a);
   tieToLabel('PHASE6', callPushNow.b, { x: pos.x + 9750, y: pos.y - 2970 });
-  const callJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 2950 });
+  const callJumpNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 2950 });
   wire(parent, isCallNn.out, callJumpNow.a);
   tieToLabel('PHASE7', callJumpNow.b, { x: pos.x + 9750, y: pos.y - 2920 });
   tieToLabel('CALL_READ_LOW_NOW', callReadLowNow.out, { x: pos.x + 9900, y: pos.y - 3200 }); // anchor — ramOeStage and callTarget's own write-back (far) read this
@@ -6639,13 +6639,13 @@ export function buildZ80Cpu(
   // own live bits, same "always compute, gate only the commit" philosophy
   // `alu`/`spAdder`/`r8Adder` already use — cheap, and correctness doesn't
   // depend on gating it by `isJpCcZ` at all, only the commit does.
-  const notFZ = buildNot(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 3550 });
+  const notFZ = buildNot(parent, { x: pos.x + 9600, y: pos.y - 3550 });
   wire(parent, f.q[6]!, notFZ.in);
-  const notFC = buildNot(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 3500 });
+  const notFC = buildNot(parent, { x: pos.x + 9600, y: pos.y - 3500 });
   wire(parent, f.q[0]!, notFC.in);
-  const notFP = buildNot(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 3450 });
+  const notFP = buildNot(parent, { x: pos.x + 9600, y: pos.y - 3450 });
   wire(parent, f.q[2]!, notFP.in);
-  const notFS = buildNot(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 3400 });
+  const notFS = buildNot(parent, { x: pos.x + 9600, y: pos.y - 3400 });
   wire(parent, f.q[7]!, notFS.in);
   const ccSelect: [Pin, Pin][] = [
     [dec.y[0]!, notFZ.out], // NZ
@@ -6659,40 +6659,40 @@ export function buildZ80Cpu(
   ];
   let conditionTrue: Pin | null = null;
   ccSelect.forEach(([y, bit], k) => {
-    const and = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3550 + k * 50 });
+    const and = buildAnd(parent, { x: pos.x + 9700, y: pos.y - 3550 + k * 50 });
     wire(parent, y, and.a);
     wire(parent, bit, and.b);
     if (conditionTrue === null) {
       conditionTrue = and.out;
     } else {
-      const or = buildOr(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 3550 + k * 50 });
+      const or = buildOr(parent, { x: pos.x + 9750, y: pos.y - 3550 + k * 50 });
       wire(parent, conditionTrue, or.a);
       wire(parent, and.out, or.b);
       conditionTrue = or.out;
     }
   });
-  const notConditionTrue = buildNot(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3550 });
+  const notConditionTrue = buildNot(parent, { x: pos.x + 9800, y: pos.y - 3550 });
   wire(parent, conditionTrue!, notConditionTrue.in);
 
-  const isJpCcZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3700 });
+  const isJpCcZ = buildAnd(parent, { x: pos.x + 9700, y: pos.y - 3700 });
   wire(parent, isStackGroup, isJpCcZ.a);
   wire(parent, dec.z[2]!, isJpCcZ.b);
-  const jpCcReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3700 });
+  const jpCcReadLowNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3700 });
   wire(parent, isJpCcZ.out, jpCcReadLowNow.a);
   tieToLabel('PHASE2', jpCcReadLowNow.b, { x: pos.x + 9750, y: pos.y - 3670 });
-  const jpCcAdvanceLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3650 });
+  const jpCcAdvanceLowNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3650 });
   wire(parent, isJpCcZ.out, jpCcAdvanceLowNow.a);
   tieToLabel('PHASE3', jpCcAdvanceLowNow.b, { x: pos.x + 9750, y: pos.y - 3620 });
-  const jpCcReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3600 });
+  const jpCcReadHighNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3600 });
   wire(parent, isJpCcZ.out, jpCcReadHighNow.a);
   tieToLabel('PHASE4', jpCcReadHighNow.b, { x: pos.x + 9750, y: pos.y - 3570 });
-  const isJpCcPhase5 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3550 });
+  const isJpCcPhase5 = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3550 });
   wire(parent, isJpCcZ.out, isJpCcPhase5.a);
   tieToLabel('PHASE5', isJpCcPhase5.b, { x: pos.x + 9750, y: pos.y - 3520 });
-  const jpCcJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3550 });
+  const jpCcJumpNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 3550 });
   wire(parent, isJpCcPhase5.out, jpCcJumpNow.a);
   wire(parent, conditionTrue!, jpCcJumpNow.b);
-  const jpCcFallThroughNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3500 });
+  const jpCcFallThroughNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 3500 });
   wire(parent, isJpCcPhase5.out, jpCcFallThroughNow.a);
   wire(parent, notConditionTrue.out, jpCcFallThroughNow.b);
   tieToLabel('JPCC_READ_LOW_NOW', jpCcReadLowNow.out, { x: pos.x + 10000, y: pos.y - 3700 }); // anchor — ramOeStage and jpCcTarget's own write-back (far) read this
@@ -6716,31 +6716,31 @@ export function buildZ80Cpu(
   // PHASE5's own unconditional advance already put it: no FALLTHROUGH
   // signal needed here at all, unlike `JP cc,nn`'s own PHASE5, because the
   // "do nothing extra" case needs no explicit gate of its own.
-  const isCallCcZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3850 });
+  const isCallCcZ = buildAnd(parent, { x: pos.x + 9700, y: pos.y - 3850 });
   wire(parent, isStackGroup, isCallCcZ.a);
   wire(parent, dec.z[4]!, isCallCcZ.b);
-  const callCcReadLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3850 });
+  const callCcReadLowNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3850 });
   wire(parent, isCallCcZ.out, callCcReadLowNow.a);
   tieToLabel('PHASE2', callCcReadLowNow.b, { x: pos.x + 9750, y: pos.y - 3820 });
-  const callCcAdvanceLowNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3800 });
+  const callCcAdvanceLowNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3800 });
   wire(parent, isCallCcZ.out, callCcAdvanceLowNow.a);
   tieToLabel('PHASE3', callCcAdvanceLowNow.b, { x: pos.x + 9750, y: pos.y - 3770 });
-  const callCcReadHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3750 });
+  const callCcReadHighNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3750 });
   wire(parent, isCallCcZ.out, callCcReadHighNow.a);
   tieToLabel('PHASE4', callCcReadHighNow.b, { x: pos.x + 9750, y: pos.y - 3720 });
-  const callCcAdvanceHighNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3700 });
+  const callCcAdvanceHighNow = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3700 });
   wire(parent, isCallCcZ.out, callCcAdvanceHighNow.a);
   tieToLabel('PHASE5', callCcAdvanceHighNow.b, { x: pos.x + 9750, y: pos.y - 3670 });
-  const isCallCcPhase6 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3650 });
+  const isCallCcPhase6 = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3650 });
   wire(parent, isCallCcZ.out, isCallCcPhase6.a);
   tieToLabel('PHASE6', isCallCcPhase6.b, { x: pos.x + 9750, y: pos.y - 3620 });
-  const callCcPushNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3650 });
+  const callCcPushNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 3650 });
   wire(parent, isCallCcPhase6.out, callCcPushNow.a);
   wire(parent, conditionTrue!, callCcPushNow.b);
-  const isCallCcPhase7 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3600 });
+  const isCallCcPhase7 = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3600 });
   wire(parent, isCallCcZ.out, isCallCcPhase7.a);
   tieToLabel('PHASE7', isCallCcPhase7.b, { x: pos.x + 9750, y: pos.y - 3570 });
-  const callCcJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3600 });
+  const callCcJumpNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 3600 });
   wire(parent, isCallCcPhase7.out, callCcJumpNow.a);
   wire(parent, conditionTrue!, callCcJumpNow.b);
   tieToLabel('CALLCC_READ_LOW_NOW', callCcReadLowNow.out, { x: pos.x + 10000, y: pos.y - 3850 }); // anchor — ramOeStage and callCcTarget's own write-back (far) read this
@@ -6762,13 +6762,13 @@ export function buildZ80Cpu(
   // single-byte pop shape — no dedicated target register either, since
   // the popped byte already IS the full address, the same reason
   // `retMux` itself never needed one.
-  const isRetCcZ = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3950 });
+  const isRetCcZ = buildAnd(parent, { x: pos.x + 9700, y: pos.y - 3950 });
   wire(parent, isStackGroup, isRetCcZ.a);
   wire(parent, dec.z[0]!, isRetCcZ.b);
-  const isRetCcPhase2 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 3950 });
+  const isRetCcPhase2 = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3950 });
   wire(parent, isRetCcZ.out, isRetCcPhase2.a);
   tieToLabel('PHASE2', isRetCcPhase2.b, { x: pos.x + 9750, y: pos.y - 3920 });
-  const retCcTakenNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3950 });
+  const retCcTakenNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 3950 });
   wire(parent, isRetCcPhase2.out, retCcTakenNow.a);
   wire(parent, conditionTrue!, retCcTakenNow.b);
   tieToLabel('RETCC_TAKEN_NOW', retCcTakenNow.out, { x: pos.x + 10000, y: pos.y - 3950 }); // anchor — readNow's own widening (below) and PC's own retCcMux (far) both read this
@@ -6780,19 +6780,19 @@ export function buildZ80Cpu(
   // extra check at the `OR` gate" shape `CALL cc,nn`'s own `stackWriteNow`
   // widening used. POP IX (DD E1) / POP IY (FD E1) add PHASE4/5 after
   // that — each pair side-folded then merged so neither OR input floats.
-  const readNowStageCc = buildOr(parent, vcc3, gnd3, { x: pos.x + 10150, y: pos.y + 870 });
+  const readNowStageCc = buildOr(parent, { x: pos.x + 10150, y: pos.y + 870 });
   wire(parent, readNowStageReti.out, readNowStageCc.a);
   tieToLabel('RETCC_TAKEN_NOW', readNowStageCc.b, { x: pos.x + 10050, y: pos.y + 870 });
-  const popIxReadAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10200, y: pos.y + 860 });
+  const popIxReadAny = buildOr(parent, { x: pos.x + 10200, y: pos.y + 860 });
   tieToLabel('POPIX_LOW_NOW', popIxReadAny.a, { x: pos.x + 10100, y: pos.y + 860 });
   tieToLabel('POPIX_HIGH_NOW', popIxReadAny.b, { x: pos.x + 10100, y: pos.y + 880 });
-  const popIyReadAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10200, y: pos.y + 900 });
+  const popIyReadAny = buildOr(parent, { x: pos.x + 10200, y: pos.y + 900 });
   tieToLabel('POPIY_LOW_NOW', popIyReadAny.a, { x: pos.x + 10100, y: pos.y + 900 });
   tieToLabel('POPIY_HIGH_NOW', popIyReadAny.b, { x: pos.x + 10100, y: pos.y + 920 });
-  const popIxIyReadAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10250, y: pos.y + 880 });
+  const popIxIyReadAny = buildOr(parent, { x: pos.x + 10250, y: pos.y + 880 });
   wire(parent, popIxReadAny.out, popIxIyReadAny.a);
   wire(parent, popIyReadAny.out, popIxIyReadAny.b);
-  const readNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 10300, y: pos.y + 870 });
+  const readNow = buildOr(parent, { x: pos.x + 10300, y: pos.y + 870 });
   wire(parent, readNowStageCc.out, readNow.a);
   wire(parent, popIxIyReadAny.out, readNow.b);
 
@@ -6812,19 +6812,19 @@ export function buildZ80Cpu(
   // value (real Z80's own encoding, not a choice made here), so the
   // pairing can't reuse `conditionTrue` itself, only the `F`-bit taps
   // feeding it.
-  const isX0Z0 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 4050 });
+  const isX0Z0 = buildAnd(parent, { x: pos.x + 9700, y: pos.y - 4050 });
   wire(parent, isX0Group, isX0Z0.a);
   wire(parent, dec.z[0]!, isX0Z0.b);
-  const jrCcYValid1 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 4000 });
+  const jrCcYValid1 = buildOr(parent, { x: pos.x + 9700, y: pos.y - 4000 });
   wire(parent, dec.y[4]!, jrCcYValid1.a);
   wire(parent, dec.y[5]!, jrCcYValid1.b);
-  const jrCcYValid2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3970 });
+  const jrCcYValid2 = buildOr(parent, { x: pos.x + 9700, y: pos.y - 3970 });
   wire(parent, jrCcYValid1.out, jrCcYValid2.a);
   wire(parent, dec.y[6]!, jrCcYValid2.b);
-  const isJrCcYValid = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 3940 });
+  const isJrCcYValid = buildOr(parent, { x: pos.x + 9700, y: pos.y - 3940 });
   wire(parent, jrCcYValid2.out, isJrCcYValid.a);
   wire(parent, dec.y[7]!, isJrCcYValid.b);
-  const isJrCc = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 4050 });
+  const isJrCc = buildAnd(parent, { x: pos.x + 9750, y: pos.y - 4050 });
   wire(parent, isX0Z0.out, isJrCc.a);
   wire(parent, isJrCcYValid.out, isJrCc.b);
 
@@ -6836,29 +6836,29 @@ export function buildZ80Cpu(
   ];
   let jrCcConditionTrue: Pin | null = null;
   jrCcSelect.forEach(([y, bit], k) => {
-    const and = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 4050 + k * 50 });
+    const and = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 4050 + k * 50 });
     wire(parent, y, and.a);
     wire(parent, bit, and.b);
     if (jrCcConditionTrue === null) {
       jrCcConditionTrue = and.out;
     } else {
-      const or = buildOr(parent, vcc3, gnd3, { x: pos.x + 9850, y: pos.y - 4050 + k * 50 });
+      const or = buildOr(parent, { x: pos.x + 9850, y: pos.y - 4050 + k * 50 });
       wire(parent, jrCcConditionTrue, or.a);
       wire(parent, and.out, or.b);
       jrCcConditionTrue = or.out;
     }
   });
 
-  const jrCcReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4050 });
+  const jrCcReadNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 4050 });
   wire(parent, isJrCc.out, jrCcReadNow.a);
   tieToLabel('PHASE2', jrCcReadNow.b, { x: pos.x + 9850, y: pos.y - 4020 });
-  const jrCcAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4000 });
+  const jrCcAdvanceNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 4000 });
   wire(parent, isJrCc.out, jrCcAdvanceNow.a);
   tieToLabel('PHASE3', jrCcAdvanceNow.b, { x: pos.x + 9850, y: pos.y - 3970 });
-  const isJrCcPhase4 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 3950 });
+  const isJrCcPhase4 = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 3950 });
   wire(parent, isJrCc.out, isJrCcPhase4.a);
   tieToLabel('PHASE4', isJrCcPhase4.b, { x: pos.x + 9850, y: pos.y - 3920 });
-  const jrCcJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y - 3950 });
+  const jrCcJumpNow = buildAnd(parent, { x: pos.x + 9950, y: pos.y - 3950 });
   wire(parent, isJrCcPhase4.out, jrCcJumpNow.a);
   wire(parent, jrCcConditionTrue!, jrCcJumpNow.b);
 
@@ -6870,16 +6870,16 @@ export function buildZ80Cpu(
   // with `JR cc,e`'s own `y=4..7` and `DJNZ`'s own `y=2` by construction
   // (`dec.y` one-hot), so ORing this into the same final commit signals
   // below is safe.
-  const isJr = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 4100 });
+  const isJr = buildAnd(parent, { x: pos.x + 9750, y: pos.y - 4100 });
   wire(parent, isX0Z0.out, isJr.a);
   wire(parent, dec.y[3]!, isJr.b);
-  const jrReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4150 });
+  const jrReadNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 4150 });
   wire(parent, isJr.out, jrReadNow.a);
   tieToLabel('PHASE2', jrReadNow.b, { x: pos.x + 9850, y: pos.y - 4120 });
-  const jrAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4100 });
+  const jrAdvanceNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 4100 });
   wire(parent, isJr.out, jrAdvanceNow.a);
   tieToLabel('PHASE3', jrAdvanceNow.b, { x: pos.x + 9850, y: pos.y - 4070 });
-  const jrJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4050 });
+  const jrJumpNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 4050 });
   wire(parent, isJr.out, jrJumpNow.a);
   tieToLabel('PHASE4', jrJumpNow.b, { x: pos.x + 9850, y: pos.y - 4020 });
 
@@ -6903,7 +6903,7 @@ export function buildZ80Cpu(
   // identical shape `r8ZChain`/the ALU group's own zChain already use,
   // stopped one step short of the final `NOT`) reads the register's own
   // already-decremented value instead of re-deriving a stale one.
-  const isDjnz = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 4150 });
+  const isDjnz = buildAnd(parent, { x: pos.x + 9750, y: pos.y - 4150 });
   wire(parent, isX0Z0.out, isDjnz.a);
   wire(parent, dec.y[2]!, isDjnz.b);
   const djnzAdder = buildAlu(parent, library, 8, { x: pos.x - 700, y: pos.y - 5100 });
@@ -6917,22 +6917,22 @@ export function buildZ80Cpu(
   });
   let bNotZeroChain: Pin = rB.q[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 5100 + i * 60 });
+    const orGate = buildOr(parent, { x: pos.x - 500, y: pos.y - 5100 + i * 60 });
     wire(parent, bNotZeroChain, orGate.a);
     wire(parent, rB.q[i]!, orGate.b);
     bNotZeroChain = orGate.out;
   }
-  const djnzDecNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4200 });
+  const djnzDecNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 4200 });
   wire(parent, isDjnz.out, djnzDecNow.a);
   tieToLabel('PHASE2', djnzDecNow.b, { x: pos.x + 9850, y: pos.y - 4170 });
   tieToLabel('DJNZ_DEC_NOW', djnzDecNow.out, { x: pos.x + 10000, y: pos.y - 4200 }); // anchor — B's own fourth write-back layer (far) and the shared JR_READ_NOW below both read this
-  const djnzAdvanceNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4250 });
+  const djnzAdvanceNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 4250 });
   wire(parent, isDjnz.out, djnzAdvanceNow.a);
   tieToLabel('PHASE3', djnzAdvanceNow.b, { x: pos.x + 9850, y: pos.y - 4220 });
-  const isDjnzPhase4 = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y - 4300 });
+  const isDjnzPhase4 = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 4300 });
   wire(parent, isDjnz.out, isDjnzPhase4.a);
   tieToLabel('PHASE4', isDjnzPhase4.b, { x: pos.x + 9850, y: pos.y - 4270 });
-  const djnzJumpNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y - 4300 });
+  const djnzJumpNow = buildAnd(parent, { x: pos.x + 9950, y: pos.y - 4300 });
   wire(parent, isDjnzPhase4.out, djnzJumpNow.a);
   wire(parent, bNotZeroChain, djnzJumpNow.b);
 
@@ -6944,24 +6944,24 @@ export function buildZ80Cpu(
   // accurate would be exactly the kind of misleading label this project
   // has never allowed elsewhere. Mutually exclusive by `dec.y` at every
   // term, so a straight `OR`-fold is correct, not just convenient.
-  const jrReadNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y - 4100 });
+  const jrReadNowStage = buildOr(parent, { x: pos.x + 10000, y: pos.y - 4100 });
   wire(parent, jrCcReadNow.out, jrReadNowStage.a);
   wire(parent, jrReadNow.out, jrReadNowStage.b);
-  const jrReadNowFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y - 4130 });
+  const jrReadNowFinal = buildOr(parent, { x: pos.x + 10050, y: pos.y - 4130 });
   wire(parent, jrReadNowStage.out, jrReadNowFinal.a);
   wire(parent, djnzDecNow.out, jrReadNowFinal.b);
   tieToLabel('JR_READ_NOW', jrReadNowFinal.out, { x: pos.x + 10100, y: pos.y - 4130 }); // anchor — ramOeStage and jrCcOffset's own WE (far) both read this
-  const jrAdvanceNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y - 4150 });
+  const jrAdvanceNowStage = buildOr(parent, { x: pos.x + 10000, y: pos.y - 4150 });
   wire(parent, jrCcAdvanceNow.out, jrAdvanceNowStage.a);
   wire(parent, jrAdvanceNow.out, jrAdvanceNowStage.b);
-  const jrAdvanceNowFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y - 4180 });
+  const jrAdvanceNowFinal = buildOr(parent, { x: pos.x + 10050, y: pos.y - 4180 });
   wire(parent, jrAdvanceNowStage.out, jrAdvanceNowFinal.a);
   wire(parent, djnzAdvanceNow.out, jrAdvanceNowFinal.b);
   tieToLabel('JR_ADVANCE_NOW', jrAdvanceNowFinal.out, { x: pos.x + 10100, y: pos.y - 4180 }); // anchor — pcHold (far) reads this
-  const jrJumpNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y - 4200 });
+  const jrJumpNowStage = buildOr(parent, { x: pos.x + 10000, y: pos.y - 4200 });
   wire(parent, jrCcJumpNow.out, jrJumpNowStage.a);
   wire(parent, jrJumpNow.out, jrJumpNowStage.b);
-  const jrJumpNowFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y - 4230 });
+  const jrJumpNowFinal = buildOr(parent, { x: pos.x + 10050, y: pos.y - 4230 });
   wire(parent, jrJumpNowStage.out, jrJumpNowFinal.a);
   wire(parent, djnzJumpNow.out, jrJumpNowFinal.b);
   tieToLabel('JR_JUMP_NOW', jrJumpNowFinal.out, { x: pos.x + 10100, y: pos.y - 4230 }); // anchor — PC's own jrMux (far) reads this
@@ -7072,14 +7072,14 @@ export function buildZ80Cpu(
     tiePowerRail(parent, i === 0 ? 'GND' : 'VCC', pcMinus2Adder.b[i]!);
   }
 
-  const stackWriteNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y + 900 }); // pushNow OR rstNow — decrements SP, and is the RAM-write/address-select condition
+  const stackWriteNowStage = buildOr(parent, { x: pos.x + 9950, y: pos.y + 900 }); // pushNow OR rstNow — decrements SP, and is the RAM-write/address-select condition
   wire(parent, pushNow.out, stackWriteNowStage.a);
   wire(parent, rstNow.out, stackWriteNowStage.b);
   // CALL nn's own return-address push (see "x=11: CALL nn" above) needs
   // the identical decrement-SP/write-RAM-at-SP/address-select treatment —
   // a third OR term, reusing every bit of that machinery rather than
   // rebuilding any of it.
-  const stackWriteNowStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y + 950 });
+  const stackWriteNowStage2 = buildOr(parent, { x: pos.x + 10000, y: pos.y + 950 });
   wire(parent, stackWriteNowStage.out, stackWriteNowStage2.a);
   tieToLabel('CALL_PUSH_NOW', stackWriteNowStage2.b, { x: pos.x + 9900, y: pos.y + 950 });
   // CALL cc,nn's own conditional push (see "x=11: CALL cc,nn" above) needs
@@ -7087,26 +7087,26 @@ export function buildZ80Cpu(
   // `conditionTrue` inside `CALLCC_PUSH_NOW` itself, so this widening is
   // correct for both the taken and not-taken branches without any extra
   // condition check here.
-  const stackWriteNowStage3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y + 970 });
+  const stackWriteNowStage3 = buildOr(parent, { x: pos.x + 10050, y: pos.y + 970 });
   wire(parent, stackWriteNowStage2.out, stackWriteNowStage3.a);
   tieToLabel('CALLCC_PUSH_NOW', stackWriteNowStage3.b, { x: pos.x + 9950, y: pos.y + 970 });
   // PUSH IX (DD E5) / PUSH IY (FD E5) — PHASE4 high / PHASE5 low, each
   // pair side-folded then merged (never leave an OR input floating).
-  const pushIxWriteAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 960 });
+  const pushIxWriteAny = buildOr(parent, { x: pos.x + 10100, y: pos.y + 960 });
   tieToLabel('PUSHIX_HIGH_NOW', pushIxWriteAny.a, { x: pos.x + 10000, y: pos.y + 960 });
   tieToLabel('PUSHIX_LOW_NOW', pushIxWriteAny.b, { x: pos.x + 10000, y: pos.y + 980 });
-  const pushIyWriteAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 1000 });
+  const pushIyWriteAny = buildOr(parent, { x: pos.x + 10100, y: pos.y + 1000 });
   tieToLabel('PUSHIY_HIGH_NOW', pushIyWriteAny.a, { x: pos.x + 10000, y: pos.y + 1000 });
   tieToLabel('PUSHIY_LOW_NOW', pushIyWriteAny.b, { x: pos.x + 10000, y: pos.y + 1020 });
-  const pushIxIyWriteAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10150, y: pos.y + 980 });
+  const pushIxIyWriteAny = buildOr(parent, { x: pos.x + 10150, y: pos.y + 980 });
   wire(parent, pushIxWriteAny.out, pushIxIyWriteAny.a);
   wire(parent, pushIyWriteAny.out, pushIxIyWriteAny.b);
-  const stackWriteNow = buildOr(parent, vcc3, gnd3, { x: pos.x + 10200, y: pos.y + 970 });
+  const stackWriteNow = buildOr(parent, { x: pos.x + 10200, y: pos.y + 970 });
   wire(parent, stackWriteNowStage3.out, stackWriteNow.a);
   wire(parent, pushIxIyWriteAny.out, stackWriteNow.b);
   tieToLabel('STACK_WRITE_NOW', stackWriteNow.out, { x: pos.x + 10250, y: pos.y + 920 }); // anchor — the far address-mux writeMux.sel below reads this via the label, not a ~9000-unit wire
   tieToLabel('READ_NOW', readNow.out, { x: pos.x + 10250, y: pos.y + 820 }); // same anchor idea for readMux.sel
-  const stackActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 10300, y: pos.y + 950 }); // anything in x=11 currently driving SP/RAM
+  const stackActive = buildOr(parent, { x: pos.x + 10300, y: pos.y + 950 }); // anything in x=11 currently driving SP/RAM
   wire(parent, stackWriteNow.out, stackActive.a);
   wire(parent, readNow.out, stackActive.b);
 
@@ -7115,46 +7115,46 @@ export function buildZ80Cpu(
   // Deliberately kept SEPARATE from groupActive (narrow: x=10/x=01 only) —
   // see the doc comment above ("A bus-fight this design deliberately
   // avoids") for why widening groupActive itself would be the actual bug.
-  const busActive = buildOr(parent, vcc3, gnd3, { x: pos.x + 10300, y: pos.y - 25 });
+  const busActive = buildOr(parent, { x: pos.x + 10300, y: pos.y - 25 });
   wire(parent, groupActive.out, busActive.a);
   wire(parent, stackActive.out, busActive.b);
   // DD/FD LD (IX+d),r / (IX+d),n / INCDEC write drivers — widen busActive so FETCH
   // OE exclusion covers the PHASE7→PHASE0 wrap (n-write / INCDEC write) and PHASE6 write.
-  const ddFdMemLdBusWrite = buildOr(parent, vcc3, gnd3, { x: pos.x + 10350, y: pos.y - 50 });
+  const ddFdMemLdBusWrite = buildOr(parent, { x: pos.x + 10350, y: pos.y - 50 });
   tieToLabel('DDMEMLD_WRITE_NOW', ddFdMemLdBusWrite.a, { x: pos.x + 10250, y: pos.y - 50 });
   tieToLabel('FDMEMLD_WRITE_NOW', ddFdMemLdBusWrite.b, { x: pos.x + 10250, y: pos.y - 30 });
-  const ddFdMemLdNBusWrite = buildOr(parent, vcc3, gnd3, { x: pos.x + 10350, y: pos.y - 10 });
+  const ddFdMemLdNBusWrite = buildOr(parent, { x: pos.x + 10350, y: pos.y - 10 });
   tieToLabel('DDMEMLDN_WRITE_NOW', ddFdMemLdNBusWrite.a, { x: pos.x + 10250, y: pos.y - 10 });
   tieToLabel('FDMEMLDN_WRITE_NOW', ddFdMemLdNBusWrite.b, { x: pos.x + 10250, y: pos.y + 10 });
-  const ddFdMemIncDecBusWrite = buildOr(parent, vcc3, gnd3, { x: pos.x + 10350, y: pos.y + 30 });
+  const ddFdMemIncDecBusWrite = buildOr(parent, { x: pos.x + 10350, y: pos.y + 30 });
   tieToLabel('DDMEM_INCDEC_WRITE_NOW', ddFdMemIncDecBusWrite.a, { x: pos.x + 10250, y: pos.y + 30 });
   tieToLabel('FDMEM_INCDEC_WRITE_NOW', ddFdMemIncDecBusWrite.b, { x: pos.x + 10250, y: pos.y + 50 });
-  const ddFdMemLdBusAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10400, y: pos.y - 30 });
+  const ddFdMemLdBusAny = buildOr(parent, { x: pos.x + 10400, y: pos.y - 30 });
   wire(parent, ddFdMemLdBusWrite.out, ddFdMemLdBusAny.a);
   wire(parent, ddFdMemLdNBusWrite.out, ddFdMemLdBusAny.b);
-  const ddFdMemBusAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10450, y: pos.y - 10 });
+  const ddFdMemBusAny = buildOr(parent, { x: pos.x + 10450, y: pos.y - 10 });
   wire(parent, ddFdMemLdBusAny.out, ddFdMemBusAny.a);
   wire(parent, ddFdMemIncDecBusWrite.out, ddFdMemBusAny.b);
-  const busActiveFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y - 25 });
+  const busActiveFinal = buildOr(parent, { x: pos.x + 10500, y: pos.y - 25 });
   wire(parent, busActive.out, busActiveFinal.a);
   wire(parent, ddFdMemBusAny.out, busActiveFinal.b);
 
-  const hlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9300, y: pos.y - 200 }); // z=6, (HL): this instruction's source operand is a memory read
+  const hlNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 200 }); // z=6, (HL): this instruction's source operand is a memory read
   wire(parent, groupActive.out, hlNow.a);
   wire(parent, dec.z[6]!, hlNow.b);
 
   // LD (HL),r: destination is (HL) (y=6) — excluding z=6 leaves the 0x76
   // HALT slot inert rather than treating it as LD (HL),(HL); see the doc
   // comment above.
-  const notZ6 = buildNot(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y + 350 });
+  const notZ6 = buildNot(parent, { x: pos.x + 9350, y: pos.y + 350 });
   wire(parent, dec.z[6]!, notZ6.in);
-  const ldWritesHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y + 250 });
+  const ldWritesHl = buildAnd(parent, { x: pos.x + 9450, y: pos.y + 250 });
   wire(parent, ldGroupNow.out, ldWritesHl.a);
   wire(parent, dec.y[6]!, ldWritesHl.b);
-  const ramWriteNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y + 250 });
+  const ramWriteNow = buildAnd(parent, { x: pos.x + 9550, y: pos.y + 250 });
   wire(parent, ldWritesHl.out, ramWriteNow.a);
   wire(parent, notZ6.out, ramWriteNow.b);
-  const ramWeStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 300 });
+  const ramWeStage = buildOr(parent, { x: pos.x + 9600, y: pos.y + 300 });
   wire(parent, ramWriteNow.out, ramWeStage.a);
   wire(parent, stackWriteNow.out, ramWeStage.b);
   // Indirect loads' own writes (see "x=00: indirect loads through
@@ -7162,64 +7162,64 @@ export function buildZ80Cpu(
   // `LD (nn),HL`'s own low and high bytes — five more terms, one `OR`
   // stage each, the identical widen-not-replace shape this file uses for
   // every group of terms sharing one gate.
-  const ramWeStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 350 });
+  const ramWeStage2 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 350 });
   wire(parent, ramWeStage.out, ramWeStage2.a);
   tieToLabel('LDBCA_NOW', ramWeStage2.b, { x: pos.x + 9500, y: pos.y + 350 });
-  const ramWeStage3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 400 });
+  const ramWeStage3 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 400 });
   wire(parent, ramWeStage2.out, ramWeStage3.a);
   tieToLabel('LDDEA_NOW', ramWeStage3.b, { x: pos.x + 9500, y: pos.y + 400 });
-  const ramWeStage4 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 450 });
+  const ramWeStage4 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 450 });
   wire(parent, ramWeStage3.out, ramWeStage4.a);
   tieToLabel('LDNNA_NOW', ramWeStage4.b, { x: pos.x + 9500, y: pos.y + 450 });
-  const ramWeStage5 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 500 });
+  const ramWeStage5 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 500 });
   wire(parent, ramWeStage4.out, ramWeStage5.a);
   tieToLabel('LDNNHL_LOW_NOW', ramWeStage5.b, { x: pos.x + 9500, y: pos.y + 500 });
-  const ramWeStage6 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 550 });
+  const ramWeStage6 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 550 });
   wire(parent, ramWeStage5.out, ramWeStage6.a);
   tieToLabel('LDNNHL_HIGH_NOW', ramWeStage6.b, { x: pos.x + 9500, y: pos.y + 550 });
   // INC (HL)/DEC (HL)'s own write-back and LD (HL),n's own write (see
   // "x=00: INC (HL)/DEC (HL)/LD (HL),n" above) — two more terms.
-  const ramWeStage7 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 600 });
+  const ramWeStage7 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 600 });
   wire(parent, ramWeStage6.out, ramWeStage7.a);
-  const hlMemWeTerms = buildOr(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y + 600 });
+  const hlMemWeTerms = buildOr(parent, { x: pos.x + 9550, y: pos.y + 600 });
   tieToLabel('INCDEC_HLMEM_NOW', hlMemWeTerms.a, { x: pos.x + 9450, y: pos.y + 600 });
   tieToLabel('SETRES_HL_WRITE_NOW', hlMemWeTerms.b, { x: pos.x + 9450, y: pos.y + 620 });
-  const hlMemWeTerms2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9520, y: pos.y + 610 });
+  const hlMemWeTerms2 = buildOr(parent, { x: pos.x + 9520, y: pos.y + 610 });
   wire(parent, hlMemWeTerms.out, hlMemWeTerms2.a);
   tieToLabel('CBROT_HL_WRITE_NOW', hlMemWeTerms2.b, { x: pos.x + 9420, y: pos.y + 630 });
   wire(parent, hlMemWeTerms2.out, ramWeStage7.b);
-  const ramWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y + 650 });
+  const ramWe = buildOr(parent, { x: pos.x + 9600, y: pos.y + 650 });
   wire(parent, ramWeStage7.out, ramWe.a);
   tieToLabel('LDHLN_WRITE_NOW', ramWe.b, { x: pos.x + 9500, y: pos.y + 650 });
   // EX (SP),HL's own two writes (see "x=11: EX (SP),HL" below) — two more
   // terms. DD/FD EX (SP),IX/IY side-folded then merged so RRD/EDNN depth
   // stays unchanged.
-  const ramWeStage8 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y + 700 });
+  const ramWeStage8 = buildOr(parent, { x: pos.x + 9700, y: pos.y + 700 });
   wire(parent, ramWe.out, ramWeStage8.a);
-  const exSpWriteLowAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9650, y: pos.y + 700 });
+  const exSpWriteLowAny = buildOr(parent, { x: pos.x + 9650, y: pos.y + 700 });
   tieToLabel('EXSPHL_WRITE_LOW_NOW', exSpWriteLowAny.a, { x: pos.x + 9550, y: pos.y + 700 });
   tieToLabel('EXSPIX_WRITE_LOW_NOW', exSpWriteLowAny.b, { x: pos.x + 9550, y: pos.y + 720 });
-  const exSpWriteLowAny2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9680, y: pos.y + 710 });
+  const exSpWriteLowAny2 = buildOr(parent, { x: pos.x + 9680, y: pos.y + 710 });
   wire(parent, exSpWriteLowAny.out, exSpWriteLowAny2.a);
   tieToLabel('EXSPIY_WRITE_LOW_NOW', exSpWriteLowAny2.b, { x: pos.x + 9580, y: pos.y + 730 });
   wire(parent, exSpWriteLowAny2.out, ramWeStage8.b);
-  const ramWeStage9 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y + 750 });
+  const ramWeStage9 = buildOr(parent, { x: pos.x + 9800, y: pos.y + 750 });
   wire(parent, ramWeStage8.out, ramWeStage9.a);
-  const exSpWriteHighAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y + 750 });
+  const exSpWriteHighAny = buildOr(parent, { x: pos.x + 9750, y: pos.y + 750 });
   tieToLabel('EXSPHL_WRITE_HIGH_NOW', exSpWriteHighAny.a, { x: pos.x + 9650, y: pos.y + 750 });
   tieToLabel('EXSPIX_WRITE_HIGH_NOW', exSpWriteHighAny.b, { x: pos.x + 9650, y: pos.y + 770 });
-  const exSpWriteHighAny2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9780, y: pos.y + 760 });
+  const exSpWriteHighAny2 = buildOr(parent, { x: pos.x + 9780, y: pos.y + 760 });
   wire(parent, exSpWriteHighAny.out, exSpWriteHighAny2.a);
   tieToLabel('EXSPIY_WRITE_HIGH_NOW', exSpWriteHighAny2.b, { x: pos.x + 9680, y: pos.y + 780 });
   wire(parent, exSpWriteHighAny2.out, ramWeStage9.b);
   // LDI's own write to (DE) (see "x=10, y=4, z=0: LDI" above) — a tenth and
   // final term.
-  const ramWeFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 800 });
+  const ramWeFinal = buildOr(parent, { x: pos.x + 9900, y: pos.y + 800 });
   wire(parent, ramWeStage9.out, ramWeFinal.a);
   tieToLabel('LDBLOCK_WRITE_NOW', ramWeFinal.b, { x: pos.x + 9800, y: pos.y + 800 });
   // INI's own write to (HL) (see "x=10, y=4, z=2: INI" above) — an
   // eleventh term.
-  const ramWeFinal2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y + 825 });
+  const ramWeFinal2 = buildOr(parent, { x: pos.x + 10000, y: pos.y + 825 });
   wire(parent, ramWeFinal.out, ramWeFinal2.a);
   tieToLabel('INBLOCK_WRITE_NOW', ramWeFinal2.b, { x: pos.x + 9900, y: pos.y + 825 });
   // ED LD (nn),dd store writes (see "x=01, z=3") — folded off to the side
@@ -7228,46 +7228,46 @@ export function buildZ80Cpu(
   // shape that broke `ramOe` below) delayed RAM's own we enough that the
   // PHASE4/5 bus fight on RRD's own read/write window corrupted the ring
   // counter itself. Side-fold + one merge keeps RRD's path depth unchanged.
-  const edNnWeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 860 });
+  const edNnWeAny = buildOr(parent, { x: pos.x + 10100, y: pos.y + 860 });
   tieToLabel('EDNN_WRITE_LOW_NOW', edNnWeAny.a, { x: pos.x + 10000, y: pos.y + 860 });
   tieToLabel('EDNN_WRITE_HIGH_NOW', edNnWeAny.b, { x: pos.x + 10000, y: pos.y + 880 });
-  const ramWeFinal3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10200, y: pos.y + 850 });
+  const ramWeFinal3 = buildOr(parent, { x: pos.x + 10200, y: pos.y + 850 });
   wire(parent, ramWeFinal2.out, ramWeFinal3.a);
   wire(parent, edNnWeAny.out, ramWeFinal3.b);
   // DD/FD (IX+d)/(IY+d) LD + INCDEC writes — side-folded before RRD.
-  const ddMemLdWeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10250, y: pos.y + 870 });
+  const ddMemLdWeAny = buildOr(parent, { x: pos.x + 10250, y: pos.y + 870 });
   tieToLabel('DDMEMLD_WRITE_NOW', ddMemLdWeAny.a, { x: pos.x + 10150, y: pos.y + 870 });
   tieToLabel('DDMEMLDN_WRITE_NOW', ddMemLdWeAny.b, { x: pos.x + 10150, y: pos.y + 890 });
-  const fdMemLdWeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10250, y: pos.y + 910 });
+  const fdMemLdWeAny = buildOr(parent, { x: pos.x + 10250, y: pos.y + 910 });
   tieToLabel('FDMEMLD_WRITE_NOW', fdMemLdWeAny.a, { x: pos.x + 10150, y: pos.y + 910 });
   tieToLabel('FDMEMLDN_WRITE_NOW', fdMemLdWeAny.b, { x: pos.x + 10150, y: pos.y + 930 });
-  const ddFdMemLdWeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10300, y: pos.y + 890 });
+  const ddFdMemLdWeAny = buildOr(parent, { x: pos.x + 10300, y: pos.y + 890 });
   wire(parent, ddMemLdWeAny.out, ddFdMemLdWeAny.a);
   wire(parent, fdMemLdWeAny.out, ddFdMemLdWeAny.b);
-  const ddFdMemIncDecWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10250, y: pos.y + 950 });
+  const ddFdMemIncDecWe = buildOr(parent, { x: pos.x + 10250, y: pos.y + 950 });
   tieToLabel('DDMEM_INCDEC_WRITE_NOW', ddFdMemIncDecWe.a, { x: pos.x + 10150, y: pos.y + 950 });
   tieToLabel('FDMEM_INCDEC_WRITE_NOW', ddFdMemIncDecWe.b, { x: pos.x + 10150, y: pos.y + 970 });
-  const ddFdCbSetResWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10250, y: pos.y + 990 });
+  const ddFdCbSetResWe = buildOr(parent, { x: pos.x + 10250, y: pos.y + 990 });
   tieToLabel('SETRES_IX_WRITE_NOW', ddFdCbSetResWe.a, { x: pos.x + 10150, y: pos.y + 990 });
   tieToLabel('SETRES_IY_WRITE_NOW', ddFdCbSetResWe.b, { x: pos.x + 10150, y: pos.y + 1010 });
-  const ddFdCbRotWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10250, y: pos.y + 1030 });
+  const ddFdCbRotWe = buildOr(parent, { x: pos.x + 10250, y: pos.y + 1030 });
   tieToLabel('CBROT_IX_WRITE_NOW', ddFdCbRotWe.a, { x: pos.x + 10150, y: pos.y + 1030 });
   tieToLabel('CBROT_IY_WRITE_NOW', ddFdCbRotWe.b, { x: pos.x + 10150, y: pos.y + 1050 });
-  const ddFdCbMemWe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10300, y: pos.y + 1010 });
+  const ddFdCbMemWe = buildOr(parent, { x: pos.x + 10300, y: pos.y + 1010 });
   wire(parent, ddFdCbSetResWe.out, ddFdCbMemWe.a);
   wire(parent, ddFdCbRotWe.out, ddFdCbMemWe.b);
-  const ddFdMemWeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10300, y: pos.y + 920 });
+  const ddFdMemWeAny = buildOr(parent, { x: pos.x + 10300, y: pos.y + 920 });
   wire(parent, ddFdMemLdWeAny.out, ddFdMemWeAny.a);
   wire(parent, ddFdMemIncDecWe.out, ddFdMemWeAny.b);
-  const ddFdMemWeAny2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10350, y: pos.y + 960 });
+  const ddFdMemWeAny2 = buildOr(parent, { x: pos.x + 10350, y: pos.y + 960 });
   wire(parent, ddFdMemWeAny.out, ddFdMemWeAny2.a);
   wire(parent, ddFdCbMemWe.out, ddFdMemWeAny2.b);
-  const ramWeFinal3b = buildOr(parent, vcc3, gnd3, { x: pos.x + 10350, y: pos.y + 860 });
+  const ramWeFinal3b = buildOr(parent, { x: pos.x + 10350, y: pos.y + 860 });
   wire(parent, ramWeFinal3.out, ramWeFinal3b.a);
   wire(parent, ddFdMemWeAny2.out, ramWeFinal3b.b);
   // RRD/RLD's own write-back to (HL) — kept as the *last* term so its
   // path to `ram.we` stays one `OR` deep past the prior merge.
-  const ramWeFinal4 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10400, y: pos.y + 850 });
+  const ramWeFinal4 = buildOr(parent, { x: pos.x + 10400, y: pos.y + 850 });
   wire(parent, ramWeFinal3b.out, ramWeFinal4.a);
   tieToLabel('RRDRLD_WRITE_NOW', ramWeFinal4.b, { x: pos.x + 10300, y: pos.y + 850 });
   wire(parent, ramWeFinal4.out, ram.pins.we!);
@@ -7286,12 +7286,12 @@ export function buildZ80Cpu(
   // settle in lockstep) ties RAM's drive to the SAME signal — and thus the
   // SAME settling latency — every bus driver this slice has releases on, so
   // none of them can outrace it.
-  const notBusActive = buildNot(parent, vcc3, gnd3, { x: pos.x + 9450, y: pos.y - 350 });
+  const notBusActive = buildNot(parent, { x: pos.x + 9450, y: pos.y - 350 });
   wire(parent, busActiveFinal.out, notBusActive.in);
-  const fetchRead = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y - 300 });
+  const fetchRead = buildAnd(parent, { x: pos.x + 9550, y: pos.y - 300 });
   tieToLabel('PHASE0', fetchRead.a, { x: pos.x + 9450, y: pos.y - 300 });
   wire(parent, notBusActive.out, fetchRead.b);
-  const ramOeStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 200 });
+  const ramOeStage = buildOr(parent, { x: pos.x + 9600, y: pos.y - 200 });
   wire(parent, fetchRead.out, ramOeStage.a);
   wire(parent, hlNow.out, ramOeStage.b);
   // LD r,n's own read (see "x=00, z=6: LD r,n" above) needs the identical
@@ -7301,52 +7301,52 @@ export function buildZ80Cpu(
   // `groupActive` (x=10/x=01 only) — mutually exclusive by `dec.x`'s own
   // one-hot decode, so the two can never compete for this OR gate's input
   // in the same cycle.
-  const ramOeStage2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 250 });
+  const ramOeStage2 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 250 });
   wire(parent, ramOeStage.out, ramOeStage2.a);
   tieToLabel('LDIMM8_READ_NOW', ramOeStage2.b, { x: pos.x + 9500, y: pos.y - 250 });
   // LD dd,nn's own two reads (see "x=00, z=1: LD dd,nn" above) get the
   // identical treatment — same reasoning as LDIMM8_READ_NOW just above.
-  const ramOeStage3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 300 });
+  const ramOeStage3 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 300 });
   wire(parent, ramOeStage2.out, ramOeStage3.a);
   tieToLabel('LDDDNN_LOW_NOW', ramOeStage3.b, { x: pos.x + 9500, y: pos.y - 300 });
-  const ramOeStage4 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 350 });
+  const ramOeStage4 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 350 });
   wire(parent, ramOeStage3.out, ramOeStage4.a);
   tieToLabel('LDDDNN_HIGH_NOW', ramOeStage4.b, { x: pos.x + 9500, y: pos.y - 350 });
   // JP nn's own two reads (see "x=11: JP nn" above) get the identical
   // treatment.
-  const ramOeStage5 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 400 });
+  const ramOeStage5 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 400 });
   wire(parent, ramOeStage4.out, ramOeStage5.a);
   tieToLabel('JP_READ_LOW_NOW', ramOeStage5.b, { x: pos.x + 9500, y: pos.y - 400 });
-  const ramOeStage6 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 450 });
+  const ramOeStage6 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 450 });
   wire(parent, ramOeStage5.out, ramOeStage6.a);
   tieToLabel('JP_READ_HIGH_NOW', ramOeStage6.b, { x: pos.x + 9500, y: pos.y - 450 });
   // CALL nn's own two reads (see "x=11: CALL nn" above) get the identical
   // treatment.
-  const ramOeStage7 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 500 });
+  const ramOeStage7 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 500 });
   wire(parent, ramOeStage6.out, ramOeStage7.a);
   tieToLabel('CALL_READ_LOW_NOW', ramOeStage7.b, { x: pos.x + 9500, y: pos.y - 500 });
-  const ramOeStage8 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 550 });
+  const ramOeStage8 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 550 });
   wire(parent, ramOeStage7.out, ramOeStage8.a);
   tieToLabel('CALL_READ_HIGH_NOW', ramOeStage8.b, { x: pos.x + 9500, y: pos.y - 550 });
   // JP cc,nn's own two reads (see "x=11: JP cc,nn" above) get the
   // identical treatment.
-  const ramOeStage9 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 600 });
+  const ramOeStage9 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 600 });
   wire(parent, ramOeStage8.out, ramOeStage9.a);
   tieToLabel('JPCC_READ_LOW_NOW', ramOeStage9.b, { x: pos.x + 9500, y: pos.y - 600 });
-  const ramOeStage10 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 650 });
+  const ramOeStage10 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 650 });
   wire(parent, ramOeStage9.out, ramOeStage10.a);
   tieToLabel('JPCC_READ_HIGH_NOW', ramOeStage10.b, { x: pos.x + 9500, y: pos.y - 650 });
   // CALL cc,nn's own two reads (see "x=11: CALL cc,nn" above) get the
   // identical treatment.
-  const ramOeStage11 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 700 });
+  const ramOeStage11 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 700 });
   wire(parent, ramOeStage10.out, ramOeStage11.a);
   tieToLabel('CALLCC_READ_LOW_NOW', ramOeStage11.b, { x: pos.x + 9500, y: pos.y - 700 });
-  const ramOeStage12 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 750 });
+  const ramOeStage12 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 750 });
   wire(parent, ramOeStage11.out, ramOeStage12.a);
   tieToLabel('CALLCC_READ_HIGH_NOW', ramOeStage12.b, { x: pos.x + 9500, y: pos.y - 750 });
   // JR cc's own single read (see "x=00: JR cc,e" above) gets the identical
   // treatment.
-  const ramOeStage13 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 800 });
+  const ramOeStage13 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 800 });
   wire(parent, ramOeStage12.out, ramOeStage13.a);
   tieToLabel('JR_READ_NOW', ramOeStage13.b, { x: pos.x + 9500, y: pos.y - 800 });
   // Indirect loads' own reads (see "x=00: indirect loads through
@@ -7355,25 +7355,25 @@ export function buildZ80Cpu(
   // and high bytes plus `LD A,(nn)`. Every one of these needs RAM's own
   // `oe` regardless of which specific address mux override (below)
   // actually supplies the address that phase.
-  const ramOeStage14 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 850 });
+  const ramOeStage14 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 850 });
   wire(parent, ramOeStage13.out, ramOeStage14.a);
   tieToLabel('LDABC_NOW', ramOeStage14.b, { x: pos.x + 9500, y: pos.y - 850 });
-  const ramOeStage15 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 900 });
+  const ramOeStage15 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 900 });
   wire(parent, ramOeStage14.out, ramOeStage15.a);
   tieToLabel('LDADE_NOW', ramOeStage15.b, { x: pos.x + 9500, y: pos.y - 900 });
-  const ramOeStage16 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 950 });
+  const ramOeStage16 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 950 });
   wire(parent, ramOeStage15.out, ramOeStage16.a);
   tieToLabel('NN_READ_LOW_NOW', ramOeStage16.b, { x: pos.x + 9500, y: pos.y - 950 });
-  const ramOeStage17 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1000 });
+  const ramOeStage17 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1000 });
   wire(parent, ramOeStage16.out, ramOeStage17.a);
   tieToLabel('NN_READ_HIGH_NOW', ramOeStage17.b, { x: pos.x + 9500, y: pos.y - 1000 });
-  const ramOeStage18 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1050 });
+  const ramOeStage18 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1050 });
   wire(parent, ramOeStage17.out, ramOeStage18.a);
   tieToLabel('LDHLNN_LOW_NOW', ramOeStage18.b, { x: pos.x + 9500, y: pos.y - 1050 });
-  const ramOeStage19 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1100 });
+  const ramOeStage19 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1100 });
   wire(parent, ramOeStage18.out, ramOeStage19.a);
   tieToLabel('LDHLNN_HIGH_NOW', ramOeStage19.b, { x: pos.x + 9500, y: pos.y - 1100 });
-  const ramOeStage20 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1150 });
+  const ramOeStage20 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1150 });
   wire(parent, ramOeStage19.out, ramOeStage20.a);
   tieToLabel('LDANN_NOW', ramOeStage20.b, { x: pos.x + 9500, y: pos.y - 1150 });
   // INC (HL)/DEC (HL)'s own read, CB BIT (HL), and SET/RES (HL) reads —
@@ -7385,75 +7385,75 @@ export function buildZ80Cpu(
   // INC (HL)/DEC (HL), BIT (HL), SET/RES (HL), CBROT (HL) reads — side-fold
   // so this OE stage does not grow sequential ORs. Pair the four terms as
   // two ORs then one merge (never leave an OR input floating).
-  const hlMemReads = buildOr(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y - 1200 });
+  const hlMemReads = buildOr(parent, { x: pos.x + 9550, y: pos.y - 1200 });
   tieToLabel('HLMEM_READ_NOW', hlMemReads.a, { x: pos.x + 9450, y: pos.y - 1200 });
   tieToLabel('BIT_HL_READ_NOW', hlMemReads.b, { x: pos.x + 9450, y: pos.y - 1220 });
-  const hlMemReads2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9520, y: pos.y - 1210 });
+  const hlMemReads2 = buildOr(parent, { x: pos.x + 9520, y: pos.y - 1210 });
   tieToLabel('SETRES_HL_READ_NOW', hlMemReads2.a, { x: pos.x + 9420, y: pos.y - 1240 });
   tieToLabel('CBROT_HL_READ_NOW', hlMemReads2.b, { x: pos.x + 9420, y: pos.y - 1260 });
-  const hlMemReadsAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9490, y: pos.y - 1220 });
+  const hlMemReadsAny = buildOr(parent, { x: pos.x + 9490, y: pos.y - 1220 });
   wire(parent, hlMemReads.out, hlMemReadsAny.a);
   wire(parent, hlMemReads2.out, hlMemReadsAny.b);
-  const ramOeStage21 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1200 });
+  const ramOeStage21 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1200 });
   wire(parent, ramOeStage20.out, ramOeStage21.a);
   wire(parent, hlMemReadsAny.out, ramOeStage21.b);
-  const ramOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9650, y: pos.y - 150 });
+  const ramOe = buildOr(parent, { x: pos.x + 9650, y: pos.y - 150 });
   wire(parent, ramOeStage21.out, ramOe.a);
   wire(parent, readNow.out, ramOe.b);
   // EX (SP),HL's own two reads (see "x=11: EX (SP),HL" below) — a
   // twenty-third widening. DD/FD EX (SP),IX/IY side-folded then merged.
-  const ramOeStage22 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 100 });
+  const ramOeStage22 = buildOr(parent, { x: pos.x + 9700, y: pos.y - 100 });
   wire(parent, ramOe.out, ramOeStage22.a);
-  const exSpReadLowAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9650, y: pos.y - 100 });
+  const exSpReadLowAny = buildOr(parent, { x: pos.x + 9650, y: pos.y - 100 });
   tieToLabel('EXSPHL_READ_LOW_NOW', exSpReadLowAny.a, { x: pos.x + 9550, y: pos.y - 100 });
   tieToLabel('EXSPIX_READ_LOW_NOW', exSpReadLowAny.b, { x: pos.x + 9550, y: pos.y - 80 });
-  const exSpReadLowAny2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9680, y: pos.y - 90 });
+  const exSpReadLowAny2 = buildOr(parent, { x: pos.x + 9680, y: pos.y - 90 });
   wire(parent, exSpReadLowAny.out, exSpReadLowAny2.a);
   tieToLabel('EXSPIY_READ_LOW_NOW', exSpReadLowAny2.b, { x: pos.x + 9580, y: pos.y - 70 });
   wire(parent, exSpReadLowAny2.out, ramOeStage22.b);
-  const ramOeStage23 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9750, y: pos.y - 50 });
+  const ramOeStage23 = buildOr(parent, { x: pos.x + 9750, y: pos.y - 50 });
   wire(parent, ramOeStage22.out, ramOeStage23.a);
-  const exSpReadHighAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 9700, y: pos.y - 50 });
+  const exSpReadHighAny = buildOr(parent, { x: pos.x + 9700, y: pos.y - 50 });
   tieToLabel('EXSPHL_READ_HIGH_NOW', exSpReadHighAny.a, { x: pos.x + 9600, y: pos.y - 50 });
   tieToLabel('EXSPIX_READ_HIGH_NOW', exSpReadHighAny.b, { x: pos.x + 9600, y: pos.y - 30 });
-  const exSpReadHighAny2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9730, y: pos.y - 40 });
+  const exSpReadHighAny2 = buildOr(parent, { x: pos.x + 9730, y: pos.y - 40 });
   wire(parent, exSpReadHighAny.out, exSpReadHighAny2.a);
   tieToLabel('EXSPIY_READ_HIGH_NOW', exSpReadHighAny2.b, { x: pos.x + 9630, y: pos.y - 20 });
   wire(parent, exSpReadHighAny2.out, ramOeStage23.b);
   // ALU op A,n's own immediate-byte read (see "x=11: ALU op A,n" above) —
   // a twenty-fourth widening, PC already the default read address, no new
   // address-mux term needed.
-  const ramOeStage24 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9800, y: pos.y - 25 });
+  const ramOeStage24 = buildOr(parent, { x: pos.x + 9800, y: pos.y - 25 });
   wire(parent, ramOeStage23.out, ramOeStage24.a);
   tieToLabel('ALUIMM8_READ_NOW', ramOeStage24.b, { x: pos.x + 9700, y: pos.y - 25 });
   // IN A,(n)/OUT (n),A's own immediate-byte read (see "x=11: IN A,(n) /
   // OUT (n),A" above) — a twenty-fifth widening, same "PC already the
   // default read address" reasoning.
-  const ramOeStage25 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9850, y: pos.y + 0 });
+  const ramOeStage25 = buildOr(parent, { x: pos.x + 9850, y: pos.y + 0 });
   wire(parent, ramOeStage24.out, ramOeStage25.a);
   tieToLabel('IOIMM_READ_NOW', ramOeStage25.b, { x: pos.x + 9750, y: pos.y + 0 });
   // CB/ED/DD/FD's own second-byte read (see "CB/ED/DD/FD prefix bytes"
   // above) — a twenty-sixth widening, same "PC already the default read
   // address" reasoning every immediate-reading feature above already
   // established.
-  const ramOeStage26 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9900, y: pos.y + 25 });
+  const ramOeStage26 = buildOr(parent, { x: pos.x + 9900, y: pos.y + 25 });
   wire(parent, ramOeStage25.out, ramOeStage26.a);
   tieToLabel('PREFIX_READ_NOW', ramOeStage26.b, { x: pos.x + 9800, y: pos.y + 25 });
   // LDI's own read from (HL) (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above) —
   // a twenty-seventh term.
-  const ramOeFinal = buildOr(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y + 50 });
+  const ramOeFinal = buildOr(parent, { x: pos.x + 9950, y: pos.y + 50 });
   wire(parent, ramOeStage26.out, ramOeFinal.a);
   tieToLabel('LDBLOCK_READ_NOW', ramOeFinal.b, { x: pos.x + 9850, y: pos.y + 50 });
   // CPI/CPD/CPIR/CPDR's own read from (HL) (see "x=10, z=1:
   // CPI/CPD/CPIR/CPDR" above) — a twenty-eighth and final term.
-  const ramOeFinal2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10000, y: pos.y + 75 });
+  const ramOeFinal2 = buildOr(parent, { x: pos.x + 10000, y: pos.y + 75 });
   wire(parent, ramOeFinal.out, ramOeFinal2.a);
   tieToLabel('CPBLOCK_READ_NOW', ramOeFinal2.b, { x: pos.x + 9900, y: pos.y + 75 });
   // OUTI/OUTD/OTIR/OTDR's own read of (HL) (see "x=10, z=3:
   // OUTI/OUTD/OTIR/OTDR" above) — a twenty-ninth and final term. `INI`'s
   // own family needs no equivalent term here — it never reads RAM at
   // all, only writes it.
-  const ramOeFinal3 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10050, y: pos.y + 100 });
+  const ramOeFinal3 = buildOr(parent, { x: pos.x + 10050, y: pos.y + 100 });
   wire(parent, ramOeFinal2.out, ramOeFinal3.a);
   tieToLabel('OUTBLOCK_READ_NOW', ramOeFinal3.b, { x: pos.x + 9950, y: pos.y + 100 });
   // ED LD (nn),dd reads (see "x=01, z=3") — four terms folded into a
@@ -7465,95 +7465,95 @@ export function buildZ80Cpu(
   // still releasing) cascaded into VCC/GND contention that froze the
   // ring counter at PHASE4. Side-folding EDNN and keeping RRD as the
   // final term restores the pre-EDNN path depth for RRD.
-  const edNnOeImm = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 150 });
+  const edNnOeImm = buildOr(parent, { x: pos.x + 10100, y: pos.y + 150 });
   tieToLabel('EDNN_IMM_LOW_NOW', edNnOeImm.a, { x: pos.x + 10000, y: pos.y + 150 });
   tieToLabel('EDNN_IMM_HIGH_NOW', edNnOeImm.b, { x: pos.x + 10000, y: pos.y + 170 });
-  const edNnOeData = buildOr(parent, vcc3, gnd3, { x: pos.x + 10100, y: pos.y + 200 });
+  const edNnOeData = buildOr(parent, { x: pos.x + 10100, y: pos.y + 200 });
   tieToLabel('EDNN_READ_LOW_NOW', edNnOeData.a, { x: pos.x + 10000, y: pos.y + 200 });
   tieToLabel('EDNN_READ_HIGH_NOW', edNnOeData.b, { x: pos.x + 10000, y: pos.y + 220 });
-  const edNnOeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10150, y: pos.y + 175 });
+  const edNnOeAny = buildOr(parent, { x: pos.x + 10150, y: pos.y + 175 });
   wire(parent, edNnOeImm.out, edNnOeAny.a);
   wire(parent, edNnOeData.out, edNnOeAny.b);
-  const ramOeFinal4 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10200, y: pos.y + 125 });
+  const ramOeFinal4 = buildOr(parent, { x: pos.x + 10200, y: pos.y + 125 });
   wire(parent, ramOeFinal3.out, ramOeFinal4.a);
   wire(parent, edNnOeAny.out, ramOeFinal4.b);
   // LD IX,nn / LD IY,nn's PC-relative immediate reads (see "DD: IX" /
   // "FD: IY") — side-folded like EDNN so RRD stays the final OE term.
-  const ldIxNnOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10250, y: pos.y + 150 });
+  const ldIxNnOe = buildOr(parent, { x: pos.x + 10250, y: pos.y + 150 });
   tieToLabel('LDIXNN_LOW_NOW', ldIxNnOe.a, { x: pos.x + 10150, y: pos.y + 150 });
   tieToLabel('LDIXNN_HIGH_NOW', ldIxNnOe.b, { x: pos.x + 10150, y: pos.y + 170 });
-  const ldIyNnOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10250, y: pos.y + 190 });
+  const ldIyNnOe = buildOr(parent, { x: pos.x + 10250, y: pos.y + 190 });
   tieToLabel('LDIYNN_LOW_NOW', ldIyNnOe.a, { x: pos.x + 10150, y: pos.y + 190 });
   tieToLabel('LDIYNN_HIGH_NOW', ldIyNnOe.b, { x: pos.x + 10150, y: pos.y + 210 });
-  const ldIxIyNnOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10300, y: pos.y + 170 });
+  const ldIxIyNnOe = buildOr(parent, { x: pos.x + 10300, y: pos.y + 170 });
   wire(parent, ldIxNnOe.out, ldIxIyNnOe.a);
   wire(parent, ldIyNnOe.out, ldIxIyNnOe.b);
-  const ramOeFinal4b = buildOr(parent, vcc3, gnd3, { x: pos.x + 10350, y: pos.y + 140 });
+  const ramOeFinal4b = buildOr(parent, { x: pos.x + 10350, y: pos.y + 140 });
   wire(parent, ramOeFinal4.out, ramOeFinal4b.a);
   wire(parent, ldIxIyNnOe.out, ramOeFinal4b.b);
   // DD/FD (IX+d)/(IY+d) mem reads — side-folded before RRD (same depth rule).
-  const ddDispOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10400, y: pos.y + 160 });
+  const ddDispOe = buildOr(parent, { x: pos.x + 10400, y: pos.y + 160 });
   tieToLabel('DDDISP_READ_NOW', ddDispOe.a, { x: pos.x + 10300, y: pos.y + 160 });
   tieToLabel('DDMEMLD_READ_NOW', ddDispOe.b, { x: pos.x + 10300, y: pos.y + 180 });
-  const ddMemLdNOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10400, y: pos.y + 200 });
+  const ddMemLdNOe = buildOr(parent, { x: pos.x + 10400, y: pos.y + 200 });
   wire(parent, ddDispOe.out, ddMemLdNOe.a);
   tieToLabel('DDMEMLDN_IMM_READ_NOW', ddMemLdNOe.b, { x: pos.x + 10300, y: pos.y + 200 });
-  const ddMemIncDecAluOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10400, y: pos.y + 220 });
+  const ddMemIncDecAluOe = buildOr(parent, { x: pos.x + 10400, y: pos.y + 220 });
   tieToLabel('DDMEM_INCDEC_READ_NOW', ddMemIncDecAluOe.a, { x: pos.x + 10300, y: pos.y + 220 });
   tieToLabel('DDMEM_ALU_NOW', ddMemIncDecAluOe.b, { x: pos.x + 10300, y: pos.y + 240 });
-  const ddCbOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10400, y: pos.y + 260 });
+  const ddCbOe = buildOr(parent, { x: pos.x + 10400, y: pos.y + 260 });
   tieToLabel('DDCB_OP_READ_NOW', ddCbOe.a, { x: pos.x + 10300, y: pos.y + 260 });
   tieToLabel('BIT_IX_NOW', ddCbOe.b, { x: pos.x + 10300, y: pos.y + 280 });
-  const ddCbOeSetRot = buildOr(parent, vcc3, gnd3, { x: pos.x + 10400, y: pos.y + 300 });
+  const ddCbOeSetRot = buildOr(parent, { x: pos.x + 10400, y: pos.y + 300 });
   tieToLabel('SETRES_IX_READ_NOW', ddCbOeSetRot.a, { x: pos.x + 10300, y: pos.y + 300 });
   tieToLabel('CBROT_IX_READ_NOW', ddCbOeSetRot.b, { x: pos.x + 10300, y: pos.y + 320 });
-  const ddCbOeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10450, y: pos.y + 280 });
+  const ddCbOeAny = buildOr(parent, { x: pos.x + 10450, y: pos.y + 280 });
   wire(parent, ddCbOe.out, ddCbOeAny.a);
   wire(parent, ddCbOeSetRot.out, ddCbOeAny.b);
-  const ddMemOeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10450, y: pos.y + 210 });
+  const ddMemOeAny = buildOr(parent, { x: pos.x + 10450, y: pos.y + 210 });
   wire(parent, ddMemLdNOe.out, ddMemOeAny.a);
   wire(parent, ddMemIncDecAluOe.out, ddMemOeAny.b);
-  const ddMemOeAny2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 230 });
+  const ddMemOeAny2 = buildOr(parent, { x: pos.x + 10500, y: pos.y + 230 });
   wire(parent, ddMemOeAny.out, ddMemOeAny2.a);
   wire(parent, ddCbOeAny.out, ddMemOeAny2.b);
-  const fdDispOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 160 });
+  const fdDispOe = buildOr(parent, { x: pos.x + 10500, y: pos.y + 160 });
   tieToLabel('FDDISP_READ_NOW', fdDispOe.a, { x: pos.x + 10400, y: pos.y + 160 });
   tieToLabel('FDMEMLD_READ_NOW', fdDispOe.b, { x: pos.x + 10400, y: pos.y + 180 });
-  const fdMemLdNOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 200 });
+  const fdMemLdNOe = buildOr(parent, { x: pos.x + 10500, y: pos.y + 200 });
   wire(parent, fdDispOe.out, fdMemLdNOe.a);
   tieToLabel('FDMEMLDN_IMM_READ_NOW', fdMemLdNOe.b, { x: pos.x + 10400, y: pos.y + 200 });
-  const fdMemIncDecAluOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 220 });
+  const fdMemIncDecAluOe = buildOr(parent, { x: pos.x + 10500, y: pos.y + 220 });
   tieToLabel('FDMEM_INCDEC_READ_NOW', fdMemIncDecAluOe.a, { x: pos.x + 10400, y: pos.y + 220 });
   tieToLabel('FDMEM_ALU_NOW', fdMemIncDecAluOe.b, { x: pos.x + 10400, y: pos.y + 240 });
-  const fdCbOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 260 });
+  const fdCbOe = buildOr(parent, { x: pos.x + 10500, y: pos.y + 260 });
   tieToLabel('FDCB_OP_READ_NOW', fdCbOe.a, { x: pos.x + 10400, y: pos.y + 260 });
   tieToLabel('BIT_IY_NOW', fdCbOe.b, { x: pos.x + 10400, y: pos.y + 280 });
-  const fdCbOeSetRot = buildOr(parent, vcc3, gnd3, { x: pos.x + 10500, y: pos.y + 300 });
+  const fdCbOeSetRot = buildOr(parent, { x: pos.x + 10500, y: pos.y + 300 });
   tieToLabel('SETRES_IY_READ_NOW', fdCbOeSetRot.a, { x: pos.x + 10400, y: pos.y + 300 });
   tieToLabel('CBROT_IY_READ_NOW', fdCbOeSetRot.b, { x: pos.x + 10400, y: pos.y + 320 });
-  const fdCbOeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10550, y: pos.y + 280 });
+  const fdCbOeAny = buildOr(parent, { x: pos.x + 10550, y: pos.y + 280 });
   wire(parent, fdCbOe.out, fdCbOeAny.a);
   wire(parent, fdCbOeSetRot.out, fdCbOeAny.b);
-  const fdMemOeAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 10550, y: pos.y + 210 });
+  const fdMemOeAny = buildOr(parent, { x: pos.x + 10550, y: pos.y + 210 });
   wire(parent, fdMemLdNOe.out, fdMemOeAny.a);
   wire(parent, fdMemIncDecAluOe.out, fdMemOeAny.b);
-  const fdMemOeAny2 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10600, y: pos.y + 230 });
+  const fdMemOeAny2 = buildOr(parent, { x: pos.x + 10600, y: pos.y + 230 });
   wire(parent, fdMemOeAny.out, fdMemOeAny2.a);
   wire(parent, fdCbOeAny.out, fdMemOeAny2.b);
-  const ddFdDispOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10650, y: pos.y + 180 });
+  const ddFdDispOe = buildOr(parent, { x: pos.x + 10650, y: pos.y + 180 });
   wire(parent, ddMemOeAny2.out, ddFdDispOe.a);
   wire(parent, fdMemOeAny2.out, ddFdDispOe.b);
-  const ramOeFinal4c = buildOr(parent, vcc3, gnd3, { x: pos.x + 10650, y: pos.y + 150 });
+  const ramOeFinal4c = buildOr(parent, { x: pos.x + 10650, y: pos.y + 150 });
   wire(parent, ramOeFinal4b.out, ramOeFinal4c.a);
   wire(parent, ddFdDispOe.out, ramOeFinal4c.b);
   // DD/FD HL8 LD IXH/IXL,n — PHASE4 immediate read @ PC.
-  const ddFdHl8ImmOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 10650, y: pos.y + 170 });
+  const ddFdHl8ImmOe = buildOr(parent, { x: pos.x + 10650, y: pos.y + 170 });
   tieToLabel('DDIX_HL8_IMM_READ_NOW', ddFdHl8ImmOe.a, { x: pos.x + 10550, y: pos.y + 170 });
   tieToLabel('FDIY_HL8_IMM_READ_NOW', ddFdHl8ImmOe.b, { x: pos.x + 10550, y: pos.y + 190 });
-  const ramOeFinal4d = buildOr(parent, vcc3, gnd3, { x: pos.x + 10700, y: pos.y + 160 });
+  const ramOeFinal4d = buildOr(parent, { x: pos.x + 10700, y: pos.y + 160 });
   wire(parent, ramOeFinal4c.out, ramOeFinal4d.a);
   wire(parent, ddFdHl8ImmOe.out, ramOeFinal4d.b);
-  const ramOeFinal5 = buildOr(parent, vcc3, gnd3, { x: pos.x + 10750, y: pos.y + 125 });
+  const ramOeFinal5 = buildOr(parent, { x: pos.x + 10750, y: pos.y + 125 });
   wire(parent, ramOeFinal4d.out, ramOeFinal5.a);
   tieToLabel('RRDRLD_READ_NOW', ramOeFinal5.b, { x: pos.x + 10650, y: pos.y + 125 });
   wire(parent, ramOeFinal5.out, ram.pins.oe!);
@@ -7576,10 +7576,10 @@ export function buildZ80Cpu(
   // (PUSH/RST) are mutually exclusive by construction, not by this OR
   // happening to work out.
   const spAdder = buildAlu(parent, library, addrBits, { x: pos.x + 8400, y: pos.y + 3000 });
-  const spWantDec = buildOr(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 2900 });
+  const spWantDec = buildOr(parent, { x: pos.x + 8300, y: pos.y + 2900 });
   tieToLabel('STACK_WRITE_NOW', spWantDec.a, { x: pos.x + 8200, y: pos.y + 2900 });
   tieToLabel('DEC_SP_NOW', spWantDec.b, { x: pos.x + 8200, y: pos.y + 2930 });
-  const notSpWantDec = buildNot(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 2950 });
+  const notSpWantDec = buildNot(parent, { x: pos.x + 8300, y: pos.y + 2950 });
   wire(parent, spWantDec.out, notSpWantDec.in);
   wire(parent, notSpWantDec.out, spAdder.cin);
   tiePowerRail(parent, 'GND', spAdder.op0);
@@ -7628,7 +7628,7 @@ export function buildZ80Cpu(
   // iterations, no change) — ruled out because the actual mechanism is
   // structural (which value a master latch freezes on), not a matter of
   // giving the solver more passes to converge.
-  const addrIsHlStage = buildOr(parent, vcc, gnd, { x: pos.x + 550, y: pos.y - 400 });
+  const addrIsHlStage = buildOr(parent, { x: pos.x + 550, y: pos.y - 400 });
   wire(parent, hlNow.out, addrIsHlStage.a);
   wire(parent, ramWriteNow.out, addrIsHlStage.b);
   // INC (HL)/DEC (HL) (see "x=00: INC (HL)/DEC (HL)/LD (HL),n" above):
@@ -7648,28 +7648,28 @@ export function buildZ80Cpu(
   // `PHASE2`-gated) — this fix just gives `(HL)`'s own RMW the identical
   // discipline: force the address only during the phases that actually
   // touch RAM, not for the instruction's entire lifetime.
-  const addrIsHlStage2 = buildOr(parent, vcc, gnd, { x: pos.x + 600, y: pos.y - 420 });
+  const addrIsHlStage2 = buildOr(parent, { x: pos.x + 600, y: pos.y - 420 });
   wire(parent, addrIsHlStage.out, addrIsHlStage2.a);
   // Side-fold INC/DEC (HL) / BIT (HL) / SETRES (HL) reads — all need
   // addr=HL for exactly one phase. Same floating-input trap as the OE
   // fold above: both original terms stay on the first OR.
   // Side-fold (HL) reads — same paired-OR shape as the OE fold above.
-  const addrHlReads = buildOr(parent, vcc, gnd, { x: pos.x + 580, y: pos.y - 440 });
+  const addrHlReads = buildOr(parent, { x: pos.x + 580, y: pos.y - 440 });
   tieToLabel('HLMEM_READ_NOW', addrHlReads.a, { x: pos.x + 480, y: pos.y - 420 });
   tieToLabel('BIT_HL_READ_NOW', addrHlReads.b, { x: pos.x + 460, y: pos.y - 440 });
-  const addrHlReads2 = buildOr(parent, vcc, gnd, { x: pos.x + 560, y: pos.y - 450 });
+  const addrHlReads2 = buildOr(parent, { x: pos.x + 560, y: pos.y - 450 });
   tieToLabel('SETRES_HL_READ_NOW', addrHlReads2.a, { x: pos.x + 440, y: pos.y - 460 });
   tieToLabel('CBROT_HL_READ_NOW', addrHlReads2.b, { x: pos.x + 420, y: pos.y - 480 });
-  const addrHlReadsAny = buildOr(parent, vcc, gnd, { x: pos.x + 540, y: pos.y - 460 });
+  const addrHlReadsAny = buildOr(parent, { x: pos.x + 540, y: pos.y - 460 });
   wire(parent, addrHlReads.out, addrHlReadsAny.a);
   wire(parent, addrHlReads2.out, addrHlReadsAny.b);
   wire(parent, addrHlReadsAny.out, addrIsHlStage2.b);
-  const addrIsHlStage3 = buildOr(parent, vcc, gnd, { x: pos.x + 620, y: pos.y - 430 });
+  const addrIsHlStage3 = buildOr(parent, { x: pos.x + 620, y: pos.y - 430 });
   wire(parent, addrIsHlStage2.out, addrIsHlStage3.a);
-  const hlMemWrites = buildOr(parent, vcc, gnd, { x: pos.x + 580, y: pos.y - 470 });
+  const hlMemWrites = buildOr(parent, { x: pos.x + 580, y: pos.y - 470 });
   tieToLabel('INCDEC_HLMEM_NOW', hlMemWrites.a, { x: pos.x + 480, y: pos.y - 470 });
   tieToLabel('SETRES_HL_WRITE_NOW', hlMemWrites.b, { x: pos.x + 480, y: pos.y - 490 });
-  const hlMemWrites2 = buildOr(parent, vcc, gnd, { x: pos.x + 560, y: pos.y - 480 });
+  const hlMemWrites2 = buildOr(parent, { x: pos.x + 560, y: pos.y - 480 });
   wire(parent, hlMemWrites.out, hlMemWrites2.a);
   tieToLabel('CBROT_HL_WRITE_NOW', hlMemWrites2.b, { x: pos.x + 460, y: pos.y - 500 });
   wire(parent, hlMemWrites2.out, addrIsHlStage3.b);
@@ -7677,7 +7677,7 @@ export function buildZ80Cpu(
   // above) needs `HL` only while it's actually writing (`PHASE4`) — its
   // own read phase (`PHASE2`) still needs `PC`, to read the immediate
   // byte itself.
-  const addrIsHl = buildOr(parent, vcc, gnd, { x: pos.x + 650, y: pos.y - 440 });
+  const addrIsHl = buildOr(parent, { x: pos.x + 650, y: pos.y - 440 });
   wire(parent, addrIsHlStage3.out, addrIsHl.a);
   tieToLabel('LDHLN_WRITE_NOW', addrIsHl.b, { x: pos.x + 550, y: pos.y - 440 });
 
@@ -7689,10 +7689,10 @@ export function buildZ80Cpu(
   // instruction — see its own doc comment above) — the identical
   // "borrow an already-phase-gated signal rather than re-derive the
   // timing from scratch" reasoning that signal's own construction used.
-  const ldBlockRepeatStage = buildAnd(parent, vcc, gnd, { x: pos.x - 750, y: pos.y - 5150 });
+  const ldBlockRepeatStage = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5150 });
   tieToLabel('LDBLOCK_REPEAT_VARIANT_NOW', ldBlockRepeatStage.a, { x: pos.x - 850, y: pos.y - 5150 });
   tieToLabel('BLOCK_PV_NOW', ldBlockRepeatStage.b, { x: pos.x - 850, y: pos.y - 5130 });
-  const ldBlockRepeatNow = buildAnd(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5150 });
+  const ldBlockRepeatNow = buildAnd(parent, { x: pos.x - 700, y: pos.y - 5150 });
   wire(parent, ldBlockRepeatStage.out, ldBlockRepeatNow.a);
   tieToLabel('LDBLOCK_COMMIT_NOW', ldBlockRepeatNow.b, { x: pos.x - 800, y: pos.y - 5170 });
   tieToLabel('LDBLOCK_REPEAT_NOW', ldBlockRepeatNow.out, { x: pos.x - 650, y: pos.y - 5150 }); // anchor — pc's own mux chain (far) reads this
@@ -7707,13 +7707,13 @@ export function buildZ80Cpu(
   // here before that adder's own commit rather than after, since the
   // repeat decision needs *this* comparison's outcome, not the previous
   // instruction's leftover `Z`.
-  const cpBlockRepeatStage = buildAnd(parent, vcc, gnd, { x: pos.x - 750, y: pos.y - 5200 });
+  const cpBlockRepeatStage = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5200 });
   tieToLabel('CPBLOCK_REPEAT_VARIANT_NOW', cpBlockRepeatStage.a, { x: pos.x - 850, y: pos.y - 5200 });
   tieToLabel('BLOCK_PV_NOW', cpBlockRepeatStage.b, { x: pos.x - 850, y: pos.y - 5180 });
-  const cpBlockRepeatStage2 = buildAnd(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5200 });
+  const cpBlockRepeatStage2 = buildAnd(parent, { x: pos.x - 700, y: pos.y - 5200 });
   wire(parent, cpBlockRepeatStage.out, cpBlockRepeatStage2.a);
   tieToLabel('CPBLOCK_NOT_FOUND_NOW', cpBlockRepeatStage2.b, { x: pos.x - 800, y: pos.y - 5220 });
-  const cpBlockRepeatNow = buildAnd(parent, vcc, gnd, { x: pos.x - 650, y: pos.y - 5200 });
+  const cpBlockRepeatNow = buildAnd(parent, { x: pos.x - 650, y: pos.y - 5200 });
   wire(parent, cpBlockRepeatStage2.out, cpBlockRepeatNow.a);
   tieToLabel('CPBLOCK_COMMIT_NOW', cpBlockRepeatNow.b, { x: pos.x - 750, y: pos.y - 5220 });
   tieToLabel('CPBLOCK_REPEAT_NOW', cpBlockRepeatNow.out, { x: pos.x - 600, y: pos.y - 5200 }); // anchor — pc's own mux chain (far) reads this
@@ -7726,10 +7726,10 @@ export function buildZ80Cpu(
   // below) is read forward through its own anchor label, the same
   // "built later in the file, read earlier through a label" shape
   // `BLOCK_PV_NOW` already establishes for the other two repeat gates.
-  const inBlockRepeatStage = buildAnd(parent, vcc, gnd, { x: pos.x - 750, y: pos.y - 5250 });
+  const inBlockRepeatStage = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5250 });
   tieToLabel('INBLOCK_REPEAT_VARIANT_NOW', inBlockRepeatStage.a, { x: pos.x - 850, y: pos.y - 5250 });
   tieToLabel('IOB_NONZERO_NOW', inBlockRepeatStage.b, { x: pos.x - 850, y: pos.y - 5230 });
-  const inBlockRepeatNow = buildAnd(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5250 });
+  const inBlockRepeatNow = buildAnd(parent, { x: pos.x - 700, y: pos.y - 5250 });
   wire(parent, inBlockRepeatStage.out, inBlockRepeatNow.a);
   tieToLabel('INBLOCK_COMMIT_NOW', inBlockRepeatNow.b, { x: pos.x - 800, y: pos.y - 5270 });
   tieToLabel('INBLOCK_REPEAT_NOW', inBlockRepeatNow.out, { x: pos.x - 650, y: pos.y - 5250 }); // anchor — pc's own mux chain (far) reads this
@@ -7739,10 +7739,10 @@ export function buildZ80Cpu(
   // above uses, reading the same shared `IOB_NONZERO_NOW` (decrementing
   // `B` is the identical operation regardless of transfer direction),
   // gated by this family's own `OUTBLOCK_COMMIT_NOW` instead.
-  const outBlockRepeatStage = buildAnd(parent, vcc, gnd, { x: pos.x - 750, y: pos.y - 5300 });
+  const outBlockRepeatStage = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5300 });
   tieToLabel('OUTBLOCK_REPEAT_VARIANT_NOW', outBlockRepeatStage.a, { x: pos.x - 850, y: pos.y - 5300 });
   tieToLabel('IOB_NONZERO_NOW', outBlockRepeatStage.b, { x: pos.x - 850, y: pos.y - 5280 });
-  const outBlockRepeatNow = buildAnd(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 5300 });
+  const outBlockRepeatNow = buildAnd(parent, { x: pos.x - 700, y: pos.y - 5300 });
   wire(parent, outBlockRepeatStage.out, outBlockRepeatNow.a);
   tieToLabel('OUTBLOCK_COMMIT_NOW', outBlockRepeatNow.b, { x: pos.x - 800, y: pos.y - 5320 });
   tieToLabel('OUTBLOCK_REPEAT_NOW', outBlockRepeatNow.out, { x: pos.x - 650, y: pos.y - 5300 }); // anchor — pc's own mux chain (far) reads this
@@ -7845,7 +7845,7 @@ export function buildZ80Cpu(
     wire(parent, hlBit, outBlockReadMux.pins[muxDef.ports[2]!]!);
 
     // RRD/RLD — HL for both read and write phases.
-    const rrdRldAddrNow = buildOr(parent, vcc, gnd, { x: pos.x + 3400, y: pos.y - 340 - i * 100 });
+    const rrdRldAddrNow = buildOr(parent, { x: pos.x + 3400, y: pos.y - 340 - i * 100 });
     tieToLabel('RRDRLD_READ_NOW', rrdRldAddrNow.a, { x: pos.x + 3350, y: pos.y - 340 - i * 100 });
     tieToLabel('RRDRLD_WRITE_NOW', rrdRldAddrNow.b, { x: pos.x + 3350, y: pos.y - 360 - i * 100 });
     const rrdRldAddrMux = makeChipInstance(parent, muxDef, { x: pos.x + 3500, y: pos.y - 300 - i * 100 });
@@ -7880,12 +7880,12 @@ export function buildZ80Cpu(
   {
     let carry: Pin = railPin(parent, 'VCC', { x: pos.x - 700, y: pos.y - 6400 });
     for (let i = 0; i < addrBits; i++) {
-      const sum = buildXor(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 6400 - i * 40 });
+      const sum = buildXor(parent, { x: pos.x - 700, y: pos.y - 6400 - i * 40 });
       wire(parent, pc.q[i]!, sum.a);
       wire(parent, carry, sum.b);
       tieToLabel(`PCPLUS1_${i}`, sum.out, { x: pos.x - 600, y: pos.y - 6400 - i * 20 });
       if (i + 1 < addrBits) {
-        const next = buildAnd(parent, vcc, gnd, { x: pos.x - 650, y: pos.y - 6420 - i * 40 });
+        const next = buildAnd(parent, { x: pos.x - 650, y: pos.y - 6420 - i * 40 });
         wire(parent, pc.q[i]!, next.a);
         wire(parent, carry, next.b);
         carry = next.out;
@@ -7907,20 +7907,20 @@ export function buildZ80Cpu(
   // PHASE1-only condition, unchanged — except thin IM1 IRQ accept ANDs
   // PHASE1 with NOT_INT_SERVING so the pushed return address stays the
   // interrupted instruction's PC (RST 38h path reuses the rest).
-  const phase1Advance = buildAnd(parent, vcc, gnd, { x: pos.x - 350, y: pos.y - 250 });
+  const phase1Advance = buildAnd(parent, { x: pos.x - 350, y: pos.y - 250 });
   tieToLabel('PHASE1', phase1Advance.a, { x: pos.x - 450, y: pos.y - 250 });
   tieToLabel('NOT_INT_SERVING', phase1Advance.b, { x: pos.x - 450, y: pos.y - 230 });
-  const pcHold = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 250 });
+  const pcHold = buildOr(parent, { x: pos.x - 300, y: pos.y - 250 });
   wire(parent, phase1Advance.out, pcHold.a);
   tieToLabel('LDIMM8_ADVANCE_NOW', pcHold.b, { x: pos.x - 400, y: pos.y - 220 });
   // LD dd,nn (see "x=00, z=1: LD dd,nn" above) needs PC to advance a
   // *third* and *fourth* time in one instruction — past the low immediate
   // byte, then past the high one — same OR-widening shape LDIMM8_ADVANCE_NOW
   // just established, twice more.
-  const pcHoldStage2 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 300 });
+  const pcHoldStage2 = buildOr(parent, { x: pos.x - 300, y: pos.y - 300 });
   wire(parent, pcHold.out, pcHoldStage2.a);
   tieToLabel('LDDDNN_LOW_ADVANCE_NOW', pcHoldStage2.b, { x: pos.x - 400, y: pos.y - 300 });
-  const pcHoldStage3 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 350 });
+  const pcHoldStage3 = buildOr(parent, { x: pos.x - 300, y: pos.y - 350 });
   wire(parent, pcHoldStage2.out, pcHoldStage3.a);
   tieToLabel('LDDDNN_HIGH_ADVANCE_NOW', pcHoldStage3.b, { x: pos.x - 400, y: pos.y - 350 });
   // JP nn's own PHASE3 advance (see "x=11: JP nn" above) — deliberately
@@ -7928,7 +7928,7 @@ export function buildZ80Cpu(
   // is: JP nn's PHASE5 overwrites PC with the jump target (via `jpMux`
   // below) instead of advancing it, so PHASE5 must stay OUT of `pcHold`
   // for this instruction, unlike LD dd,nn's.
-  const pcHoldStage4 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 400 });
+  const pcHoldStage4 = buildOr(parent, { x: pos.x - 300, y: pos.y - 400 });
   wire(parent, pcHoldStage3.out, pcHoldStage4.a);
   tieToLabel('JP_ADVANCE_NOW', pcHoldStage4.b, { x: pos.x - 400, y: pos.y - 400 });
   // CALL nn's own two advances (see "x=11: CALL nn" above) — PHASE6
@@ -7937,10 +7937,10 @@ export function buildZ80Cpu(
   // already established: PHASE7 overwrites PC via `callMux` instead of
   // advancing it, and PHASE6 doesn't touch PC at all (it writes RAM at
   // `SP`, not PC).
-  const pcHoldStage5 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 450 });
+  const pcHoldStage5 = buildOr(parent, { x: pos.x - 300, y: pos.y - 450 });
   wire(parent, pcHoldStage4.out, pcHoldStage5.a);
   tieToLabel('CALL_ADVANCE_LOW_NOW', pcHoldStage5.b, { x: pos.x - 400, y: pos.y - 450 });
-  const pcHoldStage6 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 500 });
+  const pcHoldStage6 = buildOr(parent, { x: pos.x - 300, y: pos.y - 500 });
   wire(parent, pcHoldStage5.out, pcHoldStage6.a);
   tieToLabel('CALL_ADVANCE_HIGH_NOW', pcHoldStage6.b, { x: pos.x - 400, y: pos.y - 500 });
   // JP cc,nn's own PHASE3 advance (unconditional — both branches need it)
@@ -7948,10 +7948,10 @@ export function buildZ80Cpu(
   // above) — `JPCC_JUMP_NOW` (the condition-true branch, same PHASE5)
   // deliberately stays OUT of this chain, identical to `JP nn`'s own
   // PHASE5 exclusion: that branch overwrites `PC` via `jpCcMux` instead.
-  const pcHoldStage7 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 550 });
+  const pcHoldStage7 = buildOr(parent, { x: pos.x - 300, y: pos.y - 550 });
   wire(parent, pcHoldStage6.out, pcHoldStage7.a);
   tieToLabel('JPCC_ADVANCE_LOW_NOW', pcHoldStage7.b, { x: pos.x - 400, y: pos.y - 550 });
-  const pcHoldStage8 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 600 });
+  const pcHoldStage8 = buildOr(parent, { x: pos.x - 300, y: pos.y - 600 });
   wire(parent, pcHoldStage7.out, pcHoldStage8.a);
   tieToLabel('JPCC_FALLTHROUGH_NOW', pcHoldStage8.b, { x: pos.x - 400, y: pos.y - 600 });
   // CALL cc,nn's own two advances (see "x=11: CALL cc,nn" above) — both
@@ -7962,10 +7962,10 @@ export function buildZ80Cpu(
   // (PHASE6) and `CALLCC_JUMP_NOW` (PHASE7) stay OUT of this chain, the
   // identical reasoning `CALL nn`'s own PHASE6/PHASE7 exclusion already
   // established.
-  const pcHoldStage9 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 650 });
+  const pcHoldStage9 = buildOr(parent, { x: pos.x - 300, y: pos.y - 650 });
   wire(parent, pcHoldStage8.out, pcHoldStage9.a);
   tieToLabel('CALLCC_ADVANCE_LOW_NOW', pcHoldStage9.b, { x: pos.x - 400, y: pos.y - 650 });
-  const pcHoldStage10 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 700 });
+  const pcHoldStage10 = buildOr(parent, { x: pos.x - 300, y: pos.y - 700 });
   wire(parent, pcHoldStage9.out, pcHoldStage10.a);
   tieToLabel('CALLCC_ADVANCE_HIGH_NOW', pcHoldStage10.b, { x: pos.x - 400, y: pos.y - 700 });
   // JR cc's own single advance (see "x=00: JR cc,e" above) — unconditional,
@@ -7974,7 +7974,7 @@ export function buildZ80Cpu(
   // instead of two since this opcode only has one operand byte.
   // `JR_JUMP_NOW` (`PHASE4`) stays out of this chain, the same exclusion
   // every other conditional jump/call in this file already established.
-  const pcHoldStage11 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 750 });
+  const pcHoldStage11 = buildOr(parent, { x: pos.x - 300, y: pos.y - 750 });
   wire(parent, pcHoldStage10.out, pcHoldStage11.a);
   tieToLabel('JR_ADVANCE_NOW', pcHoldStage11.b, { x: pos.x - 400, y: pos.y - 750 });
   // The indirect-load group's own two advances (see "x=00: indirect loads
@@ -7983,21 +7983,21 @@ export function buildZ80Cpu(
   // all here (PHASE1's own default increment already covers them);
   // `PHASE6`/`PHASE7`'s own commits never touch PC either way, so neither
   // needs excluding the way a jump's own commit phase would.
-  const pcHoldStage12 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 800 });
+  const pcHoldStage12 = buildOr(parent, { x: pos.x - 300, y: pos.y - 800 });
   wire(parent, pcHoldStage11.out, pcHoldStage12.a);
   tieToLabel('NN_ADVANCE_LOW_NOW', pcHoldStage12.b, { x: pos.x - 400, y: pos.y - 800 });
-  const pcHoldStage13 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 850 });
+  const pcHoldStage13 = buildOr(parent, { x: pos.x - 300, y: pos.y - 850 });
   wire(parent, pcHoldStage12.out, pcHoldStage13.a);
   tieToLabel('NN_ADVANCE_HIGH_NOW', pcHoldStage13.b, { x: pos.x - 400, y: pos.y - 850 });
   // ALU op A,n's own second advance, past its own immediate byte (see
   // "x=11: ALU op A,n" above) — the identical shape LDIMM8_ADVANCE_NOW
   // already established for LD r,n's own immediate byte.
-  const pcHoldStage14 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 900 });
+  const pcHoldStage14 = buildOr(parent, { x: pos.x - 300, y: pos.y - 900 });
   wire(parent, pcHoldStage13.out, pcHoldStage14.a);
   tieToLabel('ALUIMM8_ADVANCE_NOW', pcHoldStage14.b, { x: pos.x - 400, y: pos.y - 900 });
   // IN A,(n)/OUT (n),A's own second advance, past their own immediate byte
   // (see "x=11: IN A,(n) / OUT (n),A" above).
-  const pcHoldStage15 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 950 });
+  const pcHoldStage15 = buildOr(parent, { x: pos.x - 300, y: pos.y - 950 });
   wire(parent, pcHoldStage14.out, pcHoldStage15.a);
   tieToLabel('IOIMM_ADVANCE_NOW', pcHoldStage15.b, { x: pos.x - 400, y: pos.y - 950 });
   // CB/ED/DD/FD's own second advance, past the real opcode byte their own
@@ -8005,58 +8005,58 @@ export function buildZ80Cpu(
   // above) — `PREFIX_ADVANCE_NOW` (the latch ANDed with PHASE3), not the
   // bare latch itself, which stays high for the rest of the instruction
   // and would otherwise re-fire this same advance every phase after.
-  const pcHoldFinal = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1000 });
+  const pcHoldFinal = buildOr(parent, { x: pos.x - 300, y: pos.y - 1000 });
   wire(parent, pcHoldStage15.out, pcHoldFinal.a);
   tieToLabel('PREFIX_ADVANCE_NOW', pcHoldFinal.b, { x: pos.x - 400, y: pos.y - 1000 });
   // ED LD (nn),dd's two advances (see "x=01, z=3"): PHASE5 (after the
   // PC+1 high-immediate read) and PHASE6 (past the instruction, same
   // edge as the data-low transfer).
-  const pcHoldFinal2 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1050 });
+  const pcHoldFinal2 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1050 });
   wire(parent, pcHoldFinal.out, pcHoldFinal2.a);
   tieToLabel('EDNN_IMM_HIGH_NOW', pcHoldFinal2.b, { x: pos.x - 400, y: pos.y - 1050 });
-  const pcHoldFinal3 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1100 });
+  const pcHoldFinal3 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1100 });
   wire(parent, pcHoldFinal2.out, pcHoldFinal3.a);
   tieToLabel('EDNN_DATA_LOW_NOW', pcHoldFinal3.b, { x: pos.x - 400, y: pos.y - 1100 });
   // LD IX,nn / LD IY,nn's advances past the immediate bytes (see "DD: IX" /
   // "FD: IY").
-  const pcHoldFinal4 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1150 });
+  const pcHoldFinal4 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1150 });
   wire(parent, pcHoldFinal3.out, pcHoldFinal4.a);
   tieToLabel('LDIXNN_LOW_ADVANCE_NOW', pcHoldFinal4.b, { x: pos.x - 400, y: pos.y - 1150 });
-  const pcHoldFinal5 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1200 });
+  const pcHoldFinal5 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1200 });
   wire(parent, pcHoldFinal4.out, pcHoldFinal5.a);
   tieToLabel('LDIXNN_HIGH_ADVANCE_NOW', pcHoldFinal5.b, { x: pos.x - 400, y: pos.y - 1200 });
-  const pcHoldFinal6 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1250 });
+  const pcHoldFinal6 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1250 });
   wire(parent, pcHoldFinal5.out, pcHoldFinal6.a);
   tieToLabel('LDIYNN_LOW_ADVANCE_NOW', pcHoldFinal6.b, { x: pos.x - 400, y: pos.y - 1250 });
-  const pcHoldFinal7 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1300 });
+  const pcHoldFinal7 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1300 });
   wire(parent, pcHoldFinal6.out, pcHoldFinal7.a);
   tieToLabel('LDIYNN_HIGH_ADVANCE_NOW', pcHoldFinal7.b, { x: pos.x - 400, y: pos.y - 1300 });
   // DD/FD (IX+d)/(IY+d) advances — past d (PHASE5) and past n (PHASE7).
-  const ddFdDispAdv = buildOr(parent, vcc, gnd, { x: pos.x - 250, y: pos.y - 1320 });
+  const ddFdDispAdv = buildOr(parent, { x: pos.x - 250, y: pos.y - 1320 });
   tieToLabel('DDDISP_ADVANCE_NOW', ddFdDispAdv.a, { x: pos.x - 350, y: pos.y - 1320 });
   tieToLabel('FDDISP_ADVANCE_NOW', ddFdDispAdv.b, { x: pos.x - 350, y: pos.y - 1340 });
-  const ddFdMemLdNAdv = buildOr(parent, vcc, gnd, { x: pos.x - 250, y: pos.y - 1360 });
+  const ddFdMemLdNAdv = buildOr(parent, { x: pos.x - 250, y: pos.y - 1360 });
   tieToLabel('DDMEMLDN_WRITE_NOW', ddFdMemLdNAdv.a, { x: pos.x - 350, y: pos.y - 1360 });
   tieToLabel('FDMEMLDN_WRITE_NOW', ddFdMemLdNAdv.b, { x: pos.x - 350, y: pos.y - 1380 });
-  const ddFdCbOpAdv = buildOr(parent, vcc, gnd, { x: pos.x - 250, y: pos.y - 1400 });
+  const ddFdCbOpAdv = buildOr(parent, { x: pos.x - 250, y: pos.y - 1400 });
   tieToLabel('DDCB_OP_ADVANCE_NOW', ddFdCbOpAdv.a, { x: pos.x - 350, y: pos.y - 1400 });
   tieToLabel('FDCB_OP_ADVANCE_NOW', ddFdCbOpAdv.b, { x: pos.x - 350, y: pos.y - 1420 });
-  const ddFdHl8ImmAdv = buildOr(parent, vcc, gnd, { x: pos.x - 250, y: pos.y - 1440 });
+  const ddFdHl8ImmAdv = buildOr(parent, { x: pos.x - 250, y: pos.y - 1440 });
   tieToLabel('DDIX_HL8_IMM_ADVANCE_NOW', ddFdHl8ImmAdv.a, { x: pos.x - 350, y: pos.y - 1440 });
   tieToLabel('FDIY_HL8_IMM_ADVANCE_NOW', ddFdHl8ImmAdv.b, { x: pos.x - 350, y: pos.y - 1460 });
-  const ddFdPcAdvAny = buildOr(parent, vcc, gnd, { x: pos.x - 200, y: pos.y - 1340 });
+  const ddFdPcAdvAny = buildOr(parent, { x: pos.x - 200, y: pos.y - 1340 });
   wire(parent, ddFdDispAdv.out, ddFdPcAdvAny.a);
   wire(parent, ddFdMemLdNAdv.out, ddFdPcAdvAny.b);
-  const ddFdPcAdvAny2 = buildOr(parent, vcc, gnd, { x: pos.x - 150, y: pos.y - 1360 });
+  const ddFdPcAdvAny2 = buildOr(parent, { x: pos.x - 150, y: pos.y - 1360 });
   wire(parent, ddFdPcAdvAny.out, ddFdPcAdvAny2.a);
   wire(parent, ddFdCbOpAdv.out, ddFdPcAdvAny2.b);
-  const ddFdPcAdvAny3 = buildOr(parent, vcc, gnd, { x: pos.x - 100, y: pos.y - 1380 });
+  const ddFdPcAdvAny3 = buildOr(parent, { x: pos.x - 100, y: pos.y - 1380 });
   wire(parent, ddFdPcAdvAny2.out, ddFdPcAdvAny3.a);
   wire(parent, ddFdHl8ImmAdv.out, ddFdPcAdvAny3.b);
-  const pcHoldFinal8 = buildOr(parent, vcc, gnd, { x: pos.x - 300, y: pos.y - 1350 });
+  const pcHoldFinal8 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1350 });
   wire(parent, pcHoldFinal7.out, pcHoldFinal8.a);
   wire(parent, ddFdPcAdvAny3.out, pcHoldFinal8.b);
-  const notPhase1 = buildNot(parent, vcc, gnd, { x: pos.x - 200, y: pos.y - 200 });
+  const notPhase1 = buildNot(parent, { x: pos.x - 200, y: pos.y - 200 });
   wire(parent, pcHoldFinal8.out, notPhase1.in);
   wire(parent, notPhase1.out, pc.load);
 
@@ -8071,7 +8071,7 @@ export function buildZ80Cpu(
   // simpler here, since nothing else ever seeds `jpTarget`, so it needs
   // no outer "external seed vs fresh" layer, just the low/high split.
   const jpTarget = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 1800 });
-  const jpTargetWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 2100 });
+  const jpTargetWe = buildOr(parent, { x: pos.x - 700, y: pos.y - 2100 });
   tieToLabel('JP_READ_LOW_NOW', jpTargetWe.a, { x: pos.x - 800, y: pos.y - 2100 });
   tieToLabel('JP_READ_HIGH_NOW', jpTargetWe.b, { x: pos.x - 800, y: pos.y - 2070 });
   wire(parent, jpTargetWe.out, jpTarget.we);
@@ -8098,7 +8098,7 @@ export function buildZ80Cpu(
   // (separate `spAdder`-style adders over one shared, muxed one) wherever
   // the two costs trade off. Identical per-bit "hold vs fresh" shape.
   const callTarget = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 2700 });
-  const callTargetWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 3000 });
+  const callTargetWe = buildOr(parent, { x: pos.x - 700, y: pos.y - 3000 });
   tieToLabel('CALL_READ_LOW_NOW', callTargetWe.a, { x: pos.x - 800, y: pos.y - 3000 });
   tieToLabel('CALL_READ_HIGH_NOW', callTargetWe.b, { x: pos.x - 800, y: pos.y - 2970 });
   wire(parent, callTargetWe.out, callTarget.we);
@@ -8119,7 +8119,7 @@ export function buildZ80Cpu(
   // JP cc,nn's own target (see "x=11: JP cc,nn" above) — a *third*
   // separate holding register, same shape as `jpTarget`/`callTarget`.
   const jpCcTarget = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 3700 });
-  const jpCcTargetWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 4000 });
+  const jpCcTargetWe = buildOr(parent, { x: pos.x - 700, y: pos.y - 4000 });
   tieToLabel('JPCC_READ_LOW_NOW', jpCcTargetWe.a, { x: pos.x - 800, y: pos.y - 4000 });
   tieToLabel('JPCC_READ_HIGH_NOW', jpCcTargetWe.b, { x: pos.x - 800, y: pos.y - 3970 });
   wire(parent, jpCcTargetWe.out, jpCcTarget.we);
@@ -8141,7 +8141,7 @@ export function buildZ80Cpu(
   // separate holding register, same shape as `jpTarget`/`callTarget`/
   // `jpCcTarget`.
   const callCcTarget = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 4600 });
-  const callCcTargetWe = buildOr(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 4900 });
+  const callCcTargetWe = buildOr(parent, { x: pos.x - 700, y: pos.y - 4900 });
   tieToLabel('CALLCC_READ_LOW_NOW', callCcTargetWe.a, { x: pos.x - 800, y: pos.y - 4900 });
   tieToLabel('CALLCC_READ_HIGH_NOW', callCcTargetWe.b, { x: pos.x - 800, y: pos.y - 4870 });
   wire(parent, callCcTargetWe.out, callCcTarget.we);
@@ -8327,7 +8327,7 @@ export function buildZ80Cpu(
   ];
   sources.forEach((src, si) => {
     // Widen with DD/FD LD (IX+d),r write — ldGroupNow is dead under prefix.
-    const ddFdWriteSrc = buildOr(parent, vcc5, gnd5, { x: pos.x + 9850, y: pos.y - 500 + si * 150 });
+    const ddFdWriteSrc = buildOr(parent, { x: pos.x + 9850, y: pos.y - 500 + si * 150 });
     tieToLabel('DDMEMLD_WRITE_NOW', ddFdWriteSrc.a, { x: pos.x + 9750, y: pos.y - 500 + si * 150 });
     tieToLabel('FDMEMLD_WRITE_NOW', ddFdWriteSrc.b, { x: pos.x + 9750, y: pos.y - 480 + si * 150 });
     // DD/FD HL8 LD: B/C/D/E/A still come from real regs; H/L remapped via
@@ -8336,18 +8336,18 @@ export function buildZ80Cpu(
     let srcActiveA: Pin = groupActive.out;
     let srcActiveB: Pin = ddFdWriteSrc.out;
     if (!isHlReg) {
-      const ddFdHl8LdSrc = buildOr(parent, vcc5, gnd5, { x: pos.x + 9820, y: pos.y - 490 + si * 150 });
+      const ddFdHl8LdSrc = buildOr(parent, { x: pos.x + 9820, y: pos.y - 490 + si * 150 });
       tieToLabel('DDIX_HL8_LD_NOW', ddFdHl8LdSrc.a, { x: pos.x + 9720, y: pos.y - 490 + si * 150 });
       tieToLabel('FDIY_HL8_LD_NOW', ddFdHl8LdSrc.b, { x: pos.x + 9720, y: pos.y - 470 + si * 150 });
-      const srcWiden = buildOr(parent, vcc5, gnd5, { x: pos.x + 9860, y: pos.y - 480 + si * 150 });
+      const srcWiden = buildOr(parent, { x: pos.x + 9860, y: pos.y - 480 + si * 150 });
       wire(parent, ddFdWriteSrc.out, srcWiden.a);
       wire(parent, ddFdHl8LdSrc.out, srcWiden.b);
       srcActiveB = srcWiden.out;
     }
-    const srcActive = buildOr(parent, vcc5, gnd5, { x: pos.x + 9880, y: pos.y - 490 + si * 150 });
+    const srcActive = buildOr(parent, { x: pos.x + 9880, y: pos.y - 490 + si * 150 });
     wire(parent, srcActiveA, srcActive.a);
     wire(parent, srcActiveB, srcActive.b);
-    const enable = buildAnd(parent, vcc5, gnd5, { x: pos.x + 9900, y: pos.y - 500 + si * 150 });
+    const enable = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 500 + si * 150 });
     wire(parent, srcActive.out, enable.a);
     wire(parent, src.z, enable.b);
     for (let i = 0; i < 8; i++) {
@@ -8389,15 +8389,15 @@ export function buildZ80Cpu(
   // excludes pushHighNow (not bare phase3) for the identical ring-counter-
   // transient reason "A real Z80 decoder"'s ramOe fix documents — see the
   // doc comment above ("A bus-fight this design deliberately avoids").
-  const pushHighNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10500, y: pos.y + 650 });
+  const pushHighNow = buildAnd(parent, { x: pos.x + 10500, y: pos.y + 650 });
   wire(parent, isPush.out, pushHighNow.a);
   tieToLabel('PHASE2', pushHighNow.b, { x: pos.x + 10400, y: pos.y + 650 });
-  const notPushHighNow = buildNot(parent, vcc5, gnd5, { x: pos.x + 10600, y: pos.y + 700 });
+  const notPushHighNow = buildNot(parent, { x: pos.x + 10600, y: pos.y + 700 });
   wire(parent, pushHighNow.out, notPushHighNow.in);
-  const pushLowStage = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10500, y: pos.y + 750 });
+  const pushLowStage = buildAnd(parent, { x: pos.x + 10500, y: pos.y + 750 });
   wire(parent, isPush.out, pushLowStage.a);
   tieToLabel('PHASE3', pushLowStage.b, { x: pos.x + 10400, y: pos.y + 750 });
-  const pushLowNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10600, y: pos.y + 750 });
+  const pushLowNow = buildAnd(parent, { x: pos.x + 10600, y: pos.y + 750 });
   wire(parent, pushLowStage.out, pushLowNow.a);
   wire(parent, notPushHighNow.out, pushLowNow.b);
 
@@ -8408,7 +8408,7 @@ export function buildZ80Cpu(
     { highName: 'REGA', lowName: 'REGF', y: dec.y[6]! },
   ];
   pushPairs.forEach((pair, pi) => {
-    const highEnable = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10800, y: pos.y + 600 + pi * 150 });
+    const highEnable = buildAnd(parent, { x: pos.x + 10800, y: pos.y + 600 + pi * 150 });
     wire(parent, pushHighNow.out, highEnable.a);
     wire(parent, pair.y, highEnable.b);
     for (let i = 0; i < 8; i++) {
@@ -8418,7 +8418,7 @@ export function buildZ80Cpu(
       tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 600 + pi * 150 + i * 20 });
     }
 
-    const lowEnable = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10800, y: pos.y + 1250 + pi * 150 });
+    const lowEnable = buildAnd(parent, { x: pos.x + 10800, y: pos.y + 1250 + pi * 150 });
     wire(parent, pushLowNow.out, lowEnable.a);
     wire(parent, pair.y, lowEnable.b);
     for (let i = 0; i < 8; i++) {
@@ -8503,10 +8503,10 @@ export function buildZ80Cpu(
   // identical tri-state-buffer-bank shape every other bus source in this
   // file already uses, reading `REGA`/`REGL`/`REGH`'s own already-anchored
   // labels rather than a ~11000-unit wire back to the registers themselves.
-  const isAToBusNowStage = buildOr(parent, vcc5, gnd5, { x: pos.x + 10900, y: pos.y + 3350 });
+  const isAToBusNowStage = buildOr(parent, { x: pos.x + 10900, y: pos.y + 3350 });
   tieToLabel('LDBCA_NOW', isAToBusNowStage.a, { x: pos.x + 10800, y: pos.y + 3350 });
   tieToLabel('LDDEA_NOW', isAToBusNowStage.b, { x: pos.x + 10800, y: pos.y + 3380 });
-  const isAToBusNow = buildOr(parent, vcc5, gnd5, { x: pos.x + 10950, y: pos.y + 3400 });
+  const isAToBusNow = buildOr(parent, { x: pos.x + 10950, y: pos.y + 3400 });
   wire(parent, isAToBusNowStage.out, isAToBusNow.a);
   tieToLabel('LDNNA_NOW', isAToBusNow.b, { x: pos.x + 10850, y: pos.y + 3400 });
   for (let i = 0; i < 8; i++) {
@@ -8572,10 +8572,10 @@ export function buildZ80Cpu(
 
   // INC (HL)/DEC (HL) and DD/FD INC/DEC (IX+d)/(IY+d) write-back data:
   // `R8RESULT0-7` driven onto the bus for RAM's own write.
-  const r8ResultDdFdEn = buildOr(parent, vcc3, gnd3, { x: pos.x + 10950, y: pos.y + 4900 });
+  const r8ResultDdFdEn = buildOr(parent, { x: pos.x + 10950, y: pos.y + 4900 });
   tieToLabel('DDMEM_INCDEC_WRITE_NOW', r8ResultDdFdEn.a, { x: pos.x + 10850, y: pos.y + 4900 });
   tieToLabel('FDMEM_INCDEC_WRITE_NOW', r8ResultDdFdEn.b, { x: pos.x + 10850, y: pos.y + 4920 });
-  const r8ResultBusEnAny = buildOr(parent, vcc3, gnd3, { x: pos.x + 11000, y: pos.y + 4890 });
+  const r8ResultBusEnAny = buildOr(parent, { x: pos.x + 11000, y: pos.y + 4890 });
   tieToLabel('INCDEC_HLMEM_NOW', r8ResultBusEnAny.a, { x: pos.x + 10850, y: pos.y + 4880 });
   wire(parent, r8ResultDdFdEn.out, r8ResultBusEnAny.b);
   tieToLabel('INCDEC_MEM_WRITE_ANY', r8ResultBusEnAny.out, { x: pos.x + 11100, y: pos.y + 4890 });
@@ -8629,10 +8629,10 @@ export function buildZ80Cpu(
   // sibling-exclusion trick pushLowNow needed: a mistimed WE during a
   // purely-combinational phaseClk transient can't corrupt anything, since
   // nothing commits until the (separately, non-overlapping) dataClk edge.
-  const popLowNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10500, y: pos.y + 900 });
+  const popLowNow = buildAnd(parent, { x: pos.x + 10500, y: pos.y + 900 });
   wire(parent, isPop.out, popLowNow.a);
   tieToLabel('PHASE2', popLowNow.b, { x: pos.x + 10400, y: pos.y + 900 });
-  const popHighNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 10500, y: pos.y + 950 });
+  const popHighNow = buildAnd(parent, { x: pos.x + 10500, y: pos.y + 950 });
   wire(parent, isPop.out, popHighNow.a);
   tieToLabel('PHASE3', popHighNow.b, { x: pos.x + 10400, y: pos.y + 950 });
 
@@ -8649,43 +8649,43 @@ export function buildZ80Cpu(
   // once a real carry flag existed, wiring them up turned out to be
   // exactly the "route C into cin" lift the doc comment already predicted,
   // no new adder or op-select needed.
-  const isSubtract = buildOr(parent, vcc2, gnd2, { x: pos.x + 2900, y: pos.y + 2100 });
+  const isSubtract = buildOr(parent, { x: pos.x + 2900, y: pos.y + 2100 });
   tieToLabel('DECY2', isSubtract.a, { x: pos.x + 2800, y: pos.y + 2100 });
   tieToLabel('DECY7', isSubtract.b, { x: pos.x + 2800, y: pos.y + 2130 });
   // SBC needs SUB's own operand-invert too — this OR is that shared
   // condition, reused below for `bInv` and again for `N` (SBC sets N=1,
   // exactly like SUB/CP).
-  const isSubtractLike = buildOr(parent, vcc2, gnd2, { x: pos.x + 2950, y: pos.y + 2160 });
+  const isSubtractLike = buildOr(parent, { x: pos.x + 2950, y: pos.y + 2160 });
   wire(parent, isSubtract.out, isSubtractLike.a);
   tieToLabel('DECY3', isSubtractLike.b, { x: pos.x + 2850, y: pos.y + 2160 });
-  const aluOp0 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3000, y: pos.y + 2200 });
+  const aluOp0 = buildOr(parent, { x: pos.x + 3000, y: pos.y + 2200 });
   tieToLabel('DECY4', aluOp0.a, { x: pos.x + 2900, y: pos.y + 2200 });
   tieToLabel('DECY5', aluOp0.b, { x: pos.x + 2900, y: pos.y + 2230 });
   wire(parent, aluOp0.out, alu.op0);
-  const aluOp1 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3000, y: pos.y + 2400 });
+  const aluOp1 = buildOr(parent, { x: pos.x + 3000, y: pos.y + 2400 });
   tieToLabel('DECY6', aluOp1.a, { x: pos.x + 2900, y: pos.y + 2400 });
   tieToLabel('DECY5', aluOp1.b, { x: pos.x + 2900, y: pos.y + 2430 });
   wire(parent, aluOp1.out, alu.op1);
   // cin: 0 for ADD/AND/XOR/OR (none of the three terms below fire), the
   // old C for ADC, 1 for SUB/CP, the old C inverted for SBC.
-  const adcCin = buildAnd(parent, vcc2, gnd2, { x: pos.x + 2950, y: pos.y + 2250 });
+  const adcCin = buildAnd(parent, { x: pos.x + 2950, y: pos.y + 2250 });
   tieToLabel('DECY1', adcCin.a, { x: pos.x + 2850, y: pos.y + 2250 });
   wire(parent, f.q[0]!, adcCin.b);
-  const notOldCForSbc = buildNot(parent, vcc2, gnd2, { x: pos.x + 2950, y: pos.y + 2270 });
+  const notOldCForSbc = buildNot(parent, { x: pos.x + 2950, y: pos.y + 2270 });
   wire(parent, f.q[0]!, notOldCForSbc.in);
-  const sbcCin = buildAnd(parent, vcc2, gnd2, { x: pos.x + 3000, y: pos.y + 2280 });
+  const sbcCin = buildAnd(parent, { x: pos.x + 3000, y: pos.y + 2280 });
   tieToLabel('DECY3', sbcCin.a, { x: pos.x + 2900, y: pos.y + 2280 });
   wire(parent, notOldCForSbc.out, sbcCin.b);
-  const cinStage = buildOr(parent, vcc2, gnd2, { x: pos.x + 3050, y: pos.y + 2260 });
+  const cinStage = buildOr(parent, { x: pos.x + 3050, y: pos.y + 2260 });
   wire(parent, adcCin.out, cinStage.a);
   wire(parent, isSubtract.out, cinStage.b);
-  const cinFinal = buildOr(parent, vcc2, gnd2, { x: pos.x + 3100, y: pos.y + 2265 });
+  const cinFinal = buildOr(parent, { x: pos.x + 3100, y: pos.y + 2265 });
   wire(parent, cinStage.out, cinFinal.a);
   wire(parent, sbcCin.out, cinFinal.b);
   wire(parent, cinFinal.out, alu.cin);
   a.q.forEach((q, i) => wire(parent, q, alu.a[i]!));
   for (let i = 0; i < 8; i++) {
-    const bInv = buildXor(parent, vcc2, gnd2, { x: pos.x + 3200, y: pos.y + 2600 + i * 150 });
+    const bInv = buildXor(parent, { x: pos.x + 3200, y: pos.y + 2600 + i * 150 });
     tieToLabel(`BUS${i}`, bInv.a, { x: pos.x + 3100, y: pos.y + 2600 + i * 150 });
     wire(parent, isSubtractLike.out, bInv.b);
     wire(parent, bInv.out, alu.b[i]!);
@@ -8694,33 +8694,33 @@ export function buildZ80Cpu(
   // A writes for all 7 operations this slice now executes (ADD/ADC/SUB/
   // SBC/AND/XOR/OR) — CP (y=7) is deliberately excluded here, unlike
   // isSubtract/isSubtractLike above.
-  const weOr1 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3600, y: pos.y + 1900 });
+  const weOr1 = buildOr(parent, { x: pos.x + 3600, y: pos.y + 1900 });
   tieToLabel('DECY0', weOr1.a, { x: pos.x + 3500, y: pos.y + 1900 });
   tieToLabel('DECY2', weOr1.b, { x: pos.x + 3500, y: pos.y + 1930 });
-  const weOr2 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3600, y: pos.y + 2000 });
+  const weOr2 = buildOr(parent, { x: pos.x + 3600, y: pos.y + 2000 });
   tieToLabel('DECY4', weOr2.a, { x: pos.x + 3500, y: pos.y + 2000 });
   tieToLabel('DECY5', weOr2.b, { x: pos.x + 3500, y: pos.y + 2030 });
-  const weOr3 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3800, y: pos.y + 1950 });
+  const weOr3 = buildOr(parent, { x: pos.x + 3800, y: pos.y + 1950 });
   wire(parent, weOr1.out, weOr3.a);
   wire(parent, weOr2.out, weOr3.b);
   // ADC/SBC (y=1/y=3) — a fourth OR term, the two new arithmetic ops this
   // group actually executes now.
-  const weOr4 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3700, y: pos.y + 1970 });
+  const weOr4 = buildOr(parent, { x: pos.x + 3700, y: pos.y + 1970 });
   tieToLabel('DECY1', weOr4.a, { x: pos.x + 3600, y: pos.y + 1970 });
   tieToLabel('DECY3', weOr4.b, { x: pos.x + 3600, y: pos.y + 1990 });
-  const weOr5 = buildOr(parent, vcc2, gnd2, { x: pos.x + 3900, y: pos.y + 1960 });
+  const weOr5 = buildOr(parent, { x: pos.x + 3900, y: pos.y + 1960 });
   wire(parent, weOr3.out, weOr5.a);
   wire(parent, weOr4.out, weOr5.b);
-  const weRaw = buildOr(parent, vcc2, gnd2, { x: pos.x + 4000, y: pos.y + 1950 });
+  const weRaw = buildOr(parent, { x: pos.x + 4000, y: pos.y + 1950 });
   wire(parent, weOr5.out, weRaw.a);
   tieToLabel('DECY6', weRaw.b, { x: pos.x + 3900, y: pos.y + 1950 });
-  const aWe = buildAnd(parent, vcc2, gnd2, { x: pos.x + 4200, y: pos.y + 1950 });
+  const aWe = buildAnd(parent, { x: pos.x + 4200, y: pos.y + 1950 });
   wire(parent, aluAnyGroupNow.out, aWe.a); // x=10's own ALU-on-register, or x=11's own ALU op A,n — see "x=11: ALU op A,n" above
   wire(parent, weRaw.out, aWe.b);
 
   // Flags (F) — see the doc comment above for the derivation of every bit.
   // Computed for the same 7 ops weRaw covers, plus CP (y=7).
-  const cRaw = buildXor(parent, vcc2, gnd2, { x: pos.x + 3400, y: pos.y + 3200 });
+  const cRaw = buildXor(parent, { x: pos.x + 3400, y: pos.y + 3200 });
   wire(parent, alu.cout, cRaw.a);
   wire(parent, isSubtractLike.out, cRaw.b);
   // C is meaningful for the 4 real arithmetic ops (ADD/ADC/SUB/SBC) plus
@@ -8728,13 +8728,13 @@ export function buildZ80Cpu(
   // Z80 behavior), same as before ADC/SBC existed, just widened by one
   // more OR term (`DECY1`, ADC) beyond what `isSubtractLike` already covers
   // for SBC.
-  const cIsArithStage = buildOr(parent, vcc2, gnd2, { x: pos.x + 3400, y: pos.y + 3280 });
+  const cIsArithStage = buildOr(parent, { x: pos.x + 3400, y: pos.y + 3280 });
   tieToLabel('DECY0', cIsArithStage.a, { x: pos.x + 3300, y: pos.y + 3280 });
   tieToLabel('DECY1', cIsArithStage.b, { x: pos.x + 3300, y: pos.y + 3300 });
-  const cIsArith = buildOr(parent, vcc2, gnd2, { x: pos.x + 3400, y: pos.y + 3320 });
+  const cIsArith = buildOr(parent, { x: pos.x + 3400, y: pos.y + 3320 });
   wire(parent, cIsArithStage.out, cIsArith.a);
   wire(parent, isSubtractLike.out, cIsArith.b);
-  const cBit = buildAnd(parent, vcc2, gnd2, { x: pos.x + 3500, y: pos.y + 3250 });
+  const cBit = buildAnd(parent, { x: pos.x + 3500, y: pos.y + 3250 });
   wire(parent, cRaw.out, cBit.a);
   wire(parent, cIsArith.out, cBit.b);
 
@@ -8752,13 +8752,13 @@ export function buildZ80Cpu(
   // into the final bit covers the H=1 case with no extra gating needed —
   // OR/XOR's own `hArithBit` term is already 0 (neither fires `cIsArith`),
   // so the OR alone yields 0 for them, correctly, same as C.
-  const hRaw = buildXor(parent, vcc2, gnd2, { x: pos.x + 3450, y: pos.y + 3260 });
+  const hRaw = buildXor(parent, { x: pos.x + 3450, y: pos.y + 3260 });
   wire(parent, alu.carries[3]!, hRaw.a);
   wire(parent, isSubtractLike.out, hRaw.b);
-  const hArithBit = buildAnd(parent, vcc2, gnd2, { x: pos.x + 3550, y: pos.y + 3260 });
+  const hArithBit = buildAnd(parent, { x: pos.x + 3550, y: pos.y + 3260 });
   wire(parent, hRaw.out, hArithBit.a);
   wire(parent, cIsArith.out, hArithBit.b);
-  const hBit = buildOr(parent, vcc2, gnd2, { x: pos.x + 3600, y: pos.y + 3260 });
+  const hBit = buildOr(parent, { x: pos.x + 3600, y: pos.y + 3260 });
   wire(parent, hArithBit.out, hBit.a);
   tieToLabel('DECY4', hBit.b, { x: pos.x + 3500, y: pos.y + 3260 });
 
@@ -8774,22 +8774,22 @@ export function buildZ80Cpu(
 
   let zChain: Pin = alu.out[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc2, gnd2, { x: pos.x + 3600, y: pos.y + 3400 + i * 100 });
+    const orGate = buildOr(parent, { x: pos.x + 3600, y: pos.y + 3400 + i * 100 });
     wire(parent, zChain, orGate.a);
     wire(parent, alu.out[i]!, orGate.b);
     zChain = orGate.out;
   }
-  const zBit = buildNot(parent, vcc2, gnd2, { x: pos.x + 3700, y: pos.y + 4200 });
+  const zBit = buildNot(parent, { x: pos.x + 3700, y: pos.y + 4200 });
   wire(parent, zChain, zBit.in);
 
   let pChain: Pin = alu.out[0]!;
   for (let i = 1; i < 8; i++) {
-    const xorGate = buildXor(parent, vcc2, gnd2, { x: pos.x + 3800, y: pos.y + 3400 + i * 100 });
+    const xorGate = buildXor(parent, { x: pos.x + 3800, y: pos.y + 3400 + i * 100 });
     wire(parent, pChain, xorGate.a);
     wire(parent, alu.out[i]!, xorGate.b);
     pChain = xorGate.out;
   }
-  const pBit = buildNot(parent, vcc2, gnd2, { x: pos.x + 3900, y: pos.y + 4200 });
+  const pBit = buildNot(parent, { x: pos.x + 3900, y: pos.y + 4200 });
   wire(parent, pChain, pBit.in);
 
   // P/V is two different flags real Z80 crams into one bit, picked by
@@ -8808,7 +8808,7 @@ export function buildZ80Cpu(
   // alike (since `SUB`/`SBC`/`CP` are just `ADD` with the operand
   // inverted and `cin=1` here, the identical adder, the identical
   // formula holds unchanged).
-  const pvOverflow = buildXor(parent, vcc2, gnd2, { x: pos.x + 3950, y: pos.y + 4230 });
+  const pvOverflow = buildXor(parent, { x: pos.x + 3950, y: pos.y + 4230 });
   wire(parent, alu.carries[6]!, pvOverflow.a);
   wire(parent, alu.carries[7]!, pvOverflow.b);
   const pvMux = makeChipInstance(parent, muxDef, { x: pos.x + 4000, y: pos.y + 4240 });
@@ -8823,10 +8823,10 @@ export function buildZ80Cpu(
   // except for SBC itself now correctly setting it.
   const nBit = isSubtractLike.out;
 
-  const fWeRaw = buildOr(parent, vcc2, gnd2, { x: pos.x + 4000, y: pos.y + 4300 });
+  const fWeRaw = buildOr(parent, { x: pos.x + 4000, y: pos.y + 4300 });
   wire(parent, weRaw.out, fWeRaw.a);
   tieToLabel('DECY7', fWeRaw.b, { x: pos.x + 3900, y: pos.y + 4300 });
-  const fWe = buildAnd(parent, vcc2, gnd2, { x: pos.x + 4200, y: pos.y + 4300 });
+  const fWe = buildAnd(parent, { x: pos.x + 4200, y: pos.y + 4300 });
   wire(parent, aluAnyGroupNow.out, fWe.a); // x=10's own ALU-on-register, or x=11's own ALU op A,n — see "x=11: ALU op A,n" above
   wire(parent, fWeRaw.out, fWe.b);
 
@@ -8837,41 +8837,41 @@ export function buildZ80Cpu(
   // `ldWe` below — a third OR term, not a new mux — since the bus already
   // carries the right value (RAM, addressed by PC, driven by
   // LDIMM8_READ_NOW) by the time this fires.
-  const isLdA = buildAnd(parent, vcc2, gnd2, { x: pos.x + 4450, y: pos.y + 1750 });
+  const isLdA = buildAnd(parent, { x: pos.x + 4450, y: pos.y + 1750 });
   wire(parent, ldGroupNow.out, isLdA.a);
   tieToLabel('DECY7', isLdA.b, { x: pos.x + 4350, y: pos.y + 1750 });
-  const isPopA = buildAnd(parent, vcc2, gnd2, { x: pos.x + 4450, y: pos.y + 1650 });
+  const isPopA = buildAnd(parent, { x: pos.x + 4450, y: pos.y + 1650 });
   wire(parent, popHighNow.out, isPopA.a);
   tieToLabel('DECY6', isPopA.b, { x: pos.x + 4350, y: pos.y + 1650 }); // AF pair
-  const isBusToAStage = buildOr(parent, vcc2, gnd2, { x: pos.x + 4460, y: pos.y + 1690 });
+  const isBusToAStage = buildOr(parent, { x: pos.x + 4460, y: pos.y + 1690 });
   wire(parent, isLdA.out, isBusToAStage.a);
   wire(parent, isPopA.out, isBusToAStage.b);
-  const isBusToAStage2 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4470, y: pos.y + 1700 });
+  const isBusToAStage2 = buildOr(parent, { x: pos.x + 4470, y: pos.y + 1700 });
   wire(parent, isBusToAStage.out, isBusToAStage2.a);
   tieToLabel('LDIMM8_A_NOW', isBusToAStage2.b, { x: pos.x + 4370, y: pos.y + 1700 });
   // The indirect-load group's own three reads into A (see "x=00: indirect
   // loads through (BC)/(DE)/(nn)" above) — a fourth OR term, the identical
   // widen-not-replace shape every competing source for `A` in this file
   // already gets.
-  const isBusToA = buildOr(parent, vcc2, gnd2, { x: pos.x + 4480, y: pos.y + 1710 });
+  const isBusToA = buildOr(parent, { x: pos.x + 4480, y: pos.y + 1710 });
   wire(parent, isBusToAStage2.out, isBusToA.a);
-  const isLdABcOrDeOrNn1 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4380, y: pos.y + 1710 });
+  const isLdABcOrDeOrNn1 = buildOr(parent, { x: pos.x + 4380, y: pos.y + 1710 });
   tieToLabel('LDABC_NOW', isLdABcOrDeOrNn1.a, { x: pos.x + 4280, y: pos.y + 1710 });
   tieToLabel('LDADE_NOW', isLdABcOrDeOrNn1.b, { x: pos.x + 4280, y: pos.y + 1740 });
-  const isLdABcOrDeOrNn = buildOr(parent, vcc2, gnd2, { x: pos.x + 4390, y: pos.y + 1720 });
+  const isLdABcOrDeOrNn = buildOr(parent, { x: pos.x + 4390, y: pos.y + 1720 });
   wire(parent, isLdABcOrDeOrNn1.out, isLdABcOrDeOrNn.a);
   tieToLabel('LDANN_NOW', isLdABcOrDeOrNn.b, { x: pos.x + 4290, y: pos.y + 1720 });
   // DD/FD LD A,(IX+d)/(IY+d) + LD A,IXH/IXL/IYH/IYL — bus write-back.
-  const isDdFdMemLdA = buildOr(parent, vcc2, gnd2, { x: pos.x + 4395, y: pos.y + 1730 });
+  const isDdFdMemLdA = buildOr(parent, { x: pos.x + 4395, y: pos.y + 1730 });
   tieToLabel('DDMEMLD_WE_A_NOW', isDdFdMemLdA.a, { x: pos.x + 4295, y: pos.y + 1730 });
   tieToLabel('FDMEMLD_WE_A_NOW', isDdFdMemLdA.b, { x: pos.x + 4295, y: pos.y + 1750 });
-  const isDdFdHl8LdA = buildOr(parent, vcc2, gnd2, { x: pos.x + 4395, y: pos.y + 1750 });
+  const isDdFdHl8LdA = buildOr(parent, { x: pos.x + 4395, y: pos.y + 1750 });
   tieToLabel('DDIX_HL8_WE_A_NOW', isDdFdHl8LdA.a, { x: pos.x + 4295, y: pos.y + 1750 });
   tieToLabel('FDIY_HL8_WE_A_NOW', isDdFdHl8LdA.b, { x: pos.x + 4295, y: pos.y + 1770 });
-  const isDdFdLdAAny = buildOr(parent, vcc2, gnd2, { x: pos.x + 4405, y: pos.y + 1740 });
+  const isDdFdLdAAny = buildOr(parent, { x: pos.x + 4405, y: pos.y + 1740 });
   wire(parent, isDdFdMemLdA.out, isDdFdLdAAny.a);
   wire(parent, isDdFdHl8LdA.out, isDdFdLdAAny.b);
-  const isBusToAExtra = buildOr(parent, vcc2, gnd2, { x: pos.x + 4400, y: pos.y + 1725 });
+  const isBusToAExtra = buildOr(parent, { x: pos.x + 4400, y: pos.y + 1725 });
   wire(parent, isLdABcOrDeOrNn.out, isBusToAExtra.a);
   wire(parent, isDdFdLdAAny.out, isBusToAExtra.b);
   wire(parent, isBusToAExtra.out, isBusToA.b);
@@ -9013,16 +9013,16 @@ export function buildZ80Cpu(
     tiePowerRail(parent, 'GND', resetMux.pins[muxDef.ports[2]!]!); // in1: reset — force 0
     wire(parent, resetMux.pins[muxDef.ports[3]!]!, a.d[i]!);
   }
-  const aWeStage = buildOr(parent, vcc2, gnd2, { x: pos.x + 4300, y: pos.y + 1950 });
+  const aWeStage = buildOr(parent, { x: pos.x + 4300, y: pos.y + 1950 });
   wire(parent, aWe.out, aWeStage.a);
   wire(parent, isBusToA.out, aWeStage.b);
-  const aWeStage2 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4350, y: pos.y + 1950 });
+  const aWeStage2 = buildOr(parent, { x: pos.x + 4350, y: pos.y + 1950 });
   wire(parent, aWeStage.out, aWeStage2.a);
   tieToLabel('INCDEC_A_NOW', aWeStage2.b, { x: pos.x + 4250, y: pos.y + 1950 });
   // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) needs
   // `A`'s own `we` too — a fourth OR term, the identical shape every other
   // competing writer of `A` in this file already gets.
-  const aWeStageDaa = buildOr(parent, vcc2, gnd2, { x: pos.x + 4370, y: pos.y + 1950 });
+  const aWeStageDaa = buildOr(parent, { x: pos.x + 4370, y: pos.y + 1950 });
   wire(parent, aWeStage2.out, aWeStageDaa.a);
   tieToLabel('DAA_NOW', aWeStageDaa.b, { x: pos.x + 4270, y: pos.y + 1950 });
   // RLCA/RRCA/RLA/RRA/CPL (x=00, z=7 — see the doc comment above) need
@@ -9030,43 +9030,43 @@ export function buildZ80Cpu(
   // C-bit write uses on `F`'s `we` below — SCF/CCF never assert
   // `ROTACC_A_NOW` (neither one ever writes `A`), so this term alone is
   // enough for all five of the ops that do.
-  const aWeStage3 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4380, y: pos.y + 1950 });
+  const aWeStage3 = buildOr(parent, { x: pos.x + 4380, y: pos.y + 1950 });
   wire(parent, aWeStageDaa.out, aWeStage3.a);
   tieToLabel('ROTACC_A_NOW', aWeStage3.b, { x: pos.x + 4280, y: pos.y + 1950 });
   // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) needs `A`'s
   // own `we` too — a fifth OR term, the identical shape every earlier
   // competing writer of `A` already gets.
-  const aWeStage4 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4390, y: pos.y + 1950 });
+  const aWeStage4 = buildOr(parent, { x: pos.x + 4390, y: pos.y + 1950 });
   wire(parent, aWeStage3.out, aWeStage4.a);
   tieToLabel('EX_AFAF_NOW', aWeStage4.b, { x: pos.x + 4290, y: pos.y + 1950 });
   // IN A,(n) (x=11, z=3, y=3 — see "x=11: IN A,(n) / OUT (n),A" above)
   // needs `A`'s own `we` too — a sixth OR term.
-  const aWeStage5 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4395, y: pos.y + 1950 });
+  const aWeStage5 = buildOr(parent, { x: pos.x + 4395, y: pos.y + 1950 });
   wire(parent, aWeStage4.out, aWeStage5.a);
   tieToLabel('IN_NOW', aWeStage5.b, { x: pos.x + 4295, y: pos.y + 1950 });
   // NEG (see "x=00, z=4: NEG" above) needs `A`'s own `we` too — a
   // seventh OR term.
-  const aWeStage6 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4398, y: pos.y + 1950 });
+  const aWeStage6 = buildOr(parent, { x: pos.x + 4398, y: pos.y + 1950 });
   wire(parent, aWeStage5.out, aWeStage6.a);
   tieToLabel('NEG_NOW', aWeStage6.b, { x: pos.x + 4298, y: pos.y + 1950 });
   // RRD/RLD (see "x=01, z=7: RRD/RLD" above) needs `A`'s own `we` too —
   // an eighth OR term.
-  const aWeStage7 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4399, y: pos.y + 1950 });
+  const aWeStage7 = buildOr(parent, { x: pos.x + 4399, y: pos.y + 1950 });
   wire(parent, aWeStage6.out, aWeStage7.a);
   tieToLabel('RRDRLD_COMMIT_NOW', aWeStage7.b, { x: pos.x + 4299, y: pos.y + 1950 });
-  const aWeStage8 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4401, y: pos.y + 1950 });
+  const aWeStage8 = buildOr(parent, { x: pos.x + 4401, y: pos.y + 1950 });
   wire(parent, aWeStage7.out, aWeStage8.a);
   tieToLabel('INRC_WE_A_NOW', aWeStage8.b, { x: pos.x + 4301, y: pos.y + 1950 });
-  const aWeStage9 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4402, y: pos.y + 1950 });
+  const aWeStage9 = buildOr(parent, { x: pos.x + 4402, y: pos.y + 1950 });
   wire(parent, aWeStage8.out, aWeStage9.a);
   tieToLabel('LDAIR_NOW', aWeStage9.b, { x: pos.x + 4302, y: pos.y + 1950 });
-  const aWeStage10 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4403, y: pos.y + 1950 });
+  const aWeStage10 = buildOr(parent, { x: pos.x + 4403, y: pos.y + 1950 });
   wire(parent, aWeStage9.out, aWeStage10.a);
   tieToLabel('SETRES_WE_A_NOW', aWeStage10.b, { x: pos.x + 4303, y: pos.y + 1950 });
-  const aWeStage11 = buildOr(parent, vcc2, gnd2, { x: pos.x + 4403.5, y: pos.y + 1950 });
+  const aWeStage11 = buildOr(parent, { x: pos.x + 4403.5, y: pos.y + 1950 });
   wire(parent, aWeStage10.out, aWeStage11.a);
   tieToLabel('CBROT_WE_A_NOW', aWeStage11.b, { x: pos.x + 4303.5, y: pos.y + 1950 });
-  const aWeFinal = buildOr(parent, vcc2, gnd2, { x: pos.x + 4404, y: pos.y + 1950 });
+  const aWeFinal = buildOr(parent, { x: pos.x + 4404, y: pos.y + 1950 });
   wire(parent, aWeStage11.out, aWeFinal.a);
   wire(parent, aReset, aWeFinal.b);
   wire(parent, aWeFinal.out, a.we);
@@ -9090,47 +9090,47 @@ export function buildZ80Cpu(
     { reg: rL, ldY: dec.y[5]!, popPhase: popLowNow, popY: dec.y[4]!, ldImm8Label: 'LDIMM8_L_NOW', ldDdNnLabel: 'LDDDNN_LOW_L_NOW', edNnWeLabel: 'EDNN_WE_L_NOW', inRcWeLabel: 'INRC_WE_L_NOW', setResWeLabel: 'SETRES_WE_L_NOW', cbRotWeLabel: 'CBROT_WE_L_NOW', ddMemLdWeLabel: 'DDMEMLD_WE_L_NOW', fdMemLdWeLabel: 'FDMEMLD_WE_L_NOW' },
   ];
   const ldExternal = ldDestSpecs.map(({ reg, ldY, popPhase, popY, ldImm8Label, ldDdNnLabel, edNnWeLabel, inRcWeLabel, setResWeLabel, cbRotWeLabel, ddMemLdWeLabel, fdMemLdWeLabel, ddHl8WeLabel, fdHl8WeLabel }, ri) => {
-    const ldWeRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11000, y: pos.y - 500 + ri * 300 });
+    const ldWeRaw = buildAnd(parent, { x: pos.x + 11000, y: pos.y - 500 + ri * 300 });
     wire(parent, ldGroupNow.out, ldWeRaw.a);
     wire(parent, ldY, ldWeRaw.b);
-    const popWeRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11000, y: pos.y - 450 + ri * 300 });
+    const popWeRaw = buildAnd(parent, { x: pos.x + 11000, y: pos.y - 450 + ri * 300 });
     wire(parent, popPhase.out, popWeRaw.a);
     wire(parent, popY, popWeRaw.b);
-    const ldWeStage = buildOr(parent, vcc5, gnd5, { x: pos.x + 11050, y: pos.y - 465 + ri * 300 });
+    const ldWeStage = buildOr(parent, { x: pos.x + 11050, y: pos.y - 465 + ri * 300 });
     wire(parent, ldWeRaw.out, ldWeStage.a);
     wire(parent, popWeRaw.out, ldWeStage.b);
-    const ldWeStage2 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11080, y: pos.y - 470 + ri * 300 });
+    const ldWeStage2 = buildOr(parent, { x: pos.x + 11080, y: pos.y - 470 + ri * 300 });
     wire(parent, ldWeStage.out, ldWeStage2.a);
     tieToLabel(ldImm8Label, ldWeStage2.b, { x: pos.x + 10950, y: pos.y - 470 + ri * 300 });
-    const ldWeStage3 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11100, y: pos.y - 475 + ri * 300 });
+    const ldWeStage3 = buildOr(parent, { x: pos.x + 11100, y: pos.y - 475 + ri * 300 });
     wire(parent, ldWeStage2.out, ldWeStage3.a);
     tieToLabel(ldDdNnLabel, ldWeStage3.b, { x: pos.x + 11000, y: pos.y - 475 + ri * 300 });
-    const ldWeStage4 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11120, y: pos.y - 480 + ri * 300 });
+    const ldWeStage4 = buildOr(parent, { x: pos.x + 11120, y: pos.y - 480 + ri * 300 });
     wire(parent, ldWeStage3.out, ldWeStage4.a);
     tieToLabel(edNnWeLabel, ldWeStage4.b, { x: pos.x + 11020, y: pos.y - 480 + ri * 300 });
-    const ldWeStage5 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11140, y: pos.y - 485 + ri * 300 });
+    const ldWeStage5 = buildOr(parent, { x: pos.x + 11140, y: pos.y - 485 + ri * 300 });
     wire(parent, ldWeStage4.out, ldWeStage5.a);
     tieToLabel(inRcWeLabel, ldWeStage5.b, { x: pos.x + 11040, y: pos.y - 485 + ri * 300 });
-    const ldWeStage6 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11160, y: pos.y - 490 + ri * 300 });
+    const ldWeStage6 = buildOr(parent, { x: pos.x + 11160, y: pos.y - 490 + ri * 300 });
     wire(parent, ldWeStage5.out, ldWeStage6.a);
     tieToLabel(setResWeLabel, ldWeStage6.b, { x: pos.x + 11060, y: pos.y - 490 + ri * 300 });
-    const ldWeStage7 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11180, y: pos.y - 495 + ri * 300 });
+    const ldWeStage7 = buildOr(parent, { x: pos.x + 11180, y: pos.y - 495 + ri * 300 });
     wire(parent, ldWeStage6.out, ldWeStage7.a);
     tieToLabel(cbRotWeLabel, ldWeStage7.b, { x: pos.x + 11080, y: pos.y - 495 + ri * 300 });
     // DD/FD LD r,(IX+d)/(IY+d) — ninth/tenth sources (ldGroupNow dead under prefix).
-    const ddFdMemLdWe = buildOr(parent, vcc5, gnd5, { x: pos.x + 11190, y: pos.y - 498 + ri * 300 });
+    const ddFdMemLdWe = buildOr(parent, { x: pos.x + 11190, y: pos.y - 498 + ri * 300 });
     tieToLabel(ddMemLdWeLabel, ddFdMemLdWe.a, { x: pos.x + 11090, y: pos.y - 498 + ri * 300 });
     tieToLabel(fdMemLdWeLabel, ddFdMemLdWe.b, { x: pos.x + 11090, y: pos.y - 478 + ri * 300 });
-    const ldWeStage8 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11200, y: pos.y - 500 + ri * 300 });
+    const ldWeStage8 = buildOr(parent, { x: pos.x + 11200, y: pos.y - 500 + ri * 300 });
     wire(parent, ldWeStage7.out, ldWeStage8.a);
     wire(parent, ddFdMemLdWe.out, ldWeStage8.b);
     // DD/FD HL8 LD into B/C/D/E only — H/L remapped to IXH/IXL (never here).
     let ldWe: Pin = ldWeStage8.out;
     if (ddHl8WeLabel && fdHl8WeLabel) {
-      const ddFdHl8LdWe = buildOr(parent, vcc5, gnd5, { x: pos.x + 11210, y: pos.y - 502 + ri * 300 });
+      const ddFdHl8LdWe = buildOr(parent, { x: pos.x + 11210, y: pos.y - 502 + ri * 300 });
       tieToLabel(ddHl8WeLabel, ddFdHl8LdWe.a, { x: pos.x + 11110, y: pos.y - 502 + ri * 300 });
       tieToLabel(fdHl8WeLabel, ddFdHl8LdWe.b, { x: pos.x + 11110, y: pos.y - 482 + ri * 300 });
-      const ldWeStage9 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11220, y: pos.y - 504 + ri * 300 });
+      const ldWeStage9 = buildOr(parent, { x: pos.x + 11220, y: pos.y - 504 + ri * 300 });
       wire(parent, ldWeStage8.out, ldWeStage9.a);
       wire(parent, ddFdHl8LdWe.out, ldWeStage9.b);
       ldWe = ldWeStage9.out;
@@ -9156,7 +9156,7 @@ export function buildZ80Cpu(
       wire(parent, cbRotMux.pins[muxDef.ports[3]!]!, mux.pins[muxDef.ports[2]!]!);
       wire(parent, mux.pins[muxDef.ports[3]!]!, reg.d[i]!);
     }
-    const weOr = buildOr(parent, vcc5, gnd5, { x: pos.x + 11000, y: pos.y - 400 + ri * 300 });
+    const weOr = buildOr(parent, { x: pos.x + 11000, y: pos.y - 400 + ri * 300 });
     wire(parent, ldWe, weOr.a);
     wire(parent, weOr.out, reg.we);
 
@@ -9175,7 +9175,7 @@ export function buildZ80Cpu(
   // (ldExternal's `extD`/`weOr.b`) — driving into them, not reading them.
   const wrapWithPairCommit = (inner: Register, commitLabel: string, aluByteLabel: string, wrapPos: Point): Register => {
     const extD: Pin[] = [];
-    const weOr = buildOr(parent, vcc5, gnd5, { x: wrapPos.x, y: wrapPos.y + 850 });
+    const weOr = buildOr(parent, { x: wrapPos.x, y: wrapPos.y + 850 });
     tieToLabel(commitLabel, weOr.a, { x: wrapPos.x - 100, y: wrapPos.y + 850 });
     wire(parent, weOr.out, inner.we);
     for (let i = 0; i < 8; i++) {
@@ -9202,10 +9202,10 @@ export function buildZ80Cpu(
   // being committed is another register's old contents rather than an
   // adder's fresh output, and `aP`/`fP` are already plain `Register`s, no
   // wrapping needed to hand them in directly.
-  const isExAfAf = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 700 });
+  const isExAfAf = buildAnd(parent, { x: pos.x + 11500, y: pos.y - 700 });
   wire(parent, isX0Z0.out, isExAfAf.a);
   tieToLabel('DECY1', isExAfAf.b, { x: pos.x + 11400, y: pos.y - 700 });
-  const exAfAfNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 690 });
+  const exAfAfNow = buildAnd(parent, { x: pos.x + 11550, y: pos.y - 690 });
   wire(parent, isExAfAf.out, exAfAfNow.a);
   tieToLabel('PHASE2', exAfAfNow.b, { x: pos.x + 11450, y: pos.y - 690 });
   tieToLabel('EX_AFAF_NOW', exAfAfNow.out, { x: pos.x + 11600, y: pos.y - 690 }); // anchor — A's own write mux and F's own write mux (both far) read this
@@ -9260,7 +9260,7 @@ export function buildZ80Cpu(
   // Thin IRQ: IFF1/IFF2/IM1 write-back — seed path on the exposed Register,
   // internal commits via DI/EI/INT-accept/RETI/IM1_NOW. Mux priority for
   // IFF1: clear (DI|accept) > EI=1 > RETI←IFF2 > seed. IFF2 omits RETI.
-  const iff1Clear = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 900 });
+  const iff1Clear = buildOr(parent, { x: pos.x + 12100, y: pos.y - 900 });
   tieToLabel('DI_NOW', iff1Clear.a, { x: pos.x + 12000, y: pos.y - 900 });
   tieToLabel('INT_ACCEPT_NOW', iff1Clear.b, { x: pos.x + 12000, y: pos.y - 880 });
   const iff1RetiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 900 });
@@ -9276,22 +9276,22 @@ export function buildZ80Cpu(
   wire(parent, iff1EiMux.pins[muxDef.ports[3]!]!, iff1ClearMux.pins[muxDef.ports[1]!]!);
   tiePowerRail(parent, 'GND', iff1ClearMux.pins[muxDef.ports[2]!]!);
   wire(parent, iff1ClearMux.pins[muxDef.ports[3]!]!, iff1.d[0]!);
-  const iff1We1 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 820 });
+  const iff1We1 = buildOr(parent, { x: pos.x + 12100, y: pos.y - 820 });
   tieToLabel('DI_NOW', iff1We1.a, { x: pos.x + 12000, y: pos.y - 820 });
   tieToLabel('EI_NOW', iff1We1.b, { x: pos.x + 12000, y: pos.y - 800 });
-  const iff1We2 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12200, y: pos.y - 820 });
+  const iff1We2 = buildOr(parent, { x: pos.x + 12200, y: pos.y - 820 });
   wire(parent, iff1We1.out, iff1We2.a);
   tieToLabel('INT_ACCEPT_NOW', iff1We2.b, { x: pos.x + 12100, y: pos.y - 800 });
-  const iff1We3 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12300, y: pos.y - 820 });
+  const iff1We3 = buildOr(parent, { x: pos.x + 12300, y: pos.y - 820 });
   wire(parent, iff1We2.out, iff1We3.a);
   tieToLabel('RETI_NOW', iff1We3.b, { x: pos.x + 12200, y: pos.y - 800 });
-  const iff1WeFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 12400, y: pos.y - 820 });
+  const iff1WeFinal = buildOr(parent, { x: pos.x + 12400, y: pos.y - 820 });
   wire(parent, iff1We3.out, iff1WeFinal.a);
   tiePowerRail(parent, 'GND', iff1WeFinal.b); // no external seed — EI/DI/accept/RETI only (same as I/R)
   wire(parent, iff1WeFinal.out, iff1.we);
   tiePowerRail(parent, 'GND', iff1SeedD);
 
-  const iff2Clear = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 700 });
+  const iff2Clear = buildOr(parent, { x: pos.x + 12100, y: pos.y - 700 });
   tieToLabel('DI_NOW', iff2Clear.a, { x: pos.x + 12000, y: pos.y - 700 });
   tieToLabel('INT_ACCEPT_NOW', iff2Clear.b, { x: pos.x + 12000, y: pos.y - 680 });
   const iff2EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 700 });
@@ -9303,13 +9303,13 @@ export function buildZ80Cpu(
   wire(parent, iff2EiMux.pins[muxDef.ports[3]!]!, iff2ClearMux.pins[muxDef.ports[1]!]!);
   tiePowerRail(parent, 'GND', iff2ClearMux.pins[muxDef.ports[2]!]!);
   wire(parent, iff2ClearMux.pins[muxDef.ports[3]!]!, iff2.d[0]!);
-  const iff2We1 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 620 });
+  const iff2We1 = buildOr(parent, { x: pos.x + 12100, y: pos.y - 620 });
   tieToLabel('DI_NOW', iff2We1.a, { x: pos.x + 12000, y: pos.y - 620 });
   tieToLabel('EI_NOW', iff2We1.b, { x: pos.x + 12000, y: pos.y - 600 });
-  const iff2We2 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12200, y: pos.y - 620 });
+  const iff2We2 = buildOr(parent, { x: pos.x + 12200, y: pos.y - 620 });
   wire(parent, iff2We1.out, iff2We2.a);
   tieToLabel('INT_ACCEPT_NOW', iff2We2.b, { x: pos.x + 12100, y: pos.y - 600 });
-  const iff2WeFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 12300, y: pos.y - 620 });
+  const iff2WeFinal = buildOr(parent, { x: pos.x + 12300, y: pos.y - 620 });
   wire(parent, iff2We2.out, iff2WeFinal.a);
   tiePowerRail(parent, 'GND', iff2WeFinal.b);
   wire(parent, iff2WeFinal.out, iff2.we);
@@ -9320,7 +9320,7 @@ export function buildZ80Cpu(
   const im1SeedD = im1Mux.pins[muxDef.ports[1]!]!;
   tiePowerRail(parent, 'VCC', im1Mux.pins[muxDef.ports[2]!]!);
   wire(parent, im1Mux.pins[muxDef.ports[3]!]!, im1.d[0]!);
-  const im1WeFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 12300, y: pos.y - 500 });
+  const im1WeFinal = buildOr(parent, { x: pos.x + 12300, y: pos.y - 500 });
   tieToLabel('IM1_NOW', im1WeFinal.a, { x: pos.x + 12200, y: pos.y - 500 });
   tiePowerRail(parent, 'GND', im1WeFinal.b);
   wire(parent, im1WeFinal.out, im1.we);
@@ -9375,10 +9375,10 @@ export function buildZ80Cpu(
   // were never wrapped in `wrapWithPairCommit` in the first place, having
   // no external-seed contract of their own until `EX AF,AF'` gave `A` one
   // indirectly through `A'`).
-  const isExx = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 900 });
+  const isExx = buildAnd(parent, { x: pos.x + 11500, y: pos.y - 900 });
   wire(parent, isStackReadZ.out, isExx.a);
   tieToLabel('DECY3', isExx.b, { x: pos.x + 11400, y: pos.y - 900 });
-  const exxNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 890 });
+  const exxNow = buildAnd(parent, { x: pos.x + 11550, y: pos.y - 890 });
   wire(parent, isExx.out, exxNow.a);
   tieToLabel('PHASE2', exxNow.b, { x: pos.x + 11450, y: pos.y - 890 });
   tieToLabel('EXX_NOW', exxNow.out, { x: pos.x + 11600, y: pos.y - 890 }); // anchor — B/C/D/E/H/L's own outermost write-back layer (far) and B'/C'/D'/E'/H'/L' themselves all read this
@@ -9407,18 +9407,18 @@ export function buildZ80Cpu(
   // identical shape. Both share `isStackReadZ` a third way; the actual
   // write-back for each lives with its own destination register (`PC`'s
   // own `jpHlMux` above, `SP`'s own third layer below).
-  const isJpHl = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 1100 });
+  const isJpHl = buildAnd(parent, { x: pos.x + 11500, y: pos.y - 1100 });
   wire(parent, isStackReadZ.out, isJpHl.a);
   tieToLabel('DECY5', isJpHl.b, { x: pos.x + 11400, y: pos.y - 1100 });
-  const jpHlNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1090 });
+  const jpHlNow = buildAnd(parent, { x: pos.x + 11550, y: pos.y - 1090 });
   wire(parent, isJpHl.out, jpHlNow.a);
   tieToLabel('PHASE2', jpHlNow.b, { x: pos.x + 11450, y: pos.y - 1090 });
   tieToLabel('JPHL_NOW', jpHlNow.out, { x: pos.x + 11600, y: pos.y - 1090 }); // anchor — PC's own write mux (far) reads this
 
-  const isLdSpHl = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 1300 });
+  const isLdSpHl = buildAnd(parent, { x: pos.x + 11500, y: pos.y - 1300 });
   wire(parent, isStackReadZ.out, isLdSpHl.a);
   tieToLabel('DECY7', isLdSpHl.b, { x: pos.x + 11400, y: pos.y - 1300 });
-  const ldSpHlNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1290 });
+  const ldSpHlNow = buildAnd(parent, { x: pos.x + 11550, y: pos.y - 1290 });
   wire(parent, isLdSpHl.out, ldSpHlNow.a);
   tieToLabel('PHASE2', ldSpHlNow.b, { x: pos.x + 11450, y: pos.y - 1290 });
   tieToLabel('LDSPHL_NOW', ldSpHlNow.out, { x: pos.x + 11600, y: pos.y - 1290 }); // anchor — SP's own write mux (far) reads this
@@ -9430,10 +9430,10 @@ export function buildZ80Cpu(
   // value is `H`'s old one, and vice versa — so no new per-bit labels at
   // all, just one more `wrapWithPairCommit` layer per register, reading
   // labels that already exist.
-  const isExDeHl = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 1500 });
+  const isExDeHl = buildAnd(parent, { x: pos.x + 11500, y: pos.y - 1500 });
   wire(parent, isX11Z3.out, isExDeHl.a);
   tieToLabel('DECY5', isExDeHl.b, { x: pos.x + 11400, y: pos.y - 1500 });
-  const exDeHlNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1490 });
+  const exDeHlNow = buildAnd(parent, { x: pos.x + 11550, y: pos.y - 1490 });
   wire(parent, isExDeHl.out, exDeHlNow.a);
   tieToLabel('PHASE2', exDeHlNow.b, { x: pos.x + 11450, y: pos.y - 1490 });
   tieToLabel('EXDEHL_NOW', exDeHlNow.out, { x: pos.x + 11600, y: pos.y - 1490 }); // anchor — D/E/H/L's own outermost write-back layer (far) reads this
@@ -9463,20 +9463,20 @@ export function buildZ80Cpu(
   // ally), and the two strobes themselves. Real Z80 hardware also puts `A`
   // on the *upper* half of a 16-bit port address (`A:n`); this slice only
   // ever exposes `n` — a real, documented simplification, not an oversight.
-  const isOutImm = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 2100 });
+  const isOutImm = buildAnd(parent, { x: pos.x + 11500, y: pos.y - 2100 });
   wire(parent, isX11Z3.out, isOutImm.a);
   tieToLabel('DECY2', isOutImm.b, { x: pos.x + 11400, y: pos.y - 2100 });
-  const isInImm = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 2200 });
+  const isInImm = buildAnd(parent, { x: pos.x + 11500, y: pos.y - 2200 });
   wire(parent, isX11Z3.out, isInImm.a);
   tieToLabel('DECY3', isInImm.b, { x: pos.x + 11400, y: pos.y - 2200 });
-  const isIoImmStage = buildOr(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 2150 });
+  const isIoImmStage = buildOr(parent, { x: pos.x + 11550, y: pos.y - 2150 });
   wire(parent, isOutImm.out, isIoImmStage.a);
   wire(parent, isInImm.out, isIoImmStage.b);
-  const ioImmReadNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 2140 });
+  const ioImmReadNow = buildAnd(parent, { x: pos.x + 11600, y: pos.y - 2140 });
   wire(parent, isIoImmStage.out, ioImmReadNow.a);
   tieToLabel('PHASE2', ioImmReadNow.b, { x: pos.x + 11500, y: pos.y - 2140 });
   tieToLabel('IOIMM_READ_NOW', ioImmReadNow.out, { x: pos.x + 11700, y: pos.y - 2140 }); // anchor — ramOeStage (far) reads this
-  const ioImmAdvanceNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 2180 });
+  const ioImmAdvanceNow = buildAnd(parent, { x: pos.x + 11600, y: pos.y - 2180 });
   wire(parent, isIoImmStage.out, ioImmAdvanceNow.a);
   tieToLabel('PHASE3', ioImmAdvanceNow.b, { x: pos.x + 11500, y: pos.y - 2180 });
   tieToLabel('IOIMM_ADVANCE_NOW', ioImmAdvanceNow.out, { x: pos.x + 11700, y: pos.y - 2180 }); // anchor — pcHold (far) reads this
@@ -9488,13 +9488,13 @@ export function buildZ80Cpu(
   // one for). `IN A,(n)` reads at `PHASE2` too — `A`'s own write mux (far
   // below) picks `ioPortDataIn` straight up, the same "always compute,
   // gate only the commit" shape every other `A`-write layer already uses.
-  const outNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 2100 });
+  const outNow = buildAnd(parent, { x: pos.x + 11650, y: pos.y - 2100 });
   wire(parent, isOutImm.out, outNow.a);
   tieToLabel('PHASE2', outNow.b, { x: pos.x + 11550, y: pos.y - 2100 });
   // `outNow.out` feeds `ioWrite` in the return object below by direct JS
   // reference, not a label — that's the same local scope, no genuinely far
   // consumer exists for this one the way `IN_NOW` (below) has.
-  const inNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 2200 });
+  const inNow = buildAnd(parent, { x: pos.x + 11650, y: pos.y - 2200 });
   wire(parent, isInImm.out, inNow.a);
   tieToLabel('PHASE2', inNow.b, { x: pos.x + 11550, y: pos.y - 2200 });
   tieToLabel('IN_NOW', inNow.out, { x: pos.x + 11750, y: pos.y - 2200 }); // anchor — A's own write mux (far) reads this via the label; `ioRead` in the return object reads `inNow.out` directly, same local scope
@@ -9553,11 +9553,11 @@ export function buildZ80Cpu(
   // own device wires *into* this, this file never drives it itself), not
   // something created here and driven internally.
 
-  const isExSpHl = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11500, y: pos.y - 1700 });
+  const isExSpHl = buildAnd(parent, { x: pos.x + 11500, y: pos.y - 1700 });
   wire(parent, isX11Z3.out, isExSpHl.a);
   tieToLabel('DECY4', isExSpHl.b, { x: pos.x + 11400, y: pos.y - 1700 });
 
-  const exSpHlReadLowNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1690 });
+  const exSpHlReadLowNow = buildAnd(parent, { x: pos.x + 11550, y: pos.y - 1690 });
   wire(parent, isExSpHl.out, exSpHlReadLowNow.a);
   tieToLabel('PHASE2', exSpHlReadLowNow.b, { x: pos.x + 11450, y: pos.y - 1690 });
   tieToLabel('EXSPHL_READ_LOW_NOW', exSpHlReadLowNow.out, { x: pos.x + 11600, y: pos.y - 1690 });
@@ -9568,66 +9568,66 @@ export function buildZ80Cpu(
   // above), applied pre-emptively here across all three adjacent
   // boundaries this 4-phase sequence has, rather than found live a fourth
   // (and fifth, and sixth) time.
-  const exSpHlReadHighRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1650 });
+  const exSpHlReadHighRaw = buildAnd(parent, { x: pos.x + 11550, y: pos.y - 1650 });
   wire(parent, isExSpHl.out, exSpHlReadHighRaw.a);
   tieToLabel('PHASE3', exSpHlReadHighRaw.b, { x: pos.x + 11450, y: pos.y - 1650 });
-  const notExSpHlReadLowNow = buildNot(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 1670 });
+  const notExSpHlReadLowNow = buildNot(parent, { x: pos.x + 11600, y: pos.y - 1670 });
   wire(parent, exSpHlReadLowNow.out, notExSpHlReadLowNow.in);
-  const exSpHlReadHighNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 1660 });
+  const exSpHlReadHighNow = buildAnd(parent, { x: pos.x + 11650, y: pos.y - 1660 });
   wire(parent, exSpHlReadHighRaw.out, exSpHlReadHighNow.a);
   wire(parent, notExSpHlReadLowNow.out, exSpHlReadHighNow.b);
   tieToLabel('EXSPHL_READ_HIGH_NOW', exSpHlReadHighNow.out, { x: pos.x + 11700, y: pos.y - 1660 });
 
-  const exSpHlWriteLowRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1600 });
+  const exSpHlWriteLowRaw = buildAnd(parent, { x: pos.x + 11550, y: pos.y - 1600 });
   wire(parent, isExSpHl.out, exSpHlWriteLowRaw.a);
   tieToLabel('PHASE4', exSpHlWriteLowRaw.b, { x: pos.x + 11450, y: pos.y - 1600 });
-  const notExSpHlReadHighNow = buildNot(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 1630 });
+  const notExSpHlReadHighNow = buildNot(parent, { x: pos.x + 11600, y: pos.y - 1630 });
   wire(parent, exSpHlReadHighNow.out, notExSpHlReadHighNow.in);
-  const exSpHlWriteLowNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 1610 });
+  const exSpHlWriteLowNow = buildAnd(parent, { x: pos.x + 11650, y: pos.y - 1610 });
   wire(parent, exSpHlWriteLowRaw.out, exSpHlWriteLowNow.a);
   wire(parent, notExSpHlReadHighNow.out, exSpHlWriteLowNow.b);
   tieToLabel('EXSPHL_WRITE_LOW_NOW', exSpHlWriteLowNow.out, { x: pos.x + 11700, y: pos.y - 1610 });
 
-  const exSpHlWriteHighRaw = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11550, y: pos.y - 1550 });
+  const exSpHlWriteHighRaw = buildAnd(parent, { x: pos.x + 11550, y: pos.y - 1550 });
   wire(parent, isExSpHl.out, exSpHlWriteHighRaw.a);
   tieToLabel('PHASE5', exSpHlWriteHighRaw.b, { x: pos.x + 11450, y: pos.y - 1550 });
-  const notExSpHlWriteLowNow = buildNot(parent, vcc5, gnd5, { x: pos.x + 11600, y: pos.y - 1580 });
+  const notExSpHlWriteLowNow = buildNot(parent, { x: pos.x + 11600, y: pos.y - 1580 });
   wire(parent, exSpHlWriteLowNow.out, notExSpHlWriteLowNow.in);
-  const exSpHlWriteHighNow = buildAnd(parent, vcc5, gnd5, { x: pos.x + 11650, y: pos.y - 1560 });
+  const exSpHlWriteHighNow = buildAnd(parent, { x: pos.x + 11650, y: pos.y - 1560 });
   wire(parent, exSpHlWriteHighRaw.out, exSpHlWriteHighNow.a);
   wire(parent, notExSpHlWriteLowNow.out, exSpHlWriteHighNow.b);
   tieToLabel('EXSPHL_WRITE_HIGH_NOW', exSpHlWriteHighNow.out, { x: pos.x + 11700, y: pos.y - 1560 });
 
-  const exSpHlLowAddrNow = buildOr(parent, vcc5, gnd5, { x: pos.x + 11750, y: pos.y - 1670 });
+  const exSpHlLowAddrNow = buildOr(parent, { x: pos.x + 11750, y: pos.y - 1670 });
   wire(parent, exSpHlReadLowNow.out, exSpHlLowAddrNow.a);
   wire(parent, exSpHlWriteLowNow.out, exSpHlLowAddrNow.b);
   // Widen with DD/FD EX (SP),IX/IY low phases (side-fold, then merge).
-  const exSpIxLowAddr = buildOr(parent, vcc5, gnd5, { x: pos.x + 11780, y: pos.y - 1690 });
+  const exSpIxLowAddr = buildOr(parent, { x: pos.x + 11780, y: pos.y - 1690 });
   tieToLabel('EXSPIX_READ_LOW_NOW', exSpIxLowAddr.a, { x: pos.x + 11680, y: pos.y - 1690 });
   tieToLabel('EXSPIX_WRITE_LOW_NOW', exSpIxLowAddr.b, { x: pos.x + 11680, y: pos.y - 1670 });
-  const exSpIyLowAddr = buildOr(parent, vcc5, gnd5, { x: pos.x + 11780, y: pos.y - 1650 });
+  const exSpIyLowAddr = buildOr(parent, { x: pos.x + 11780, y: pos.y - 1650 });
   tieToLabel('EXSPIY_READ_LOW_NOW', exSpIyLowAddr.a, { x: pos.x + 11680, y: pos.y - 1650 });
   tieToLabel('EXSPIY_WRITE_LOW_NOW', exSpIyLowAddr.b, { x: pos.x + 11680, y: pos.y - 1630 });
-  const exSpIxIyLowAddr = buildOr(parent, vcc5, gnd5, { x: pos.x + 11800, y: pos.y - 1670 });
+  const exSpIxIyLowAddr = buildOr(parent, { x: pos.x + 11800, y: pos.y - 1670 });
   wire(parent, exSpIxLowAddr.out, exSpIxIyLowAddr.a);
   wire(parent, exSpIyLowAddr.out, exSpIxIyLowAddr.b);
-  const exSpLowAddrFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 11820, y: pos.y - 1670 });
+  const exSpLowAddrFinal = buildOr(parent, { x: pos.x + 11820, y: pos.y - 1670 });
   wire(parent, exSpHlLowAddrNow.out, exSpLowAddrFinal.a);
   wire(parent, exSpIxIyLowAddr.out, exSpLowAddrFinal.b);
   tieToLabel('EXSPHL_LOW_ADDR_NOW', exSpLowAddrFinal.out, { x: pos.x + 11850, y: pos.y - 1670 }); // anchor — RAM's own address mux (far) reads this
-  const exSpHlHighAddrNow = buildOr(parent, vcc5, gnd5, { x: pos.x + 11750, y: pos.y - 1580 });
+  const exSpHlHighAddrNow = buildOr(parent, { x: pos.x + 11750, y: pos.y - 1580 });
   wire(parent, exSpHlReadHighNow.out, exSpHlHighAddrNow.a);
   wire(parent, exSpHlWriteHighNow.out, exSpHlHighAddrNow.b);
-  const exSpIxHighAddr = buildOr(parent, vcc5, gnd5, { x: pos.x + 11780, y: pos.y - 1600 });
+  const exSpIxHighAddr = buildOr(parent, { x: pos.x + 11780, y: pos.y - 1600 });
   tieToLabel('EXSPIX_READ_HIGH_NOW', exSpIxHighAddr.a, { x: pos.x + 11680, y: pos.y - 1600 });
   tieToLabel('EXSPIX_WRITE_HIGH_NOW', exSpIxHighAddr.b, { x: pos.x + 11680, y: pos.y - 1580 });
-  const exSpIyHighAddr = buildOr(parent, vcc5, gnd5, { x: pos.x + 11780, y: pos.y - 1560 });
+  const exSpIyHighAddr = buildOr(parent, { x: pos.x + 11780, y: pos.y - 1560 });
   tieToLabel('EXSPIY_READ_HIGH_NOW', exSpIyHighAddr.a, { x: pos.x + 11680, y: pos.y - 1560 });
   tieToLabel('EXSPIY_WRITE_HIGH_NOW', exSpIyHighAddr.b, { x: pos.x + 11680, y: pos.y - 1540 });
-  const exSpIxIyHighAddr = buildOr(parent, vcc5, gnd5, { x: pos.x + 11800, y: pos.y - 1580 });
+  const exSpIxIyHighAddr = buildOr(parent, { x: pos.x + 11800, y: pos.y - 1580 });
   wire(parent, exSpIxHighAddr.out, exSpIxIyHighAddr.a);
   wire(parent, exSpIyHighAddr.out, exSpIxIyHighAddr.b);
-  const exSpHighAddrFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 11820, y: pos.y - 1580 });
+  const exSpHighAddrFinal = buildOr(parent, { x: pos.x + 11820, y: pos.y - 1580 });
   wire(parent, exSpHlHighAddrNow.out, exSpHighAddrFinal.a);
   wire(parent, exSpIxIyHighAddr.out, exSpHighAddrFinal.b);
   tieToLabel('EXSPHL_HIGH_ADDR_NOW', exSpHighAddrFinal.out, { x: pos.x + 11850, y: pos.y - 1580 }); // anchor — RAM's own address mux (far) reads this
@@ -9652,10 +9652,10 @@ export function buildZ80Cpu(
   // phase, well after the bus has moved on. Shared with EX (SP),IX/IY
   // (we OR'd across HL/IX/IY read strobes).
   const spLoTemp = buildRegister(parent, library, 8, { x: pos.x + 12000, y: pos.y - 1700 });
-  const spLoTempWe1 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11950, y: pos.y - 1720 });
+  const spLoTempWe1 = buildOr(parent, { x: pos.x + 11950, y: pos.y - 1720 });
   wire(parent, exSpHlReadLowNow.out, spLoTempWe1.a);
   tieToLabel('EXSPIX_READ_LOW_NOW', spLoTempWe1.b, { x: pos.x + 11850, y: pos.y - 1720 });
-  const spLoTempWe = buildOr(parent, vcc5, gnd5, { x: pos.x + 11970, y: pos.y - 1720 });
+  const spLoTempWe = buildOr(parent, { x: pos.x + 11970, y: pos.y - 1720 });
   wire(parent, spLoTempWe1.out, spLoTempWe.a);
   tieToLabel('EXSPIY_READ_LOW_NOW', spLoTempWe.b, { x: pos.x + 11870, y: pos.y - 1700 });
   wire(parent, spLoTempWe.out, spLoTemp.we);
@@ -9664,10 +9664,10 @@ export function buildZ80Cpu(
   tieToLabel('CLK', spLoTemp.clk, { x: pos.x + 12000, y: pos.y - 1720 });
 
   const spHiTemp = buildRegister(parent, library, 8, { x: pos.x + 12000, y: pos.y - 1400 });
-  const spHiTempWe1 = buildOr(parent, vcc5, gnd5, { x: pos.x + 11950, y: pos.y - 1420 });
+  const spHiTempWe1 = buildOr(parent, { x: pos.x + 11950, y: pos.y - 1420 });
   wire(parent, exSpHlReadHighNow.out, spHiTempWe1.a);
   tieToLabel('EXSPIX_READ_HIGH_NOW', spHiTempWe1.b, { x: pos.x + 11850, y: pos.y - 1420 });
-  const spHiTempWe = buildOr(parent, vcc5, gnd5, { x: pos.x + 11970, y: pos.y - 1420 });
+  const spHiTempWe = buildOr(parent, { x: pos.x + 11970, y: pos.y - 1420 });
   wire(parent, spHiTempWe1.out, spHiTempWe.a);
   tieToLabel('EXSPIY_READ_HIGH_NOW', spHiTempWe.b, { x: pos.x + 11870, y: pos.y - 1400 });
   wire(parent, spHiTempWe.out, spHiTemp.we);
@@ -9695,10 +9695,10 @@ export function buildZ80Cpu(
   // capture IX/IY at PHASE4 instead (muxed d-inputs; never drive the bus
   // from live REGIX* while also committing IX).
   const oldLTemp = buildRegister(parent, library, 8, { x: pos.x + 12100, y: pos.y - 1750 });
-  const oldTempWe1 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12050, y: pos.y - 1770 });
+  const oldTempWe1 = buildOr(parent, { x: pos.x + 12050, y: pos.y - 1770 });
   wire(parent, exSpHlReadLowNow.out, oldTempWe1.a);
   tieToLabel('EXSPIX_READ_LOW_NOW', oldTempWe1.b, { x: pos.x + 11950, y: pos.y - 1770 });
-  const oldTempWe = buildOr(parent, vcc5, gnd5, { x: pos.x + 12070, y: pos.y - 1770 });
+  const oldTempWe = buildOr(parent, { x: pos.x + 12070, y: pos.y - 1770 });
   wire(parent, oldTempWe1.out, oldTempWe.a);
   tieToLabel('EXSPIY_READ_LOW_NOW', oldTempWe.b, { x: pos.x + 11970, y: pos.y - 1750 });
   wire(parent, oldTempWe.out, oldLTemp.we);
@@ -9732,9 +9732,9 @@ export function buildZ80Cpu(
   for (let i = 0; i < 8; i++) {
     const buf = makeChipInstance(parent, bufDef, { x: pos.x + 12200, y: pos.y - 1700 + i * 20 });
     wire(parent, oldLTemp.q[i]!, buf.pins[bufDef.ports[0]!]!);
-    const writeLowEn = buildOr(parent, vcc5, gnd5, { x: pos.x + 12150, y: pos.y - 1680 + i * 20 });
+    const writeLowEn = buildOr(parent, { x: pos.x + 12150, y: pos.y - 1680 + i * 20 });
     tieToLabel('EXSPHL_WRITE_LOW_NOW', writeLowEn.a, { x: pos.x + 12050, y: pos.y - 1680 + i * 20 });
-    const writeLowEn2 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12170, y: pos.y - 1680 + i * 20 });
+    const writeLowEn2 = buildOr(parent, { x: pos.x + 12170, y: pos.y - 1680 + i * 20 });
     tieToLabel('EXSPIX_WRITE_LOW_NOW', writeLowEn2.a, { x: pos.x + 12070, y: pos.y - 1680 + i * 20 });
     tieToLabel('EXSPIY_WRITE_LOW_NOW', writeLowEn2.b, { x: pos.x + 12070, y: pos.y - 1660 + i * 20 });
     wire(parent, writeLowEn2.out, writeLowEn.b);
@@ -9744,9 +9744,9 @@ export function buildZ80Cpu(
   for (let i = 0; i < 8; i++) {
     const buf = makeChipInstance(parent, bufDef, { x: pos.x + 12200, y: pos.y - 1400 + i * 20 });
     wire(parent, oldHTemp.q[i]!, buf.pins[bufDef.ports[0]!]!);
-    const writeHighEn = buildOr(parent, vcc5, gnd5, { x: pos.x + 12150, y: pos.y - 1380 + i * 20 });
+    const writeHighEn = buildOr(parent, { x: pos.x + 12150, y: pos.y - 1380 + i * 20 });
     tieToLabel('EXSPHL_WRITE_HIGH_NOW', writeHighEn.a, { x: pos.x + 12050, y: pos.y - 1380 + i * 20 });
-    const writeHighEn2 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12170, y: pos.y - 1380 + i * 20 });
+    const writeHighEn2 = buildOr(parent, { x: pos.x + 12170, y: pos.y - 1380 + i * 20 });
     tieToLabel('EXSPIX_WRITE_HIGH_NOW', writeHighEn2.a, { x: pos.x + 12070, y: pos.y - 1380 + i * 20 });
     tieToLabel('EXSPIY_WRITE_HIGH_NOW', writeHighEn2.b, { x: pos.x + 12070, y: pos.y - 1360 + i * 20 });
     wire(parent, writeHighEn2.out, writeHighEn.b);
@@ -9768,57 +9768,57 @@ export function buildZ80Cpu(
   // half-carry gap: H, the two undocumented bits, and DAA" further down for
   // the full derivation of its correction logic and the `H`/`X`/`Y` bits it
   // reads and writes.
-  const isX0Z7 = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13000, y: pos.y + 1500 });
+  const isX0Z7 = buildAnd(parent, { x: pos.x + 13000, y: pos.y + 1500 });
   wire(parent, isX0Group, isX0Z7.a);
   wire(parent, dec.z[7]!, isX0Z7.b);
-  const rlcaRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1550 });
+  const rlcaRaw = buildAnd(parent, { x: pos.x + 13050, y: pos.y + 1550 });
   wire(parent, isX0Z7.out, rlcaRaw.a);
   wire(parent, dec.y[0]!, rlcaRaw.b);
-  const rrcaRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1600 });
+  const rrcaRaw = buildAnd(parent, { x: pos.x + 13050, y: pos.y + 1600 });
   wire(parent, isX0Z7.out, rrcaRaw.a);
   wire(parent, dec.y[1]!, rrcaRaw.b);
-  const rlaRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1650 });
+  const rlaRaw = buildAnd(parent, { x: pos.x + 13050, y: pos.y + 1650 });
   wire(parent, isX0Z7.out, rlaRaw.a);
   wire(parent, dec.y[2]!, rlaRaw.b);
-  const rraRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1700 });
+  const rraRaw = buildAnd(parent, { x: pos.x + 13050, y: pos.y + 1700 });
   wire(parent, isX0Z7.out, rraRaw.a);
   wire(parent, dec.y[3]!, rraRaw.b);
-  const daaRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1725 });
+  const daaRaw = buildAnd(parent, { x: pos.x + 13050, y: pos.y + 1725 });
   wire(parent, isX0Z7.out, daaRaw.a);
   wire(parent, dec.y[4]!, daaRaw.b);
-  const daaNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1725 });
+  const daaNow = buildAnd(parent, { x: pos.x + 13100, y: pos.y + 1725 });
   wire(parent, daaRaw.out, daaNow.a);
   tieToLabel('PHASE2', daaNow.b, { x: pos.x + 13000, y: pos.y + 1725 });
   tieToLabel('DAA_NOW', daaNow.out, { x: pos.x + 13200, y: pos.y + 1725 }); // anchor — A's own write mux and F's own per-bit layer (both far) read this
-  const cplRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1750 });
+  const cplRaw = buildAnd(parent, { x: pos.x + 13050, y: pos.y + 1750 });
   wire(parent, isX0Z7.out, cplRaw.a);
   wire(parent, dec.y[5]!, cplRaw.b);
-  const scfRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1800 });
+  const scfRaw = buildAnd(parent, { x: pos.x + 13050, y: pos.y + 1800 });
   wire(parent, isX0Z7.out, scfRaw.a);
   wire(parent, dec.y[6]!, scfRaw.b);
-  const ccfRaw = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y + 1850 });
+  const ccfRaw = buildAnd(parent, { x: pos.x + 13050, y: pos.y + 1850 });
   wire(parent, isX0Z7.out, ccfRaw.a);
   wire(parent, dec.y[7]!, ccfRaw.b);
 
-  const rlcaNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1550 });
+  const rlcaNow = buildAnd(parent, { x: pos.x + 13100, y: pos.y + 1550 });
   wire(parent, rlcaRaw.out, rlcaNow.a);
   tieToLabel('PHASE2', rlcaNow.b, { x: pos.x + 13000, y: pos.y + 1550 });
-  const rrcaNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1600 });
+  const rrcaNow = buildAnd(parent, { x: pos.x + 13100, y: pos.y + 1600 });
   wire(parent, rrcaRaw.out, rrcaNow.a);
   tieToLabel('PHASE2', rrcaNow.b, { x: pos.x + 13000, y: pos.y + 1600 });
-  const rlaNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1650 });
+  const rlaNow = buildAnd(parent, { x: pos.x + 13100, y: pos.y + 1650 });
   wire(parent, rlaRaw.out, rlaNow.a);
   tieToLabel('PHASE2', rlaNow.b, { x: pos.x + 13000, y: pos.y + 1650 });
-  const rraNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1700 });
+  const rraNow = buildAnd(parent, { x: pos.x + 13100, y: pos.y + 1700 });
   wire(parent, rraRaw.out, rraNow.a);
   tieToLabel('PHASE2', rraNow.b, { x: pos.x + 13000, y: pos.y + 1700 });
-  const cplNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1750 });
+  const cplNow = buildAnd(parent, { x: pos.x + 13100, y: pos.y + 1750 });
   wire(parent, cplRaw.out, cplNow.a);
   tieToLabel('PHASE2', cplNow.b, { x: pos.x + 13000, y: pos.y + 1750 });
-  const scfNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1800 });
+  const scfNow = buildAnd(parent, { x: pos.x + 13100, y: pos.y + 1800 });
   wire(parent, scfRaw.out, scfNow.a);
   tieToLabel('PHASE2', scfNow.b, { x: pos.x + 13000, y: pos.y + 1800 });
-  const ccfNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1850 });
+  const ccfNow = buildAnd(parent, { x: pos.x + 13100, y: pos.y + 1850 });
   wire(parent, ccfRaw.out, ccfNow.a);
   tieToLabel('PHASE2', ccfNow.b, { x: pos.x + 13000, y: pos.y + 1850 });
   tieToLabel('CPL_NOW', cplNow.out, { x: pos.x + 13200, y: pos.y + 1750 }); // anchor — F's own N-bit layer (far) reads this; A's own write mux reads `ROTACC_A_NOW`/`ROTACCRESULT{i}` instead, CPL already folded into both of those below
@@ -9826,16 +9826,16 @@ export function buildZ80Cpu(
   // RLCA/RRCA/RLA/RRA/CPL are the only five of these seven that actually
   // touch `A` — SCF/CCF are flags-only, real Z80 never reads or writes `A`
   // for either.
-  const rotOrCplStage = buildOr(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 1600 });
+  const rotOrCplStage = buildOr(parent, { x: pos.x + 13150, y: pos.y + 1600 });
   wire(parent, rlcaNow.out, rotOrCplStage.a);
   wire(parent, rrcaNow.out, rotOrCplStage.b);
-  const rotOrCplStage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 1650 });
+  const rotOrCplStage2 = buildOr(parent, { x: pos.x + 13150, y: pos.y + 1650 });
   wire(parent, rlaNow.out, rotOrCplStage2.a);
   wire(parent, rraNow.out, rotOrCplStage2.b);
-  const rotOrCplStage3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13200, y: pos.y + 1625 });
+  const rotOrCplStage3 = buildOr(parent, { x: pos.x + 13200, y: pos.y + 1625 });
   wire(parent, rotOrCplStage.out, rotOrCplStage3.a);
   wire(parent, rotOrCplStage2.out, rotOrCplStage3.b);
-  const rotOrCplNow = buildOr(parent, vcc4, gnd4, { x: pos.x + 13250, y: pos.y + 1700 });
+  const rotOrCplNow = buildOr(parent, { x: pos.x + 13250, y: pos.y + 1700 });
   wire(parent, rotOrCplStage3.out, rotOrCplNow.a);
   wire(parent, cplNow.out, rotOrCplNow.b);
   tieToLabel('ROTACC_A_NOW', rotOrCplNow.out, { x: pos.x + 13300, y: pos.y + 1700 }); // anchor — A's own write mux (far) reads this
@@ -9843,30 +9843,30 @@ export function buildZ80Cpu(
   // Every one of RLCA/RRCA/RLA/RRA touches C; CPL doesn't. New C, per op:
   // RLCA/RLA both take the OLD bit 7 of A; RRCA/RRA both take the OLD bit
   // 0. SCF forces C to 1 outright; CCF inverts the OLD C.
-  const isRotLeft = buildOr(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1900 });
+  const isRotLeft = buildOr(parent, { x: pos.x + 13100, y: pos.y + 1900 });
   wire(parent, rlcaNow.out, isRotLeft.a);
   wire(parent, rlaNow.out, isRotLeft.b);
-  const isRotRight = buildOr(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 1950 });
+  const isRotRight = buildOr(parent, { x: pos.x + 13100, y: pos.y + 1950 });
   wire(parent, rrcaNow.out, isRotRight.a);
   wire(parent, rraNow.out, isRotRight.b);
-  const rotLeftC = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 1900 });
+  const rotLeftC = buildAnd(parent, { x: pos.x + 13150, y: pos.y + 1900 });
   wire(parent, isRotLeft.out, rotLeftC.a);
   wire(parent, a.q[7]!, rotLeftC.b);
-  const rotRightC = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 1950 });
+  const rotRightC = buildAnd(parent, { x: pos.x + 13150, y: pos.y + 1950 });
   wire(parent, isRotRight.out, rotRightC.a);
   wire(parent, a.q[0]!, rotRightC.b);
-  const notOldC = buildNot(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y + 2000 });
+  const notOldC = buildNot(parent, { x: pos.x + 13100, y: pos.y + 2000 });
   wire(parent, f.q[0]!, notOldC.in);
-  const ccfC = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 2000 });
+  const ccfC = buildAnd(parent, { x: pos.x + 13150, y: pos.y + 2000 });
   wire(parent, ccfNow.out, ccfC.a);
   wire(parent, notOldC.out, ccfC.b);
-  const rotAccCStage = buildOr(parent, vcc4, gnd4, { x: pos.x + 13200, y: pos.y + 1925 });
+  const rotAccCStage = buildOr(parent, { x: pos.x + 13200, y: pos.y + 1925 });
   wire(parent, rotLeftC.out, rotAccCStage.a);
   wire(parent, rotRightC.out, rotAccCStage.b);
-  const rotAccCStage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13200, y: pos.y + 1975 });
+  const rotAccCStage2 = buildOr(parent, { x: pos.x + 13200, y: pos.y + 1975 });
   wire(parent, scfNow.out, rotAccCStage2.a);
   wire(parent, ccfC.out, rotAccCStage2.b);
-  const rotAccC = buildOr(parent, vcc4, gnd4, { x: pos.x + 13250, y: pos.y + 1950 });
+  const rotAccC = buildOr(parent, { x: pos.x + 13250, y: pos.y + 1950 });
   wire(parent, rotAccCStage.out, rotAccC.a);
   wire(parent, rotAccCStage2.out, rotAccC.b);
   tieToLabel('ROTACC_C', rotAccC.out, { x: pos.x + 13300, y: pos.y + 1950 }); // anchor — F's own C-bit layer (far) reads this
@@ -9892,17 +9892,17 @@ export function buildZ80Cpu(
   // surfaced once a *different* stale value (`SCF`/`CCF` leaving `C=1`)
   // was sitting there to be wrongly held onto. `isRotAny`, below, is the
   // condition this needed all along — activity alone, no data mixed in.
-  const isRotAny = buildOr(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 2050 });
+  const isRotAny = buildOr(parent, { x: pos.x + 13150, y: pos.y + 2050 });
   wire(parent, isRotLeft.out, isRotAny.a);
   wire(parent, isRotRight.out, isRotAny.b);
-  const rotAccCNowStage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13200, y: pos.y + 2075 });
+  const rotAccCNowStage2 = buildOr(parent, { x: pos.x + 13200, y: pos.y + 2075 });
   wire(parent, scfNow.out, rotAccCNowStage2.a);
   wire(parent, ccfNow.out, rotAccCNowStage2.b);
-  const rotAccCNowFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 13250, y: pos.y + 2060 });
+  const rotAccCNowFinal = buildOr(parent, { x: pos.x + 13250, y: pos.y + 2060 });
   wire(parent, isRotAny.out, rotAccCNowFinal.a); // rlca/rrca/rla/rra
   wire(parent, rotAccCNowStage2.out, rotAccCNowFinal.b); // scf/ccf
   tieToLabel('ROTACC_C_NOW', rotAccCNowFinal.out, { x: pos.x + 13300, y: pos.y + 2060 }); // anchor — F's own C-bit layer (far) reads this
-  const rotAccNNow = buildOr(parent, vcc4, gnd4, { x: pos.x + 13150, y: pos.y + 2125 });
+  const rotAccNNow = buildOr(parent, { x: pos.x + 13150, y: pos.y + 2125 });
   wire(parent, rotAccCNowFinal.out, rotAccNNow.a); // the same six, N=0 for all of them
   wire(parent, cplNow.out, rotAccNNow.b); // CPL, N=1
   tieToLabel('ROTACC_N_NOW', rotAccNNow.out, { x: pos.x + 13300, y: pos.y + 2125 }); // anchor — F's own N-bit layer (far) reads this
@@ -9944,10 +9944,10 @@ export function buildZ80Cpu(
   //
   // `A&0xF > 9` (4-bit "nibble >= 10"): `AND(bit3, OR(bit2, bit1))` — every
   // value with bit3 set AND at least one of bit2/bit1 set is >= 0b1010.
-  const nibbleGt9 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13350, y: pos.y + 2200 });
+  const nibbleGt9 = buildOr(parent, { x: pos.x + 13350, y: pos.y + 2200 });
   wire(parent, a.q[2]!, nibbleGt9.a);
   wire(parent, a.q[1]!, nibbleGt9.b);
-  const nibbleGt9Bit = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13400, y: pos.y + 2200 });
+  const nibbleGt9Bit = buildAnd(parent, { x: pos.x + 13400, y: pos.y + 2200 });
   wire(parent, a.q[3]!, nibbleGt9Bit.a);
   wire(parent, nibbleGt9.out, nibbleGt9Bit.b);
   // `A > 0x99` (a full 8-bit comparison, real hardware doesn't get to
@@ -9968,10 +9968,10 @@ export function buildZ80Cpu(
     tiePowerRail(parent, (notNinetyNine >> i) & 1 ? 'VCC' : 'GND', gt99Cmp.b[i]!);
   }
   const aGt99 = gt99Cmp.cout;
-  const loCorrect = buildOr(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 2350 });
+  const loCorrect = buildOr(parent, { x: pos.x + 13500, y: pos.y + 2350 });
   wire(parent, f.q[4]!, loCorrect.a); // old H
   wire(parent, nibbleGt9Bit.out, loCorrect.b);
-  const hiCorrect = buildOr(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 2400 });
+  const hiCorrect = buildOr(parent, { x: pos.x + 13500, y: pos.y + 2400 });
   wire(parent, f.q[0]!, hiCorrect.a); // old C
   wire(parent, aGt99, hiCorrect.b);
   tieToLabel('DAA_NEWC', hiCorrect.out, { x: pos.x + 13550, y: pos.y + 2400 }); // anchor — F's own C-bit layer (far) reads this
@@ -9989,32 +9989,32 @@ export function buildZ80Cpu(
   for (let i = 0; i < 8; i++) {
     wire(parent, a.q[i]!, daaAdder.a[i]!);
     const diffBit = daaDiffBit[i] ?? railPin(parent, 'GND', { x: pos.x + 13500, y: pos.y + 2550 + i * 40 });
-    const diffInv = buildXor(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 2550 + i * 40 });
+    const diffInv = buildXor(parent, { x: pos.x + 13500, y: pos.y + 2550 + i * 40 });
     wire(parent, diffBit, diffInv.a);
     wire(parent, f.q[1]!, diffInv.b); // old N — same operand-invert `bInv` uses for SUB/SBC/CP
     wire(parent, diffInv.out, daaAdder.b[i]!);
   }
-  const daaNewH = buildXor(parent, vcc4, gnd4, { x: pos.x + 13600, y: pos.y + 2900 });
+  const daaNewH = buildXor(parent, { x: pos.x + 13600, y: pos.y + 2900 });
   wire(parent, a.q[4]!, daaNewH.a);
   wire(parent, daaAdder.out[4]!, daaNewH.b);
   tieToLabel('DAA_NEWH', daaNewH.out, { x: pos.x + 13650, y: pos.y + 2900 }); // anchor — F's own H-bit layer (far) reads this
   let daaZChain: Pin = daaAdder.out[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc4, gnd4, { x: pos.x + 13600, y: pos.y + 2950 + i * 40 });
+    const orGate = buildOr(parent, { x: pos.x + 13600, y: pos.y + 2950 + i * 40 });
     wire(parent, daaZChain, orGate.a);
     wire(parent, daaAdder.out[i]!, orGate.b);
     daaZChain = orGate.out;
   }
-  const daaZBit = buildNot(parent, vcc4, gnd4, { x: pos.x + 13650, y: pos.y + 3300 });
+  const daaZBit = buildNot(parent, { x: pos.x + 13650, y: pos.y + 3300 });
   wire(parent, daaZChain, daaZBit.in);
   let daaPChain: Pin = daaAdder.out[0]!;
   for (let i = 1; i < 8; i++) {
-    const xorGate = buildXor(parent, vcc4, gnd4, { x: pos.x + 13650, y: pos.y + 3350 + i * 40 });
+    const xorGate = buildXor(parent, { x: pos.x + 13650, y: pos.y + 3350 + i * 40 });
     wire(parent, daaPChain, xorGate.a);
     wire(parent, daaAdder.out[i]!, xorGate.b);
     daaPChain = xorGate.out;
   }
-  const daaPBit = buildNot(parent, vcc4, gnd4, { x: pos.x + 13700, y: pos.y + 3650 });
+  const daaPBit = buildNot(parent, { x: pos.x + 13700, y: pos.y + 3650 });
   wire(parent, daaPChain, daaPBit.in);
   tieToLabel('DAA_NEWZ', daaZBit.out, { x: pos.x + 13700, y: pos.y + 3300 }); // anchor — F's own Z-bit layer (far) reads this
   tieToLabel('DAA_NEWP', daaPBit.out, { x: pos.x + 13750, y: pos.y + 3650 }); // anchor — F's own P-bit layer (far) reads this
@@ -10036,33 +10036,33 @@ export function buildZ80Cpu(
   for (let i = 0; i < 8; i++) {
     const prevIdx = (i + 7) % 8;
     const nextIdx = (i + 1) % 8;
-    const rlcaTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13350, y: pos.y + 1500 + i * 120 });
+    const rlcaTerm = buildAnd(parent, { x: pos.x + 13350, y: pos.y + 1500 + i * 120 });
     wire(parent, rlcaNow.out, rlcaTerm.a);
     wire(parent, a.q[prevIdx]!, rlcaTerm.b);
-    const rlaTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13400, y: pos.y + 1500 + i * 120 });
+    const rlaTerm = buildAnd(parent, { x: pos.x + 13400, y: pos.y + 1500 + i * 120 });
     wire(parent, rlaNow.out, rlaTerm.a);
     wire(parent, i === 0 ? f.q[0]! : a.q[prevIdx]!, rlaTerm.b); // bit 0 comes from the OLD carry, not a wrapped A bit
-    const rrcaTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13450, y: pos.y + 1500 + i * 120 });
+    const rrcaTerm = buildAnd(parent, { x: pos.x + 13450, y: pos.y + 1500 + i * 120 });
     wire(parent, rrcaNow.out, rrcaTerm.a);
     wire(parent, a.q[nextIdx]!, rrcaTerm.b);
-    const rraTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 1500 + i * 120 });
+    const rraTerm = buildAnd(parent, { x: pos.x + 13500, y: pos.y + 1500 + i * 120 });
     wire(parent, rraNow.out, rraTerm.a);
     wire(parent, i === 7 ? f.q[0]! : a.q[nextIdx]!, rraTerm.b); // bit 7 comes from the OLD carry, not a wrapped A bit
-    const notOldABit = buildNot(parent, vcc4, gnd4, { x: pos.x + 13550, y: pos.y + 1500 + i * 120 });
+    const notOldABit = buildNot(parent, { x: pos.x + 13550, y: pos.y + 1500 + i * 120 });
     wire(parent, a.q[i]!, notOldABit.in);
-    const cplTerm = buildAnd(parent, vcc4, gnd4, { x: pos.x + 13600, y: pos.y + 1500 + i * 120 });
+    const cplTerm = buildAnd(parent, { x: pos.x + 13600, y: pos.y + 1500 + i * 120 });
     wire(parent, cplNow.out, cplTerm.a);
     wire(parent, notOldABit.out, cplTerm.b);
-    const stage1 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13650, y: pos.y + 1490 + i * 120 });
+    const stage1 = buildOr(parent, { x: pos.x + 13650, y: pos.y + 1490 + i * 120 });
     wire(parent, rlcaTerm.out, stage1.a);
     wire(parent, rlaTerm.out, stage1.b);
-    const stage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13650, y: pos.y + 1510 + i * 120 });
+    const stage2 = buildOr(parent, { x: pos.x + 13650, y: pos.y + 1510 + i * 120 });
     wire(parent, rrcaTerm.out, stage2.a);
     wire(parent, rraTerm.out, stage2.b);
-    const stage3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13700, y: pos.y + 1500 + i * 120 });
+    const stage3 = buildOr(parent, { x: pos.x + 13700, y: pos.y + 1500 + i * 120 });
     wire(parent, stage1.out, stage3.a);
     wire(parent, stage2.out, stage3.b);
-    const final = buildOr(parent, vcc4, gnd4, { x: pos.x + 13750, y: pos.y + 1495 + i * 120 });
+    const final = buildOr(parent, { x: pos.x + 13750, y: pos.y + 1495 + i * 120 });
     wire(parent, stage3.out, final.a);
     wire(parent, cplTerm.out, final.b);
     tieToLabel(`ROTACCRESULT${i}`, final.out, { x: pos.x + 13800, y: pos.y + 1495 + i * 120 }); // anchor — A's own write mux (far) reads this
@@ -10089,7 +10089,7 @@ export function buildZ80Cpu(
   // every other bit gets its own R8_* label (`R8_N`/`R8_P`/`R8_Z`/`R8_S`/
   // `R8_H`/`R8_X`/`R8_Y`), the fresh values `incDecR8Now`'s own doc comment
   // above derives.
-  const isBusToF = buildAnd(parent, vcc4, gnd4, { x: pos.x + 8200, y: pos.y + 2150 });
+  const isBusToF = buildAnd(parent, { x: pos.x + 8200, y: pos.y + 2150 });
   wire(parent, popLowNow.out, isBusToF.a);
   wire(parent, dec.y[6]!, isBusToF.b); // AF pair
   // The LD-block/CP-block family's own shared `P/V` (see "x=10, z=0:
@@ -10111,7 +10111,7 @@ export function buildZ80Cpu(
   while (orLevel.length > 1) {
     const next: Pin[] = [];
     for (let i = 0; i + 1 < orLevel.length; i += 2) {
-      const g = buildOr(parent, vcc4, gnd4, { x: pos.x + 8150 + orDepth * 50, y: pos.y + 1700 + i * 10 });
+      const g = buildOr(parent, { x: pos.x + 8150 + orDepth * 50, y: pos.y + 1700 + i * 10 });
       wire(parent, orLevel[i]!, g.a);
       wire(parent, orLevel[i + 1]!, g.b);
       next.push(g.out);
@@ -10152,26 +10152,26 @@ export function buildZ80Cpu(
   tiePowerRail(parent, 'VCC', cpBlockAdder.cin);
   for (let i = 0; i < 8; i++) {
     wire(parent, a.q[i]!, cpBlockAdder.a[i]!);
-    const cpBInv = buildNot(parent, vcc4, gnd4, { x: pos.x - 1350, y: pos.y - 6250 + i * 20 });
+    const cpBInv = buildNot(parent, { x: pos.x - 1350, y: pos.y - 6250 + i * 20 });
     wire(parent, cpBlockTemp.q[i]!, cpBInv.in);
     wire(parent, cpBInv.out, cpBlockAdder.b[i]!);
   }
   const cpSBit = cpBlockAdder.out[7]!;
   let cpZChain: Pin = cpBlockAdder.out[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc4, gnd4, { x: pos.x - 1250, y: pos.y - 6100 + i * 20 });
+    const orGate = buildOr(parent, { x: pos.x - 1250, y: pos.y - 6100 + i * 20 });
     wire(parent, cpZChain, orGate.a);
     wire(parent, cpBlockAdder.out[i]!, orGate.b);
     cpZChain = orGate.out;
   }
   tieToLabel('CPBLOCK_NOT_FOUND_NOW', cpZChain, { x: pos.x - 1200, y: pos.y - 6080 }); // anchor — the pc mux chain's own CP-block repeat gate (far, built earlier in this file) reads this
-  const cpZBit = buildNot(parent, vcc4, gnd4, { x: pos.x - 1200, y: pos.y - 6060 });
+  const cpZBit = buildNot(parent, { x: pos.x - 1200, y: pos.y - 6060 });
   wire(parent, cpZChain, cpZBit.in);
   // Half-borrow: the identical `XOR(carry into bit 4, isSubtractLike)`
   // idiom the shared ALU's own `hRaw` uses, collapsed to a plain `NOT` —
   // `isSubtractLike` is always `1` here, this adder never computes
   // anything else.
-  const cpHBit = buildNot(parent, vcc4, gnd4, { x: pos.x - 1200, y: pos.y - 6040 });
+  const cpHBit = buildNot(parent, { x: pos.x - 1200, y: pos.y - 6040 });
   wire(parent, cpBlockAdder.carries[3]!, cpHBit.in);
   const computedFlagBit: Record<number, Pin> = { 0: cBit.out, 1: nBit, 2: pvBit, 3: xBit, 4: hBit.out, 5: yBit, 6: zBit.out, 7: sBit };
   const r8FlagLabel: Record<number, string> = { 1: 'R8_N', 2: 'R8_P', 3: 'R8_X', 4: 'R8_H', 5: 'R8_Y', 6: 'R8_Z', 7: 'R8_S' };
@@ -10184,21 +10184,21 @@ export function buildZ80Cpu(
   const inRcSBit = ioPortDataIn[7]!;
   let inRcZChain: Pin = ioPortDataIn[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc4, gnd4, { x: pos.x - 1100, y: pos.y - 5450 + i * 20 });
+    const orGate = buildOr(parent, { x: pos.x - 1100, y: pos.y - 5450 + i * 20 });
     wire(parent, inRcZChain, orGate.a);
     wire(parent, ioPortDataIn[i]!, orGate.b);
     inRcZChain = orGate.out;
   }
-  const inRcZBit = buildNot(parent, vcc4, gnd4, { x: pos.x - 1050, y: pos.y - 5450 });
+  const inRcZBit = buildNot(parent, { x: pos.x - 1050, y: pos.y - 5450 });
   wire(parent, inRcZChain, inRcZBit.in);
   let inRcPChain: Pin = ioPortDataIn[0]!;
   for (let i = 1; i < 8; i++) {
-    const xorGate = buildXor(parent, vcc4, gnd4, { x: pos.x - 1100, y: pos.y - 5600 + i * 20 });
+    const xorGate = buildXor(parent, { x: pos.x - 1100, y: pos.y - 5600 + i * 20 });
     wire(parent, inRcPChain, xorGate.a);
     wire(parent, ioPortDataIn[i]!, xorGate.b);
     inRcPChain = xorGate.out;
   }
-  const inRcPBit = buildNot(parent, vcc4, gnd4, { x: pos.x - 1050, y: pos.y - 5600 });
+  const inRcPBit = buildNot(parent, { x: pos.x - 1050, y: pos.y - 5600 });
   wire(parent, inRcPChain, inRcPBit.in);
 
   // LD A,I / LD A,R flags (see "x=01, z=7, y=0..3") — off the source
@@ -10215,12 +10215,12 @@ export function buildZ80Cpu(
   const ldAIrSBit = ldAIrByte[7]!;
   let ldAIrZChain: Pin = ldAIrByte[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc4, gnd4, { x: pos.x - 1100, y: pos.y - 5720 + i * 20 });
+    const orGate = buildOr(parent, { x: pos.x - 1100, y: pos.y - 5720 + i * 20 });
     wire(parent, ldAIrZChain, orGate.a);
     wire(parent, ldAIrByte[i]!, orGate.b);
     ldAIrZChain = orGate.out;
   }
-  const ldAIrZBit = buildNot(parent, vcc4, gnd4, { x: pos.x - 1050, y: pos.y - 5720 });
+  const ldAIrZBit = buildNot(parent, { x: pos.x - 1050, y: pos.y - 5720 });
   wire(parent, ldAIrZChain, ldAIrZBit.in);
 
   for (let i = 0; i < 8; i++) {
@@ -10257,10 +10257,10 @@ export function buildZ80Cpu(
     let cLayerIn = r8Mux.pins[muxDef.ports[3]!]!;
     if (i === 0) {
       const addHlCMux = makeChipInstance(parent, muxDef, { x: pos.x + 8350, y: pos.y + 2075 });
-      const addHlCSel1 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8280, y: pos.y + 2075 });
+      const addHlCSel1 = buildOr(parent, { x: pos.x + 8280, y: pos.y + 2075 });
       tieToLabel('ADDHL_NOW', addHlCSel1.a, { x: pos.x + 8180, y: pos.y + 2075 });
       tieToLabel('ADDIX_NOW', addHlCSel1.b, { x: pos.x + 8180, y: pos.y + 2095 });
-      const addHlCSel = buildOr(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 2075 });
+      const addHlCSel = buildOr(parent, { x: pos.x + 8300, y: pos.y + 2075 });
       wire(parent, addHlCSel1.out, addHlCSel.a);
       tieToLabel('ADDIY_NOW', addHlCSel.b, { x: pos.x + 8200, y: pos.y + 2095 });
       wire(parent, addHlCSel.out, addHlCMux.pins[muxDef.ports[0]!]!);
@@ -10543,22 +10543,22 @@ export function buildZ80Cpu(
     tieToLabel(`BUS${i}`, mux.pins[muxDef.ports[2]!]!, { x: pos.x + 8300, y: pos.y + 2100 + i * 100 }); // in1: POP AF's low byte (the bus)
     wire(parent, mux.pins[muxDef.ports[3]!]!, f.d[i]!);
   }
-  const fWeStage = buildOr(parent, vcc4, gnd4, { x: pos.x + 8500, y: pos.y + 2180 });
+  const fWeStage = buildOr(parent, { x: pos.x + 8500, y: pos.y + 2180 });
   wire(parent, fWe.out, fWeStage.a);
   tieToLabel('INCDEC_R8_NOW', fWeStage.b, { x: pos.x + 8400, y: pos.y + 2180 });
-  const fWeStage2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8600, y: pos.y + 2200 });
+  const fWeStage2 = buildOr(parent, { x: pos.x + 8600, y: pos.y + 2200 });
   wire(parent, fWeStage.out, fWeStage2.a);
   wire(parent, isBusToF.out, fWeStage2.b);
   // ADD HL,rr's own C-bit write (see "x=00: ADD HL,rr" above) needs F's
   // own `we` to fire too — a third OR term, otherwise the fresh mux
   // selection above would sit ready but never actually commit. Widened
   // for ADD IX,rr / ADD IY,rr (same ADDHL_C).
-  const fWeStage3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8700, y: pos.y + 2220 });
+  const fWeStage3 = buildOr(parent, { x: pos.x + 8700, y: pos.y + 2220 });
   wire(parent, fWeStage2.out, fWeStage3.a);
-  const addHlCWe1 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8650, y: pos.y + 2220 });
+  const addHlCWe1 = buildOr(parent, { x: pos.x + 8650, y: pos.y + 2220 });
   tieToLabel('ADDHL_NOW', addHlCWe1.a, { x: pos.x + 8550, y: pos.y + 2220 });
   tieToLabel('ADDIX_NOW', addHlCWe1.b, { x: pos.x + 8550, y: pos.y + 2240 });
-  const addHlCWe = buildOr(parent, vcc4, gnd4, { x: pos.x + 8670, y: pos.y + 2220 });
+  const addHlCWe = buildOr(parent, { x: pos.x + 8670, y: pos.y + 2220 });
   wire(parent, addHlCWe1.out, addHlCWe.a);
   tieToLabel('ADDIY_NOW', addHlCWe.b, { x: pos.x + 8570, y: pos.y + 2240 });
   wire(parent, addHlCWe.out, fWeStage3.b);
@@ -10566,70 +10566,70 @@ export function buildZ80Cpu(
   // need `F`'s own `we` too — `ROTACC_N_NOW` is already the OR of all
   // seven (six from `rotAccCNowFinal`, plus CPL), so this one term alone
   // covers the whole group, not just the bit-0/bit-1 layers it also gates.
-  const fWeStage4 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8750, y: pos.y + 2230 });
+  const fWeStage4 = buildOr(parent, { x: pos.x + 8750, y: pos.y + 2230 });
   wire(parent, fWeStage3.out, fWeStage4.a);
   tieToLabel('ROTACC_N_NOW', fWeStage4.b, { x: pos.x + 8650, y: pos.y + 2230 });
   // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) needs `F`'s
   // own `we` too — a fifth OR term.
-  const fWeStage5 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8760, y: pos.y + 2240 });
+  const fWeStage5 = buildOr(parent, { x: pos.x + 8760, y: pos.y + 2240 });
   wire(parent, fWeStage4.out, fWeStage5.a);
   tieToLabel('EX_AFAF_NOW', fWeStage5.b, { x: pos.x + 8660, y: pos.y + 2240 });
   // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) needs
   // `F`'s own `we` too — a sixth OR term.
-  const fWeStage6 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8770, y: pos.y + 2250 });
+  const fWeStage6 = buildOr(parent, { x: pos.x + 8770, y: pos.y + 2250 });
   wire(parent, fWeStage5.out, fWeStage6.a);
   tieToLabel('DAA_NOW', fWeStage6.b, { x: pos.x + 8670, y: pos.y + 2250 });
   // LDI (see "x=10, y=4, z=0: LDI" above) needs `F`'s own `we` too — a
   // seventh and final OR term.
-  const fWeFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 8870, y: pos.y + 2260 });
+  const fWeFinal = buildOr(parent, { x: pos.x + 8870, y: pos.y + 2260 });
   wire(parent, fWeStage6.out, fWeFinal.a);
   tieToLabel('LDBLOCK_COMMIT_NOW', fWeFinal.b, { x: pos.x + 8770, y: pos.y + 2260 });
   // CPI/CPD/CPIR/CPDR (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above) needs
   // `F`'s own `we` too — an eighth and final OR term.
-  const fWeFinal2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8970, y: pos.y + 2270 });
+  const fWeFinal2 = buildOr(parent, { x: pos.x + 8970, y: pos.y + 2270 });
   wire(parent, fWeFinal.out, fWeFinal2.a);
   tieToLabel('CPBLOCK_COMMIT_NOW', fWeFinal2.b, { x: pos.x + 8870, y: pos.y + 2270 });
   // INI (see "x=10, y=4, z=2: INI" above) needs `F`'s own `we` too — a
   // ninth and final OR term.
-  const fWeFinal3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9070, y: pos.y + 2280 });
+  const fWeFinal3 = buildOr(parent, { x: pos.x + 9070, y: pos.y + 2280 });
   wire(parent, fWeFinal2.out, fWeFinal3.a);
   tieToLabel('INBLOCK_COMMIT_NOW', fWeFinal3.b, { x: pos.x + 8970, y: pos.y + 2280 });
   // OUTI/OUTD/OTIR/OTDR (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above)
   // needs `F`'s own `we` too — a tenth and final OR term.
-  const fWeFinal4 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9170, y: pos.y + 2290 });
+  const fWeFinal4 = buildOr(parent, { x: pos.x + 9170, y: pos.y + 2290 });
   wire(parent, fWeFinal3.out, fWeFinal4.a);
   tieToLabel('OUTBLOCK_COMMIT_NOW', fWeFinal4.b, { x: pos.x + 9070, y: pos.y + 2290 });
   // NEG (see "x=00, z=4: NEG" above) needs `F`'s own `we` too — an
   // eleventh and final OR term.
-  const fWeFinal5 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9270, y: pos.y + 2300 });
+  const fWeFinal5 = buildOr(parent, { x: pos.x + 9270, y: pos.y + 2300 });
   wire(parent, fWeFinal4.out, fWeFinal5.a);
   tieToLabel('NEG_NOW', fWeFinal5.b, { x: pos.x + 9170, y: pos.y + 2300 });
   // ADC HL,rr/SBC HL,rr (see "x=01, z=2: ADC HL,rr/SBC HL,rr" above)
   // needs `F`'s own `we` too — a twelfth and final OR term.
-  const fWeFinal6 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9370, y: pos.y + 2310 });
+  const fWeFinal6 = buildOr(parent, { x: pos.x + 9370, y: pos.y + 2310 });
   wire(parent, fWeFinal5.out, fWeFinal6.a);
   tieToLabel('ADCSBCHL_COMMIT_NOW', fWeFinal6.b, { x: pos.x + 9270, y: pos.y + 2310 });
   // RRD/RLD (see "x=01, z=7: RRD/RLD" above) needs `F`'s own `we` too —
   // a thirteenth and final OR term.
-  const fWeFinal7 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9470, y: pos.y + 2320 });
+  const fWeFinal7 = buildOr(parent, { x: pos.x + 9470, y: pos.y + 2320 });
   wire(parent, fWeFinal6.out, fWeFinal7.a);
   tieToLabel('RRDRLD_COMMIT_NOW', fWeFinal7.b, { x: pos.x + 9370, y: pos.y + 2320 });
-  const fWeFinal8 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9570, y: pos.y + 2330 });
+  const fWeFinal8 = buildOr(parent, { x: pos.x + 9570, y: pos.y + 2330 });
   wire(parent, fWeFinal7.out, fWeFinal8.a);
   tieToLabel('INRC_NOW', fWeFinal8.b, { x: pos.x + 9470, y: pos.y + 2330 });
-  const fWeFinal9 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9670, y: pos.y + 2340 });
+  const fWeFinal9 = buildOr(parent, { x: pos.x + 9670, y: pos.y + 2340 });
   wire(parent, fWeFinal8.out, fWeFinal9.a);
   tieToLabel('LDAIR_NOW', fWeFinal9.b, { x: pos.x + 9570, y: pos.y + 2340 });
-  const fWeFinal10 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9770, y: pos.y + 2350 });
+  const fWeFinal10 = buildOr(parent, { x: pos.x + 9770, y: pos.y + 2350 });
   wire(parent, fWeFinal9.out, fWeFinal10.a);
   tieToLabel('BIT_REG_NOW', fWeFinal10.b, { x: pos.x + 9670, y: pos.y + 2350 });
-  const fWeFinal11 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9870, y: pos.y + 2360 });
+  const fWeFinal11 = buildOr(parent, { x: pos.x + 9870, y: pos.y + 2360 });
   wire(parent, fWeFinal10.out, fWeFinal11.a);
   tieToLabel('BIT_HL_NOW', fWeFinal11.b, { x: pos.x + 9770, y: pos.y + 2360 });
-  const fWeFinal11b = buildOr(parent, vcc4, gnd4, { x: pos.x + 9920, y: pos.y + 2365 });
+  const fWeFinal11b = buildOr(parent, { x: pos.x + 9920, y: pos.y + 2365 });
   wire(parent, fWeFinal11.out, fWeFinal11b.a);
   tieToLabel('BIT_IXIY_NOW', fWeFinal11b.b, { x: pos.x + 9820, y: pos.y + 2365 });
-  const fWeFinal12 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9970, y: pos.y + 2370 });
+  const fWeFinal12 = buildOr(parent, { x: pos.x + 9970, y: pos.y + 2370 });
   wire(parent, fWeFinal11b.out, fWeFinal12.a);
   tieToLabel('CBROT_NOW', fWeFinal12.b, { x: pos.x + 9870, y: pos.y + 2370 });
   wire(parent, fWeFinal12.out, f.we);
@@ -10641,7 +10641,7 @@ export function buildZ80Cpu(
   // y=6/7's explicit INC/DEC SP) — spAdder.out is the right value either
   // way, only the *reason* it's being committed differs; see spWantDec's
   // own doc comment above for why the two conditions never overlap.
-  const spAluActive = buildOr(parent, vcc4, gnd4, { x: pos.x + 8500, y: pos.y + 2850 });
+  const spAluActive = buildOr(parent, { x: pos.x + 8500, y: pos.y + 2850 });
   wire(parent, stackActive.out, spAluActive.a);
   tieToLabel('INCDEC_SP_NOW', spAluActive.b, { x: pos.x + 8400, y: pos.y + 2850 });
   const spExtD: Pin[] = [];
@@ -10652,7 +10652,7 @@ export function buildZ80Cpu(
     wire(parent, spAdder.out[i]!, mux.pins[muxDef.ports[2]!]!); // in1: SP+-1
     wire(parent, mux.pins[muxDef.ports[3]!]!, sp.d[i]!);
   });
-  const spWeOr = buildOr(parent, vcc4, gnd4, { x: pos.x + 8600, y: pos.y + 3200 });
+  const spWeOr = buildOr(parent, { x: pos.x + 8600, y: pos.y + 3200 });
   wire(parent, spAluActive.out, spWeOr.a);
   wire(parent, spWeOr.out, sp.we);
   const spExternal: Register = { d: spExtD, we: spWeOr.b, clk: sp.clk, q: sp.q, qn: sp.qn };
@@ -10673,13 +10673,13 @@ export function buildZ80Cpu(
   // itself. Bits at or past `addrBits` for the high byte simply don't
   // exist (the loop below stops at `addrBits`), the same natural
   // truncation `spAdder`'s own `addrBits`-wide arithmetic already has.
-  const ldDdNnLowSpNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 3300 });
+  const ldDdNnLowSpNow = buildAnd(parent, { x: pos.x + 8300, y: pos.y + 3300 });
   tieToLabel('LDDDNN_LOW_NOW', ldDdNnLowSpNow.a, { x: pos.x + 8200, y: pos.y + 3300 });
   wire(parent, dec.y[6]!, ldDdNnLowSpNow.b);
-  const ldDdNnHighSpNow = buildAnd(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 3350 });
+  const ldDdNnHighSpNow = buildAnd(parent, { x: pos.x + 8300, y: pos.y + 3350 });
   tieToLabel('LDDDNN_HIGH_NOW', ldDdNnHighSpNow.a, { x: pos.x + 8200, y: pos.y + 3350 });
   wire(parent, dec.y[6]!, ldDdNnHighSpNow.b);
-  const ldDdNnSpAnyNow = buildOr(parent, vcc4, gnd4, { x: pos.x + 8400, y: pos.y + 3325 });
+  const ldDdNnSpAnyNow = buildOr(parent, { x: pos.x + 8400, y: pos.y + 3325 });
   wire(parent, ldDdNnLowSpNow.out, ldDdNnSpAnyNow.a);
   wire(parent, ldDdNnHighSpNow.out, ldDdNnSpAnyNow.b);
 
@@ -10701,7 +10701,7 @@ export function buildZ80Cpu(
     wire(parent, freshMux.pins[muxDef.ports[3]!]!, outerMux.pins[muxDef.ports[2]!]!); // in1: this half's own fresh-or-hold bit
     wire(parent, outerMux.pins[muxDef.ports[3]!]!, spExternal.d[i]!); // drives the layer below's own sink, not sp.d directly
   });
-  const spWeOr2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8600, y: pos.y + 3600 });
+  const spWeOr2 = buildOr(parent, { x: pos.x + 8600, y: pos.y + 3600 });
   wire(parent, ldDdNnSpAnyNow.out, spWeOr2.a);
   wire(parent, spWeOr2.out, spExternal.we);
   const spExternal2: Register = { d: spExtD2, we: spWeOr2.b, clk: spExternal.clk, q: spExternal.q, qn: spExternal.qn };
@@ -10720,7 +10720,7 @@ export function buildZ80Cpu(
     else tiePowerRail(parent, 'GND', mux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
     wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal2.d[i]!);
   });
-  const spWeOr3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8900, y: pos.y + 3900 });
+  const spWeOr3 = buildOr(parent, { x: pos.x + 8900, y: pos.y + 3900 });
   tieToLabel('LDSPHL_NOW', spWeOr3.a, { x: pos.x + 8800, y: pos.y + 3900 });
   wire(parent, spWeOr3.out, spExternal2.we);
   const spExternal3: Register = { d: spExtD3, we: spWeOr3.b, clk: spExternal2.clk, q: spExternal2.q, qn: spExternal2.qn };
@@ -10728,7 +10728,7 @@ export function buildZ80Cpu(
   // ED LD SP,(nn) (see "x=01, z=3") — identical hold-vs-fresh shape as
   // `LD SP,nn` above, stacked one layer further out, gated by this
   // instruction's own low/high data-read phases.
-  const edNnSpAnyNow = buildOr(parent, vcc4, gnd4, { x: pos.x + 9100, y: pos.y + 4025 });
+  const edNnSpAnyNow = buildOr(parent, { x: pos.x + 9100, y: pos.y + 4025 });
   tieToLabel('EDNN_WE_SPLO_NOW', edNnSpAnyNow.a, { x: pos.x + 8900, y: pos.y + 4000 });
   tieToLabel('EDNN_WE_SPHI_NOW', edNnSpAnyNow.b, { x: pos.x + 8900, y: pos.y + 4050 });
 
@@ -10750,7 +10750,7 @@ export function buildZ80Cpu(
     wire(parent, freshMux.pins[muxDef.ports[3]!]!, outerMux.pins[muxDef.ports[2]!]!);
     wire(parent, outerMux.pins[muxDef.ports[3]!]!, spExternal3.d[i]!);
   });
-  const spWeOr4 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9300, y: pos.y + 4300 });
+  const spWeOr4 = buildOr(parent, { x: pos.x + 9300, y: pos.y + 4300 });
   wire(parent, edNnSpAnyNow.out, spWeOr4.a);
   wire(parent, spWeOr4.out, spExternal3.we);
   const spExternal4: Register = { d: spExtD4, we: spWeOr4.b, clk: spExternal3.clk, q: spExternal3.q, qn: spExternal3.qn };
@@ -10766,7 +10766,7 @@ export function buildZ80Cpu(
     else tiePowerRail(parent, 'GND', mux.pins[muxDef.ports[2]!]!);
     wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal4.d[i]!);
   });
-  const spWeOr5 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9600, y: pos.y + 4600 });
+  const spWeOr5 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 4600 });
   tieToLabel('LDSPIX_NOW', spWeOr5.a, { x: pos.x + 9500, y: pos.y + 4600 });
   wire(parent, spWeOr5.out, spExternal4.we);
   const spExternal5: Register = { d: spExtD5, we: spWeOr5.b, clk: spExternal4.clk, q: spExternal4.q, qn: spExternal4.qn };
@@ -10781,7 +10781,7 @@ export function buildZ80Cpu(
     else tiePowerRail(parent, 'GND', mux.pins[muxDef.ports[2]!]!);
     wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal5.d[i]!);
   });
-  const spWeOr6 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9800, y: pos.y + 4900 });
+  const spWeOr6 = buildOr(parent, { x: pos.x + 9800, y: pos.y + 4900 });
   tieToLabel('LDSPIY_NOW', spWeOr6.a, { x: pos.x + 9700, y: pos.y + 4900 });
   wire(parent, spWeOr6.out, spExternal5.we);
   const spExternal6: Register = { d: spExtD6, we: spWeOr6.b, clk: spExternal5.clk, q: spExternal5.q, qn: spExternal5.qn };
@@ -10872,13 +10872,13 @@ export function buildZ80Cpu(
   // once that instruction exists.
   let ioBZChain: Pin = ioBAdder.out[0]!;
   for (let i = 1; i < 8; i++) {
-    const orGate = buildOr(parent, vcc4, gnd4, { x: pos.x + 12950, y: pos.y - 750 + i * 20 });
+    const orGate = buildOr(parent, { x: pos.x + 12950, y: pos.y - 750 + i * 20 });
     wire(parent, ioBZChain, orGate.a);
     wire(parent, ioBAdder.out[i]!, orGate.b);
     ioBZChain = orGate.out;
   }
   tieToLabel('IOB_NONZERO_NOW', ioBZChain, { x: pos.x + 13000, y: pos.y - 570 }); // anchor — INIR's own repeat gate, once it exists, reads this
-  const ioBZBit = buildNot(parent, vcc4, gnd4, { x: pos.x + 13000, y: pos.y - 550 });
+  const ioBZBit = buildNot(parent, { x: pos.x + 13000, y: pos.y - 550 });
   wire(parent, ioBZChain, ioBZBit.in);
   tieToLabel('IOB_Z_NOW', ioBZBit.out, { x: pos.x + 13050, y: pos.y - 550 }); // anchor — F's own per-bit layer (near, but built earlier in this file) reads this via the label
 
@@ -10918,13 +10918,13 @@ export function buildZ80Cpu(
   // IN r,(C)/OUT (C),r (see "x=01, z=0/z=1") — all publish C onto the bus
   // for `ioPortAddr`. Side-fold the two ED register-I/O terms then merge
   // once, so this chain doesn't grow two sequential stages past INI/OUTI.
-  const blockCToBusEd = buildOr(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y - 870 });
+  const blockCToBusEd = buildOr(parent, { x: pos.x + 13050, y: pos.y - 870 });
   tieToLabel('INRC_NOW', blockCToBusEd.a, { x: pos.x + 12950, y: pos.y - 870 });
   tieToLabel('OUTRC_NOW', blockCToBusEd.b, { x: pos.x + 12950, y: pos.y - 890 });
-  const blockCToBusNow = buildOr(parent, vcc4, gnd4, { x: pos.x + 13050, y: pos.y - 850 });
+  const blockCToBusNow = buildOr(parent, { x: pos.x + 13050, y: pos.y - 850 });
   tieToLabel('INBLOCK_READ_NOW', blockCToBusNow.a, { x: pos.x + 12950, y: pos.y - 850 });
   tieToLabel('OUTBLOCK_WRITE_NOW', blockCToBusNow.b, { x: pos.x + 12950, y: pos.y - 830 });
-  const blockCToBusFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 13100, y: pos.y - 860 });
+  const blockCToBusFinal = buildOr(parent, { x: pos.x + 13100, y: pos.y - 860 });
   wire(parent, blockCToBusNow.out, blockCToBusFinal.a);
   wire(parent, blockCToBusEd.out, blockCToBusFinal.b);
   for (let i = 0; i < 8; i++) {
@@ -10986,20 +10986,20 @@ export function buildZ80Cpu(
   // INI" above) — a real device wired to this pin needs to know the CPU
   // is reading its port regardless of which of the two opcodes triggered
   // it.
-  const ioReadFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y - 2200 });
+  const ioReadFinal = buildOr(parent, { x: pos.x + 13500, y: pos.y - 2200 });
   wire(parent, inNow.out, ioReadFinal.a);
   tieToLabel('INBLOCK_READ_NOW', ioReadFinal.b, { x: pos.x + 13400, y: pos.y - 2200 });
-  const ioReadFinal2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13550, y: pos.y - 2200 });
+  const ioReadFinal2 = buildOr(parent, { x: pos.x + 13550, y: pos.y - 2200 });
   wire(parent, ioReadFinal.out, ioReadFinal2.a);
   tieToLabel('INRC_NOW', ioReadFinal2.b, { x: pos.x + 13450, y: pos.y - 2200 });
   // `OUT (n),A`'s own `ioWrite` widens to cover `OUTI`'s own family's
   // write strobe too (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above) — the
   // identical reasoning `ioRead`'s own widening just above already
   // establishes — and OUT (C),r.
-  const ioWriteFinal = buildOr(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y - 2100 });
+  const ioWriteFinal = buildOr(parent, { x: pos.x + 13500, y: pos.y - 2100 });
   wire(parent, outNow.out, ioWriteFinal.a);
   tieToLabel('OUTBLOCK_WRITE_NOW', ioWriteFinal.b, { x: pos.x + 13400, y: pos.y - 2100 });
-  const ioWriteFinal2 = buildOr(parent, vcc4, gnd4, { x: pos.x + 13550, y: pos.y - 2100 });
+  const ioWriteFinal2 = buildOr(parent, { x: pos.x + 13550, y: pos.y - 2100 });
   wire(parent, ioWriteFinal.out, ioWriteFinal2.a);
   tieToLabel('OUTRC_NOW', ioWriteFinal2.b, { x: pos.x + 13450, y: pos.y - 2100 });
 

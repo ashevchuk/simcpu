@@ -274,7 +274,7 @@ interface LiveValuePair {
  * counter (see Circuit.ts's bumpStructureVersion/currentStructureVersion):
  * flatten() is called once per tick — every animation frame in the live
  * app (see main.ts's frame()), once per pulse() in every buildZ80Cpu test
- * — and its own cost (a structuredClone of every component, recursively
+ * — and its own cost (cloning every component, recursively
  * through the whole hierarchy) had nothing to do with whether anything
  * actually changed since the last call. The overwhelming majority of
  * calls, in both the live app and every test, happen between edits, not
@@ -291,6 +291,16 @@ interface LiveValuePair {
  */
 const flattenCache = new WeakMap<Circuit, { version: number; result: Circuit; liveValuePairs: LiveValuePair[] }>();
 
+/**
+ * Fully-expanded ChipDef flatten at prefix `''`, keyed by the def's own
+ * `circuit` + structureVersion. Multiple instances of the same def (the
+ * common case inside a folded Z80: thousands of identical gate chips)
+ * rebase this template with `nsPrefix` instead of re-walking nested chips.
+ */
+const chipDefFlatCache = new WeakMap<Circuit, { version: number; flat: FlatLevel }>();
+/** How many times flattenChipDef has been asked to expand this def.circuit. */
+const chipDefFlatRequestCount = new WeakMap<Circuit, number>();
+
 export function flatten(top: Circuit, library: ChipLibrary): Circuit {
   const version = currentStructureVersion();
   const cached = flattenCache.get(top);
@@ -299,7 +309,7 @@ export function flatten(top: Circuit, library: ChipLibrary): Circuit {
     // `.value` — the one piece of state this version check can't see (see
     // LiveValuePair's own doc comment) — might have, since the caller's
     // very last tick. Cheap regardless: a handful of pairs, not a
-    // structuredClone of the whole hierarchy.
+    // clone of the whole hierarchy.
     for (const { original, clone } of cached.liveValuePairs) clone.value = original.value;
     return cached.result;
   }
@@ -311,6 +321,165 @@ export function flatten(top: Circuit, library: ChipLibrary): Circuit {
 
   flattenCache.set(top, { version, result: out, liveValuePairs });
   return out;
+}
+
+/** Clone a Pin; only the four own fields — no prototype / exotic junk. */
+function clonePin(p: Pin): Pin {
+  return { id: p.id, componentId: p.componentId, name: p.name, pos: { x: p.pos.x, y: p.pos.y } };
+}
+
+function clonePinsRecord(pins: Record<string, Pin>): Record<string, Pin> {
+  const out: Record<string, Pin> = Object.create(null);
+  for (const key in pins) {
+    const p = pins[key];
+    if (p) out[key] = clonePin(p);
+  }
+  return out;
+}
+
+/**
+ * Fast structural clone for flatten. Prefer this over `structuredClone`:
+ * for ~200k transistor-level components the latter dominates cold flatten
+ * (copies far more than the simulator needs). RAM `.bytes` is aliased on
+ * purpose — same contract the old structuredClone + re-point path had.
+ */
+function cloneComponent(c: Component): Component {
+  const pos = { x: c.pos.x, y: c.pos.y };
+  switch (c.kind) {
+    case 'transistor':
+      return {
+        id: c.id,
+        kind: 'transistor',
+        type: c.type,
+        pos,
+        rotation: c.rotation,
+        pins: {
+          gate: clonePin(c.pins.gate),
+          drain: clonePin(c.pins.drain),
+          source: clonePin(c.pins.source),
+        },
+      };
+    case 'source':
+      return { id: c.id, kind: 'source', value: c.value, pos, pins: { out: clonePin(c.pins.out) } };
+    case 'input':
+      return { id: c.id, kind: 'input', value: c.value, pos, pins: { out: clonePin(c.pins.out) } };
+    case 'probe':
+      return {
+        id: c.id,
+        kind: 'probe',
+        ...(c.label !== undefined ? { label: c.label } : {}),
+        pos,
+        pins: { in: clonePin(c.pins.in) },
+      };
+    case 'label':
+      return { id: c.id, kind: 'label', name: c.name, pos, pins: { net: clonePin(c.pins.net) } };
+    case 'port':
+      return { id: c.id, kind: 'port', name: c.name, pos, pins: { io: clonePin(c.pins.io) } };
+    case 'ram':
+      // Alias `.bytes` — writes must survive the next flatten (see flattenLevel).
+      return {
+        id: c.id,
+        kind: 'ram',
+        addrBits: c.addrBits,
+        dataBits: c.dataBits,
+        bytes: c.bytes,
+        pos,
+        pins: clonePinsRecord(c.pins),
+      };
+    case 'chip':
+      return { id: c.id, kind: 'chip', defId: c.defId, pos, pins: clonePinsRecord(c.pins) };
+  }
+}
+
+/**
+ * Apply an instance-path prefix to a FlatLevel that was expanded at `''`
+ * (or any shorter prefix). Does not mutate `src` — the ChipDef cache holds
+ * the template. Label names: non-global names get the prefix; VCC/GND stay.
+ */
+function rebaseFlat(src: FlatLevel, prefix: string): FlatLevel {
+  if (!prefix) {
+    // Protect the cache: callers must not share template object identity
+    // with a live flatten result.
+    return rebaseFlatCopy(src);
+  }
+  const components: Component[] = new Array(src.components.length);
+  const templateToClone = new Map<Component, Component>();
+  for (let i = 0; i < src.components.length; i++) {
+    const c = src.components[i]!;
+    const clone = cloneComponent(c);
+    clone.id = prefix + c.id;
+    if (clone.kind === 'label' && !GLOBAL_NET_NAMES.has(clone.name)) {
+      clone.name = prefix + clone.name;
+    }
+    for (const p of Object.values(clone.pins as unknown as Record<string, Pin>)) {
+      p.id = prefix + p.id;
+      p.componentId = clone.id;
+    }
+    components[i] = clone;
+    templateToClone.set(c, clone);
+  }
+  const wires = new Array<{ id: string; a: string; b: string }>(src.wires.length);
+  for (let i = 0; i < src.wires.length; i++) {
+    const w = src.wires[i]!;
+    wires[i] = { id: prefix + w.id, a: prefix + w.a, b: prefix + w.b };
+  }
+  const liveValuePairs: LiveValuePair[] = new Array(src.liveValuePairs.length);
+  for (let i = 0; i < src.liveValuePairs.length; i++) {
+    const { original, clone: templateClone } = src.liveValuePairs[i]!;
+    liveValuePairs[i] = {
+      original,
+      clone: templateToClone.get(templateClone) as SourceComponent | InputComponent,
+    };
+  }
+  return { components, wires, liveValuePairs };
+}
+
+/** Deep-enough copy with no id renaming (cache isolation when prefix is ''). */
+function rebaseFlatCopy(src: FlatLevel): FlatLevel {
+  const components: Component[] = new Array(src.components.length);
+  const templateToClone = new Map<Component, Component>();
+  for (let i = 0; i < src.components.length; i++) {
+    const c = src.components[i]!;
+    const clone = cloneComponent(c);
+    components[i] = clone;
+    templateToClone.set(c, clone);
+  }
+  const wires = src.wires.map((w) => ({ id: w.id, a: w.a, b: w.b }));
+  const liveValuePairs: LiveValuePair[] = src.liveValuePairs.map(({ original, clone: tc }) => ({
+    original,
+    clone: templateToClone.get(tc) as SourceComponent | InputComponent,
+  }));
+  return { components, wires, liveValuePairs };
+}
+
+/**
+ * Expand one ChipDef instance at `prefix`.
+ *
+ * Warm path: rebase a cached fully-expanded template (prefix `''`) so
+ * thousands of identical gate instances don't re-walk nested chips.
+ *
+ * Cold path: the first request for a given def expands directly at
+ * `prefix` (one clone pass — important for a one-off folded Z80). The
+ * second request builds and stores the `''` template, then rebases; later
+ * requests only rebase.
+ */
+function flattenChipDef(def: ChipDef, library: ChipLibrary, prefix: string): FlatLevel {
+  const version = currentStructureVersion();
+  const hit = chipDefFlatCache.get(def.circuit);
+  if (hit && hit.version === version) {
+    return rebaseFlat(hit.flat, prefix);
+  }
+
+  const prev = chipDefFlatRequestCount.get(def.circuit) ?? 0;
+  const next = prev + 1;
+  chipDefFlatRequestCount.set(def.circuit, next);
+
+  if (next >= 2) {
+    const template = flattenLevel(def.circuit, library, '');
+    chipDefFlatCache.set(def.circuit, { version, flat: template });
+    return rebaseFlat(template, prefix);
+  }
+  return flattenLevel(def.circuit, library, prefix);
 }
 
 function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string): FlatLevel {
@@ -328,23 +497,10 @@ function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string):
 
   for (const c of circuit.components.values()) {
     if (c.kind === 'chip') continue; // expanded in the loop below, not copied directly
-    const sharedBytes = c.kind === 'ram' ? c.bytes : undefined; // see below
-    const clone = structuredClone(c) as Component;
-    // structuredClone() deep-copies Uint8Array like everything else, which
-    // is exactly wrong for RAM: a write during this tick's step() has to be
-    // visible to the *next* flatten() call too (a fresh structuredClone
-    // from the original, unflattened circuit, with no memory of this one),
-    // or every write vanishes the instant the next animation frame
-    // re-flattens. Re-pointing the clone at the *original* Uint8Array
-    // (rather than its copy) makes them the same object, so a write
-    // solver.ts makes on the clone is a write to the original too. This is
-    // the one place a folded chip's internal RAM would leak state between
-    // separate instances of the same ChipDef — see ARCHITECTURE.md's "Real
-    // RAM" for why RAM is deliberately not fold()-able for that reason.
-    if (clone.kind === 'ram' && sharedBytes) clone.bytes = sharedBytes;
-    // See LiveValuePair's own doc comment: `.value` on these two kinds is
-    // the other piece of state a cache hit must re-sync from the original,
-    // the same reasoning RAM's `.bytes` aliasing just above exists for.
+    const clone = cloneComponent(c);
+    // RAM `.bytes` is already aliased by cloneComponent. Writes during
+    // step() must remain visible after the next flatten — see ARCHITECTURE.md
+    // "Real RAM". StructuredClone used to copy the Uint8Array; we never do.
     if (c.kind === 'source' || c.kind === 'input') {
       outLiveValuePairs.push({ original: c, clone: clone as SourceComponent | InputComponent });
     }
@@ -355,10 +511,6 @@ function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string):
     if (clone.kind === 'label' && nsPrefix && !GLOBAL_NET_NAMES.has(clone.name)) {
       clone.name = `${nsPrefix}${clone.name}`;
     }
-    // Every Component variant's `pins` is structurally a plain object of
-    // Pin values regardless of its exact key set (fixed for primitives,
-    // dynamic for chip instances) — Record<string, Pin> is a safe view for
-    // this uniform rename pass.
     for (const p of Object.values(clone.pins as unknown as Record<string, Pin>)) {
       p.id = idMap.get(p.id) ?? p.id;
       p.componentId = clone.id;
@@ -373,7 +525,7 @@ function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string):
   for (const c of circuit.components.values()) {
     if (c.kind !== 'chip') continue;
     const def = library.get(c.defId);
-    const child = flattenLevel(def.circuit, library, `${nsPrefix}${c.id}/`);
+    const child = flattenChipDef(def, library, `${nsPrefix}${c.id}/`);
 
     const portAlias = new Map<string, string>();
     for (const ic of child.components) {

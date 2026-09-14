@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { KEY_DATA, KEY_STATUS, MACHINE_ADDR_BITS } from '../src/machine/memoryMap.js';
 import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import { Circuit } from '../src/sim/Circuit.js';
 import { flatten } from '../src/sim/hierarchy.js';
 import { makeInput, makeRam, ramAddrPins, ramDataPins, wire } from '../src/sim/library.js';
-import { initialState, step } from '../src/sim/solver.js';
+import { clearKeyStatusOnDataRead, initialState, step } from '../src/sim/solver.js';
 import type { Level, NetMap, SimState } from '../src/sim/types.js';
+import { injectKey } from '../src/machine/tty.js';
 
 /**
  * Re-flattens fresh every single sub-tick, exactly like main.ts's live
@@ -176,5 +178,61 @@ describe('RAM — behavioral read/write memory', () => {
     clk.value = 1;
     ({ state, netMap } = tickFlatten(parent, library, state));
     expect(ram.bytes[0]).toBe(0b0011); // bits 2,3 unresolved -> committed as 0, not skipped or thrown
+  });
+});
+
+describe('clearKeyStatusOnDataRead helper', () => {
+  it('clears KEY_STATUS only when addr is KEY_DATA', () => {
+    const bytes = new Uint8Array(1 << MACHINE_ADDR_BITS);
+    injectKey(bytes, 0x41);
+    clearKeyStatusOnDataRead(bytes, KEY_STATUS);
+    expect(bytes[KEY_STATUS]).toBe(1);
+    clearKeyStatusOnDataRead(bytes, KEY_DATA);
+    expect(bytes[KEY_STATUS]).toBe(0);
+    expect(bytes[KEY_DATA]).toBe(0x41);
+  });
+
+  it('clears KEY_STATUS when gate RAM OE reads KEY_DATA', () => {
+    const library = new ChipLibrary();
+    const parent = new Circuit();
+    const ram = makeRam(parent, MACHINE_ADDR_BITS, 8);
+    injectKey(ram.bytes, 0x21);
+
+    const addrIns = ramAddrPins(ram).map((p) => {
+      const input = makeInput(parent, 0);
+      wire(parent, input.pins.out, p);
+      return input;
+    });
+    const we = makeInput(parent, 0);
+    const oe = makeInput(parent, 0);
+    const clk = makeInput(parent, 0);
+    wire(parent, we.pins.out, ram.pins.we!);
+    wire(parent, oe.pins.out, ram.pins.oe!);
+    wire(parent, clk.pins.out, ram.pins.clk!);
+
+    const setAddr = (n: number) => {
+      for (let i = 0; i < MACHINE_ADDR_BITS; i++) {
+        addrIns[i]!.value = ((n >> i) & 1) as 0 | 1;
+      }
+    };
+
+    let state = initialState();
+    oe.value = 1;
+    setAddr(KEY_STATUS);
+    for (let i = 0; i < 4; i++) {
+      const flat = flatten(parent, library);
+      const netMap = flat.computeNets();
+      state = step(flat, netMap, state);
+    }
+    expect(ram.bytes[KEY_STATUS]).toBe(1); // reading status does not clear
+
+    setAddr(KEY_DATA);
+    for (let i = 0; i < 4; i++) {
+      const flat = flatten(parent, library);
+      const netMap = flat.computeNets();
+      state = step(flat, netMap, state);
+    }
+    expect(ram.bytes[KEY_STATUS]).toBe(0);
+    expect(ram.bytes[KEY_DATA]).toBe(0x21);
   });
 });

@@ -15,7 +15,7 @@ import {
 import { initialState, step } from './sim/solver.js';
 import { seedStandardCells } from './sim/stdcells.js';
 import type { ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
-import { MACHINE_ADDR_BITS } from './machine/memoryMap.js';
+import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
 import { commandRomHexPrompt } from './machine/commandRom.js';
 import { Camera, type Bounds } from './ui/Camera.js';
@@ -42,9 +42,9 @@ const topCircuit = new Circuit();
 seedDemoCircuit(topCircuit);
 
 function seedDemoCircuit(c: Circuit): void {
-  const vcc = makeSource(c, 1, { x: 80, y: 60 }).pins.out;
-  const gnd = makeSource(c, 0, { x: 80, y: 140 }).pins.out;
-  const notGate = buildNot(c, vcc, gnd, { x: 220, y: 70 });
+  makeSource(c, 1, { x: 80, y: 60 }); // rail driver
+  makeSource(c, 0, { x: 80, y: 140 });
+  const notGate = buildNot(c, { x: 220, y: 70 });
   const input = makeInput(c, 0, { x: 140, y: 100 });
   const probe = makeProbe(c, { x: 300, y: 100 }, 'out');
   wire(c, input.pins.out, notGate.in);
@@ -684,6 +684,50 @@ window.addEventListener('keyup', (ev) => {
 // --- Simulation + render loop -------------------------------------------
 const statusEl = document.getElementById('status') as HTMLDivElement;
 
+/** Offscreen 128×64 for soft bitmap HUD (screen-fixed, not world coords). */
+const bmpHudTmp = document.createElement('canvas');
+bmpHudTmp.width = BMP_WIDTH;
+bmpHudTmp.height = BMP_HEIGHT;
+const bmpHudCtx = bmpHudTmp.getContext('2d');
+
+/** Subtle corner preview when SoftDevices.bitmap has any set pixel. */
+function drawSoftBitmapHud(c: CanvasRenderingContext2D, _vw: number, vh: number): void {
+  if (!machineRunner.attached || !bmpHudCtx) return;
+  const bmp = machineRunner.softDevices.bitmap;
+  let any = false;
+  for (let i = 0; i < bmp.length; i++) {
+    if (bmp[i]) {
+      any = true;
+      break;
+    }
+  }
+  if (!any) return;
+
+  const img = bmpHudCtx.createImageData(BMP_WIDTH, BMP_HEIGHT);
+  for (let i = 0; i < BMP_WIDTH * BMP_HEIGHT; i++) {
+    const bit = (bmp[(i / 8) | 0]! >> (7 - (i & 7))) & 1;
+    const o = i * 4;
+    const v = bit ? 180 : 12;
+    img.data[o] = v;
+    img.data[o + 1] = bit ? 190 : 14;
+    img.data[o + 2] = bit ? 210 : 18;
+    img.data[o + 3] = bit ? 220 : 160;
+  }
+  bmpHudCtx.putImageData(img, 0, 0);
+  const scale = 1;
+  const w = BMP_WIDTH * scale;
+  const h = BMP_HEIGHT * scale;
+  const x = 8;
+  const y = vh - h - 8;
+  c.save();
+  c.globalAlpha = 0.85;
+  c.fillStyle = 'rgba(10,12,18,0.7)';
+  c.fillRect(x - 2, y - 2, w + 4, h + 4);
+  c.imageSmoothingEnabled = false;
+  c.drawImage(bmpHudTmp, x, y, w, h);
+  c.restore();
+}
+
 /**
  * Idle-frame skip: found live once `flatten()`/`computeNets()` caching (see
  * ARCHITECTURE.md's "Caching flatten()/computeNets()") turned out to fix
@@ -735,6 +779,7 @@ function frame(): void {
           contended: false,
         });
         draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
+        drawSoftBitmapHud(ctx!, vw(), vh());
         zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
         statusEl.textContent = `${navStack.map((f) => f.label).join('/')} | soft (flatten deferred) | machine: soft`;
       } else {
@@ -751,6 +796,7 @@ function frame(): void {
         };
 
         draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
+        drawSoftBitmapHud(ctx!, vw(), vh());
         zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
         const mode =
           machineRunner.running && machineRunner.isSoft

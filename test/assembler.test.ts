@@ -141,4 +141,27 @@ describe('mini assembler', () => {
       0xdd, 0xcb, 0x02, 0x36, // SLL (IX+2)
     ]);
   });
+
+  it('resolves EQU / DEFL in immediates and can omit listing', () => {
+    const r = assemble(
+      `
+      EQU FB,0xE00
+      CHAR: EQU 0x41
+      DEFL PORT,1
+      LD A,CHAR
+      LD (FB),A
+      OUT (PORT),A
+      `,
+      0x100,
+    );
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect([...r.bytes]).toEqual([0x3e, 0x41, 0x32, 0x00, 0x0e, 0xd3, 0x01]);
+    expect(r.listing.length).toBeGreaterThan(0);
+
+    const quiet = assemble('LD A,0', 0, { listing: false });
+    expect(quiet.ok).toBe(true);
+    expect(quiet.listing).toEqual([]);
+    expect(bytesToHexPrompt(quiet.bytes, 2)).toBe('3e,00');
+  });
 });

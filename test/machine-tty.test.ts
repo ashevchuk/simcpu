@@ -38,6 +38,8 @@ describe('memory-mapped TTY over RamComponent', () => {
     runInstruction(); // LD A,(KEY_DATA)
     runInstruction(); // LD (0xE01),A
     expect(cpu.ram.bytes[FB_BASE + 1]).toBe(0x21);
+    // Gate clear-on-read: KEY_STATUS cleared when KEY_DATA was OE-read.
+    expect(cpu.ram.bytes[KEY_STATUS]).toBe(0);
 
     runInstruction(); // LD A,0
     runInstruction(); // LD (KEY_STATUS),A

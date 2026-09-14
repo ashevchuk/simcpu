@@ -27,7 +27,7 @@ function makeNandChip(library: ChipLibrary) {
   const scratch = new Circuit();
   const vcc = makeSource(scratch, 1).pins.out;
   const gnd = makeSource(scratch, 0).pins.out;
-  const nand = buildNand(scratch, vcc, gnd);
+  const nand = buildNand(scratch);
   return foldExposing(scratch, 'NAND', library, [
     { pin: nand.a, isOutput: false },
     { pin: nand.b, isOutput: false },
@@ -37,9 +37,9 @@ function makeNandChip(library: ChipLibrary) {
 
 function makeNotChip(library: ChipLibrary) {
   const scratch = new Circuit();
-  const vcc = makeSource(scratch, 1).pins.out;
-  const gnd = makeSource(scratch, 0).pins.out;
-  const notGate = buildNot(scratch, vcc, gnd);
+  makeSource(scratch, 1); // rail driver
+  makeSource(scratch, 0);
+  const notGate = buildNot(scratch);
   return foldExposing(scratch, 'NOT', library, [
     { pin: notGate.in, isOutput: false },
     { pin: notGate.out, isOutput: true },

@@ -232,8 +232,8 @@ test/ram.test.ts         RAM read/write correctness (see "Real RAM"): reads
 test/memoryMap.test.ts   Soft machine-map constants + paintCell / keyboard
                           helpers (see "Memory-mapped TTY (behavioral)").
 test/machine-tty.test.ts Z80 program with addrBits=12 writes FB via
-                          LD (nn),A and clears soft KEY_STATUS after a
-                          poll of KEY_DATA.
+                          LD (nn),A; KEY_DATA read clears KEY_STATUS
+                          (gate clear-on-read).
 test/monitor.test.ts     Soft echo-monitor opcode image + loadMonitor.
 test/machine-monitor.test.ts Echo monitor on addrBits=12: prompt + key
                           echo into FB, KEY_STATUS cleared.
@@ -931,9 +931,9 @@ used) — previously only the low register participated.
 (not the transistor editor). Each animation frame it samples
 `ram.bytes[FB_BASE .. FB_END)` and blits glyphs. When the panel is
 focused, printable keys plus Enter/Backspace/Tab write `KEY_DATA` and set
-`KEY_STATUS=1` (overwrite if unread — documented in the panel hint). Z80
-code polls and clears status with a store. Clear-on-read MMIO can come
-later if a richer monitor needs it.
+`KEY_STATUS=1` (overwrite if unread — documented in the panel hint). Reading
+`KEY_DATA` clears `KEY_STATUS` (soft SoftMemHooks; gate solver
+`applyRamKeyClearOnRead` after a settled OE read). Explicit stores still work.
 
 ### Soft echo monitor (legacy)
 
@@ -965,15 +965,16 @@ always feed the Z80 ROM via `KEY_*`.
 
 ### Mini assembler (panel)
 
-`src/machine/assembler.ts` is a two-pass subset assembler (labels,
+`assembler.ts` is a two-pass subset assembler (labels, `EQU`/`DEFL`,
 `DB`/`DW`, common unprefixed ops this CPU runs — `LD`/`JR`/`JP`/`CALL`/
 ALU/`INC`/`DEC`/stack/EX/… — plus `IX`/`IY`, `(IX+d)`/`(IY+d)`,
 `IXH`/`IXL` remap, `CB` BIT/SET/RES/rot, `DD`/`FD CB` on `(IX+d)`, and
-common `ED` blocks / `ADC`/`SBC HL` / `NEG` / `IM` / `RETI`). The panel
+common `ED` blocks / `ADC`/`SBC HL` / `NEG` / `IM` / `RETI`). Listing lines
+are always built unless `assemble(..., { listing: false })`. The panel
 **Assemble → Load @** uses the Load-address box as origin, writes bytes
 into RAM, and fills the hex box; **Assemble + Go** also patches `JP` at
-`0000` and reboots. Still not a full commercial Z80ASM (undocumented
-`DD CB` `z≠6`, every `ED`/`CB` corner, etc.).
+`0000` and reboots. Still not a full commercial Z80ASM (macros, expressions,
+undocumented `DD CB` `z≠6`, every `ED`/`CB` corner, etc.).
 
 ### MachineRunner auto-clock
 
@@ -995,7 +996,7 @@ Folding does not shrink the ~57k-net `step()` cost — Soft exists because
 turbo-at-all-costs was unusable for interactive TTY. Soft at top level
 also **defers** `flatten()` (canvas draws chip boxes with Z levels) and
 defers gate FSM boot until a Gates speed is selected, so `+ Z80CPU` stays
-interactive. Dive-in or Gates still pays cold `flatten()` (~4s once, then
+interactive. Dive-in or Gates still pays cold `flatten()` (~1.4s once, then
 cached).
 
 ### Soft Z80 + TTY devices
@@ -1003,9 +1004,11 @@ cached).
 `softZ80.ts` covers unprefixed opcodes plus CB/ED/DD/FD (IX/IY, block
 moves, BIT/SET/RES/rot, …). Soft mem hooks: clear-on-read `KEY_DATA`,
 port I/O via `SoftDevices` (TTY OUT `0x01`, keys `0x02`/`0x03`, 128×64
-bitmap ports `0x20`–`0x22`). Mini BASIC (`basic.ts`) compiles a tiny
-subset to Z80 bytes for Load @. Panel status shows soft `PC=…`; leaving
-Soft while desynced auto-reboots.
+bitmap ports `0x20`–`0x22`). Mini BASIC (`basic.ts`) compiles LET/PRINT/
+GOTO/END plus IF/FOR/NEXT/REM/INPUT and multi-item PRINT. Panel status
+shows soft `PC=…`; leaving Soft while desynced auto-reboots. Soft bitmap
+also overlays a small screen-fixed HUD on the transistor canvas when any
+pixel is set (`main.ts` `drawSoftBitmapHud`).
 
 ### Folded Z80CPU placement (Canvas)
 
@@ -1023,12 +1026,22 @@ prefix, so multiple folded chips no longer short `CLK`/`BUS*` nets. Dive-in
 still shows the full transistor guts. Unit tests continue to use the
 unfolded `buildZ80Cpu`.
 
+Cold `flatten()` of a folded 12-bit Z80 (~222k components) is ~1.4s after
+fast component clone + ChipDef expand cache (`hierarchy.ts`); previously
+~4s via `structuredClone`. Soft still defers flatten entirely.
+
+Gate-path keyboard clear-on-read: when RAM OE samples `KEY_DATA` (0xF01),
+the solver clears `KEY_STATUS` (0xF00) — same contract as soft
+`SoftMemHooks`.
+
+Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
+pos?)`, etc.); power is always `tiePowerRail`.
+
 ### Explicitly later
 
-Full commercial Z80ASM dialects (macros/EQU/listings); richer BASIC;
-clear-on-read keyboard in the **gate** solver (soft path done); drawing
-glyphs on the transistor canvas itself; further cold-`flatten()` clone
-cost (still ~4s the first time Gates/dive needs it).
+Full commercial Z80ASM (MACRO/REPT, expressions, INCLUDE); nested BASIC
+FOR and richer exprs; still-faster cold flatten if Gates place latency
+matters more.
 
 ## Decode and execute: a tiny working CPU
 

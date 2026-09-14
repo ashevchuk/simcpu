@@ -46,7 +46,7 @@ describe('NOT gate (2 transistors)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const notGate = buildNot(circuit, vcc, gnd);
+    const notGate = buildNot(circuit);
     const input = makeInput(circuit, inVal);
     wire(circuit, input.pins.out, notGate.in);
 
@@ -65,7 +65,7 @@ describe('NAND gate (4 transistors)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const nand = buildNand(circuit, vcc, gnd);
+    const nand = buildNand(circuit);
     const inA = makeInput(circuit, a);
     const inB = makeInput(circuit, b);
     wire(circuit, inA.pins.out, nand.a);
@@ -86,7 +86,7 @@ describe('AND gate (NAND + NOT, 6 transistors)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const and = buildAnd(circuit, vcc, gnd);
+    const and = buildAnd(circuit);
     const inA = makeInput(circuit, a);
     const inB = makeInput(circuit, b);
     wire(circuit, inA.pins.out, and.a);
@@ -107,7 +107,7 @@ describe('NOR gate (4 transistors, dual of NAND)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const nor = buildNor(circuit, vcc, gnd);
+    const nor = buildNor(circuit);
     const inA = makeInput(circuit, a);
     const inB = makeInput(circuit, b);
     wire(circuit, inA.pins.out, nor.a);
@@ -128,7 +128,7 @@ describe('OR gate (NOR + NOT, 6 transistors)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const or = buildOr(circuit, vcc, gnd);
+    const or = buildOr(circuit);
     const inA = makeInput(circuit, a);
     const inB = makeInput(circuit, b);
     wire(circuit, inA.pins.out, or.a);
@@ -149,7 +149,7 @@ describe('XOR gate (4-NAND composition, 16 transistors)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const xor = buildXor(circuit, vcc, gnd);
+    const xor = buildXor(circuit);
     const inA = makeInput(circuit, a);
     const inB = makeInput(circuit, b);
     wire(circuit, inA.pins.out, xor.a);
@@ -170,7 +170,7 @@ describe('2:1 mux (NOT/AND/OR composition)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const mux = buildMux2(circuit, vcc, gnd);
+    const mux = buildMux2(circuit);
     const inSel = makeInput(circuit, sel);
     const in0 = makeInput(circuit, in0Val);
     const in1 = makeInput(circuit, in1Val);
@@ -193,7 +193,7 @@ describe('4:1 mux (tree of three 2:1 muxes)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const mux = buildMux4(circuit, vcc, gnd);
+    const mux = buildMux4(circuit);
     const s0 = makeInput(circuit, sel0);
     const s1 = makeInput(circuit, sel1);
     const ins = [makeInput(circuit, 0), makeInput(circuit, 0), makeInput(circuit, 0), makeInput(circuit, 0)];
@@ -220,7 +220,7 @@ describe('half adder (XOR + AND, no carry-in)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const ha = buildHalfAdder(circuit, vcc, gnd);
+    const ha = buildHalfAdder(circuit);
     const inA = makeInput(circuit, a);
     const inB = makeInput(circuit, b);
     wire(circuit, inA.pins.out, ha.a);
@@ -246,7 +246,7 @@ describe('full adder (two XOR, two AND, one OR)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const adder = buildFullAdder(circuit, vcc, gnd);
+    const adder = buildFullAdder(circuit);
     const inA = makeInput(circuit, a);
     const inB = makeInput(circuit, b);
     const inCin = makeInput(circuit, cin);
@@ -265,7 +265,7 @@ describe('SR latch (2 cross-coupled NANDs, 8 transistors) — holds state via fe
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const latch = buildSrLatch(circuit, vcc, gnd);
+    const latch = buildSrLatch(circuit);
     const s = makeInput(circuit, 1); // idle = 1 (active-low)
     const r = makeInput(circuit, 1);
     wire(circuit, s.pins.out, latch.setPin);
@@ -340,7 +340,7 @@ describe('tri-state buffer (bus driver) — non-inverting, floats when disabled'
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const buf = buildTriStateBuffer(circuit, vcc, gnd);
+    const buf = buildTriStateBuffer(circuit);
     const en = makeInput(circuit, 1);
     const a = makeInput(circuit, aVal);
     wire(circuit, en.pins.out, buf.en);
@@ -354,7 +354,7 @@ describe('tri-state buffer (bus driver) — non-inverting, floats when disabled'
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const buf = buildTriStateBuffer(circuit, vcc, gnd);
+    const buf = buildTriStateBuffer(circuit);
     const en = makeInput(circuit, 0);
     const a = makeInput(circuit, 1);
     wire(circuit, en.pins.out, buf.en);
@@ -373,7 +373,7 @@ describe('tri-state buffer (bus driver) — non-inverting, floats when disabled'
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const buf = buildTriStateBuffer(circuit, vcc, gnd);
+    const buf = buildTriStateBuffer(circuit);
     const en = makeInput(circuit, 1);
     const a = makeInput(circuit, 1);
     wire(circuit, en.pins.out, buf.en);
@@ -411,8 +411,8 @@ describe('tri-state buffer (bus driver) — non-inverting, floats when disabled'
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const buf1 = buildTriStateBuffer(circuit, vcc, gnd, { x: 0, y: 0 });
-    const buf2 = buildTriStateBuffer(circuit, vcc, gnd, { x: 0, y: 600 });
+    const buf1 = buildTriStateBuffer(circuit, { x: 0, y: 0 });
+    const buf2 = buildTriStateBuffer(circuit, { x: 0, y: 600 });
     const en1 = makeInput(circuit, 1);
     const en2 = makeInput(circuit, 1);
     const a1 = makeInput(circuit, 1);
@@ -443,7 +443,7 @@ describe('address decoder (one-hot)', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const dec = buildDecoder(circuit, vcc, gnd, 2);
+    const dec = buildDecoder(circuit, 2);
     expect(dec.addr).toHaveLength(2);
     expect(dec.lines).toHaveLength(4);
 
@@ -470,9 +470,9 @@ describe('address decoder (one-hot)', () => {
 
   it('a single address bit needs no AND gates at all — just the bit and its inverse', () => {
     const circuit = new Circuit();
-    const vcc = makeSource(circuit, 1).pins.out;
-    const gnd = makeSource(circuit, 0).pins.out;
-    const dec = buildDecoder(circuit, vcc, gnd, 1);
+    makeSource(circuit, 1); // rail driver
+    makeSource(circuit, 0);
+    const dec = buildDecoder(circuit, 1);
     expect(dec.lines).toHaveLength(2);
 
     const a0 = makeInput(circuit, 1);
