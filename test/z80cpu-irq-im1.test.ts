@@ -32,6 +32,8 @@ describe('buildZ80Cpu — thin IM1 IRQ', () => {
       seedReg(cpu.rE, 0);
       seedReg(cpu.rH, 0);
       seedReg(cpu.rL, 0);
+      seedReg(cpu.rIXH, 0);
+      seedReg(cpu.rIXL, 0);
       seedReg(cpu.sp, SP0, ADDR_BITS);
       seedReg(cpu.aP, 0);
       seedReg(cpu.fP, 0);

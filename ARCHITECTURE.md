@@ -9,8 +9,9 @@ This document covers what exists today: the simulation engine, hierarchy/
 chip-folding, a canvas editor, and a transistor-level Z80-like CPU
 (`buildZ80Cpu`) that executes the unprefixed opcode table, the `CB`
 prefix table, the `ED` prefix table including a thin IM1 IRQ layer
-(`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and leaves `DD`/`FD`
-bodies for later. Memory map, monitor, BASIC, and the assembler remain
+(`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and a first `DD`
+slice (`IX` register, `LD IX,nn`, `PUSH IX`, `POP IX` — IY and `(IX+d)`
+still later). Memory map, monitor, BASIC, and the assembler remain
 later phases.
 
 ## Layout
@@ -89,8 +90,9 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN r,(C)`/`OUT (C),r`,
                    `LD I/R`, and thin IM1 IRQ — `IM 1`/`RETI`/`EI`/`DI`)
                    and the `CB` table (`BIT`, `SET`/`RES`, rotates/shifts).
-                   `DD`/`FD` bodies remain inert — see "A real Z80
-                   decoder" and the CB/ED/DD/FD prefix sections below).
+                   First `DD` slice: `IX` + `LD IX,nn` / `PUSH IX` /
+                   `POP IX` (IY and `(IX+d)` still later) — see "DD: IX"
+                   and the CB/ED/DD/FD prefix sections below).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -2403,7 +2405,8 @@ closed them (see "Thin IM1 IRQ" below). The `CB`/`DD`/`ED`/`FD` prefix
 bytes were called permanent exceptions in this same push; that was true
 *then* — the prefix *mechanism*, the `ED` table, and the `CB` table landed
 in later passes (see "The CB/ED/DD/FD prefix mechanism" and the `ED`/`CB`
-sections below). `DD`/`FD` instruction bodies are still deliberately inert.
+sections below). `DD` now has a first IX slice (`LD IX,nn` / `PUSH IX` /
+`POP IX`); `FD`/IY and `(IX+d)` remain later.
 
 **`ADC`/`SBC`** turned out to be exactly the "smaller lift" the very first
 `x=10` doc comment predicted, back when this file had no flags register at
@@ -2832,7 +2835,8 @@ prefixed instruction body executed yet — the foundation the next several
 passes built on. The non-interrupt half of `ED` is now wired (block
 column, `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN`/`OUT
 (C)`, `LD I/R`); CB has `BIT`, `SET`/`RES`, and rotates/shifts
-(register + `(HL)`); `DD`/`FD` bodies remain inert by design.
+(register + `(HL)`); `DD` has a first IX slice (see "DD: IX" below);
+`FD`/IY bodies remain inert by design.
 
 **Finding the four prefix bytes needed no new decode table at all.** Real
 Z80 puts all four in `x=11`'s own `z=3`/`z=5` columns — `CB`=0xCB sits at
@@ -2916,14 +2920,10 @@ excluded signal everything downstream keeps using unchanged).
 op` four-byte sequences, and a prefix immediately following another,
 which real hardware treats as a restart) — this project's one-shot
 "prefix, then real opcode" shape doesn't extend to a *second* prefix byte
-appearing where the real opcode was expected. `isCbActive`/`isDdActive`/
-`isFdActive` (three of `activePrefix.q`'s own four bits) are real and
-correctly latched but still deliberately not `tieToLabel`ed to anything —
-no CB/DD/FD instruction reads them yet, and publishing a label with no
-real consumer would be exactly the "anchor without a consumer" island
-this file's own labeling discipline exists to avoid. `isEdActive` is the
-fourth — the first of the four to get a real consumer, `LDI`, immediately
-below.
+appearing where the real opcode was expected. `isEdActive` was the first
+of the four prefix bits to get a label (LDI); `isCbActive` followed for
+`BIT`; `isDdActive` is now labeled for the IX slice below. `isFdActive`
+stays unlabeled until IY lands.
 
 Verified against the two existing test files most likely to catch a
 retrofit mistake in the four base group gates (`blocks.test.ts`,
@@ -2942,6 +2942,35 @@ began (`git init`, an initial commit of the 178-passing-test state), on
 a dedicated branch — a real rollback point for a change this invasive to
 code that had never needed one before, this project having had no git
 history at all until this pass.
+
+### DD: IX (first slice)
+
+Real Z80's `DD` prefix remaps many `HL` ops onto the `IX` index register.
+This project's first DD body is deliberately narrow: the `IX` register
+itself (`IXH`/`IXL`, same seed-path contract as `B`/`C`), plus three
+ops that reuse unprefixed HL-pair shapes after the prefix burns
+PHASE2–3:
+
+- **`LD IX,nn`** (`DD 21 nn nn`) — decode `isDdActive ∧ dec.x[0] ∧
+  dec.z[1] ∧ dec.y[4]`. PHASE4 reads the low immediate into `IXL`,
+  PHASE5 advances PC, PHASE6 reads the high into `IXH`, PHASE7 advances
+  PC. Adjacent-phase exclusions mirror EDNN. `ram.oe` and `pcHold` each
+  widen with the two read / two advance strobes; write-back is
+  `wrapWithPairCommit` with `BUS` as the value label.
+- **`PUSH IX`** (`DD E5`) / **`POP IX`** (`DD E1`) — decode
+  `isDdActive ∧ dec.x[3]` with PUSH `z[5]∧y[4]` and POP `z[1]∧y[4]`.
+  PUSH: PHASE4 high (`IXH→bus`), PHASE5 low (`IXL→bus`, excludes high).
+  POP: PHASE4 low into `IXL`, PHASE5 high into `IXH`. `stackWriteNow` /
+  `readNow` widen for the DD phases; tri-buf banks drive `REGIXH`/
+  `REGIXL` onto `BUS` for PUSH; another `wrapWithPairCommit` layer
+  commits POP from `BUS`.
+
+Unprefixed `LD HL,nn` / `PUSH HL` / `POP HL` stay quiet under DD because
+`NOT_PREFIX_ACTIVE` already gates those group decode paths — the DD
+bodies are a parallel decode, not a remapping of the HL gates.
+Displacement addressing (`(IX+d)`) and the entire `FD`/`IY` table remain
+later. Verified by `z80cpu-dd-ix.test.ts` (one program: load, push,
+corrupt, pop).
 
 ### x=10, z=0: LDI/LDD/LDIR/LDDR
 
@@ -4462,8 +4491,9 @@ section's own success story.
   than propagating the same gap into a seventeenth gate. `ED` also has
   thin IM1 IRQ (`IM 1`/`RETI`, plus unprefixed `EI`/`DI` — see "Thin IM1
   IRQ" above). `CB` is closed for `BIT`/`SET`/`RES`/rotates (see above).
-  `DD`/`FD` instruction bodies remain deliberately untouched — next after
-  IRQ.
+  `DD` has a first index-register slice (`IX`, `LD IX,nn`, `PUSH IX`,
+  `POP IX` — see "DD: IX" above); IY and `(IX+d)` remain later, as does
+  the entire `FD` table.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
@@ -4533,4 +4563,10 @@ section's own success story.
 npm install
 npm test        # engine unit tests (vitest)
 npm run dev      # canvas editor at http://localhost:5173
+npm run build:file  # static IIFE bundle into dist-file/ — open index.html via file://
 ```
+
+`build:file` exists because browsers block ES-module scripts on `file://`
+(opaque origin). It emits one classic `app.js` plus `index.html` with a
+plain `<script src>` (see `vite.config.file.ts`). Regular `npm run build`
+still targets HTTP hosting under `dist/`.
