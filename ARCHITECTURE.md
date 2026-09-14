@@ -18,7 +18,7 @@ for LD / LD n / INC/DEC / ALU `A,IXH/IXL`). A soft memory-mapped text TTY
 (framebuffer + keyboard over `RamComponent.bytes`, canvas side panel), a
 soft echo monitor in RAM, and a throttled MachineRunner auto-clock are
 the first machine-facing I/O layer — see "Memory-mapped TTY (behavioral)".
-Richer monitor commands, BASIC, and the assembler remain later phases.
+BASIC and a full assembler remain later phases.
 
 ## Layout
 
@@ -144,18 +144,19 @@ src/ui/         Canvas editor — thin layer on top of src/sim, swappable.
                    labels beside each pin — the color-coded border and the
                    N/P letter are still there too, so type is legible at a
                    glance from any one of three independent visual cues.
-  MachinePanel.ts Soft text TTY: samples `ram.bytes[FB_BASE..]` onto a
-                   side-panel canvas, injects keydowns into
-                   KEY_STATUS/KEY_DATA, and exposes Run/Pause/Step for
-                   MachineRunner — see "Memory-mapped TTY (behavioral)".
+  MachinePanel.ts Soft text TTY: samples `ram.bytes[FB_BASE..]`, injects
+                   keys, Run/Pause/Step/Reboot/speed, soft Cmd + Load hex
+                   — see "Memory-mapped TTY (behavioral)".
 
 src/machine/    Soft machine map over RamComponent (not transistor devices).
   memoryMap.ts    Locked 12-bit demo layout: FB @ 0xE00 (32×8), keys @
                    0xF00/0xF01.
   tty.ts          paintCell / injectKey helpers for tests and the panel.
   monitor.ts      Soft echo monitor opcode image (poll keys, CR/BS, wrap).
+  softConsole.ts  Panel command line: M/W/G/R/H + loadHexAt (JS, not Z80).
   MachineRunner.ts Auto-wires Input clocks/reset/seeds and pulses them
-                   (throttled Run / Step) — not a transistor oscillator.
+                   (throttled Run / Step / speed) — not a transistor
+                   oscillator.
 
 src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 demo, owns the hierarchy navigation stack (dive in/out,
@@ -225,6 +226,7 @@ test/machine-tty.test.ts Z80 program with addrBits=12 writes FB via
 test/monitor.test.ts     Soft monitor opcode image shape + loadMonitor.
 test/machine-monitor.test.ts Echo monitor on addrBits=12: prompt + key
                           echo into FB, KEY_STATUS cleared.
+test/softConsole.test.ts Soft M/W/G/R/H commands + loadHexAt.
 test/serialize.test.ts   Project round-trip through a real JSON.stringify/
                           parse cycle, including a folded chip instance
                           still simulating correctly after reload; the id
@@ -924,21 +926,32 @@ clears status, and handles printable echo, `CR` (next 32-col row), and
 `BS` (rub out), wrapping at the framebuffer end. This is the default
 `+ Z80CPU` program prompt (still overridable with pasted hex).
 
+### Soft command console (panel)
+
+Richer inspect/edit is **JS on the panel**, not a second Z80 ROM:
+`src/machine/softConsole.ts` parses `H` / `M addr [len]` / `W addr bb…` /
+`G addr` (patches `JP nn` at `0000` and signals reboot) / `R` (reload
+echo monitor). The panel also has a **Load hex @ addr** box
+(`loadHexAt`) that refuses writes into `0xF00+` unless explicitly allowed.
+Output goes to a `<pre>` log under the TTY canvas. Typing on the canvas
+still feeds the Z80 echo monitor via KEY_*.
+
 ### MachineRunner auto-clock
 
 `MachineRunner` wires `Input` drivers for `clk` / `phaseClk` / `reset` /
-`aReset` / FSM seed / register zero-seeds (parked far above the CPU),
-boots like the test harness, then advances the ring under UI control:
-**Run** (~2 FSM phases per animation frame), **Pause**, **Step** (one
-full 10-phase instruction). Not a transistor oscillator — same soft
-trade-off as Real RAM / the TTY panel. First boot after place still pays
-a multi-second `flatten()`; later ticks hit the flatten cache.
+`aReset` / FSM seed / lean B–L+SP zero-seeds (parked far above the CPU;
+IX/IY/shadows omitted to cut clutter), boots like the test harness, then
+advances the ring under UI control: **Run** / **Pause** / **Step** /
+**Reboot**, with **Slow (2) / Normal (10) / Turbo (40)** FSM phases per
+animation frame. Not a transistor oscillator — same soft trade-off as
+Real RAM / the TTY panel. First boot after place still pays a
+multi-second `flatten()`; later ticks hit the flatten cache.
 
 ### Explicitly later
 
-Full monitor commands / BASIC / assembler; port-I/O TTY (`OUT`/`IN`);
+Z80-native command ROM / BASIC / assembler; port-I/O TTY (`OUT`/`IN`);
 clear-on-read keyboard in the solver; bitmap graphics beyond text cells;
-drawing glyphs on the transistor canvas itself; free-running full-speed
+drawing glyphs on the transistor canvas itself; free-running unthrottled
 clocks.
 
 ## Decode and execute: a tiny working CPU

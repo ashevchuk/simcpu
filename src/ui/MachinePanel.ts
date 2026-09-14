@@ -1,5 +1,5 @@
 import type { RamComponent } from '../sim/types.js';
-import type { MachineRunner } from '../machine/MachineRunner.js';
+import type { MachineRunner, RunSpeed } from '../machine/MachineRunner.js';
 import {
   FB_BASE,
   FB_COLS,
@@ -9,6 +9,7 @@ import {
   KEY_STATUS,
   requiresMachineMap,
 } from '../machine/memoryMap.js';
+import { loadHexAt, parseHex, parseHexBlob, runSoftCommand } from '../machine/softConsole.js';
 import { injectKey } from '../machine/tty.js';
 
 const CELL_W = 10;
@@ -16,8 +17,7 @@ const CELL_H = 16;
 const PAD = 8;
 
 /**
- * Side-panel text TTY: samples the soft framebuffer in `ram.bytes` and
- * injects keystrokes into KEY_STATUS/KEY_DATA. Run/Pause/Step drive a
+ * Side-panel text TTY + soft command/load console. Run/Pause/Step drive a
  * MachineRunner auto-clock. Not a transistor device.
  */
 export class MachinePanel {
@@ -26,9 +26,15 @@ export class MachinePanel {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly hint: HTMLElement;
   private readonly statusEl: HTMLElement;
+  private readonly outEl: HTMLElement;
+  private readonly cmdInput: HTMLInputElement;
+  private readonly loadAddr: HTMLInputElement;
+  private readonly loadHex: HTMLTextAreaElement;
+  private readonly speedSel: HTMLSelectElement;
   private readonly btnRun: HTMLButtonElement;
   private readonly btnPause: HTMLButtonElement;
   private readonly btnStep: HTMLButtonElement;
+  private readonly btnReboot: HTMLButtonElement;
   private ram: RamComponent | null = null;
   private runner: MachineRunner | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
@@ -39,23 +45,47 @@ export class MachinePanel {
     this.root.innerHTML = `
       <div class="machine-panel-header">
         <span class="machine-panel-title">TTY</span>
-        <span class="machine-panel-meta">32×8 · monitor</span>
+        <span class="machine-panel-meta">32×8 · soft console</span>
       </div>
       <div class="machine-panel-controls">
-        <button type="button" data-act="run" title="Auto-clock (~2 FSM phases/frame)">Run</button>
+        <button type="button" data-act="run" title="Auto-clock">Run</button>
         <button type="button" data-act="pause" title="Pause auto-clock">Pause</button>
         <button type="button" data-act="step" title="One full instruction (10 phases)">Step</button>
+        <button type="button" data-act="reboot" title="Reset PC via runner reboot">Reboot</button>
+        <label class="machine-panel-speed">Speed
+          <select data-act="speed" title="FSM phases per animation frame">
+            <option value="slow">Slow (2)</option>
+            <option value="normal" selected>Normal (10)</option>
+            <option value="turbo">Turbo (40)</option>
+          </select>
+        </label>
         <span class="machine-panel-status">idle</span>
       </div>
       <canvas class="machine-panel-canvas" tabindex="0" title="Click to focus; type to inject keys"></canvas>
-      <div class="machine-panel-hint">Place + Z80CPU (12-bit). First boot is slow; then Run and type here.</div>
+      <form class="machine-panel-cmd" autocomplete="off">
+        <label>Cmd <input name="cmd" spellcheck="false" placeholder="H | M e00 8 | W 100 3e 00 | G 100 | R" /></label>
+        <button type="submit">Enter</button>
+      </form>
+      <div class="machine-panel-load">
+        <label>Load @ <input name="addr" spellcheck="false" value="0100" size="4" /></label>
+        <textarea name="hex" rows="3" spellcheck="false" placeholder="hex bytes: 3e,41,32,00,0e ..."></textarea>
+        <button type="button" data-act="load">Load hex</button>
+      </div>
+      <pre class="machine-panel-out"></pre>
+      <div class="machine-panel-hint">Z80 echo on canvas keys; soft Cmd/Load mutate RAM. First boot is slow.</div>
     `;
     this.canvas = this.root.querySelector('canvas')!;
     this.hint = this.root.querySelector('.machine-panel-hint')!;
     this.statusEl = this.root.querySelector('.machine-panel-status')!;
+    this.outEl = this.root.querySelector('.machine-panel-out')!;
+    this.cmdInput = this.root.querySelector('input[name="cmd"]')!;
+    this.loadAddr = this.root.querySelector('input[name="addr"]')!;
+    this.loadHex = this.root.querySelector('textarea[name="hex"]')!;
+    this.speedSel = this.root.querySelector('[data-act="speed"]')!;
     this.btnRun = this.root.querySelector('[data-act="run"]')!;
     this.btnPause = this.root.querySelector('[data-act="pause"]')!;
     this.btnStep = this.root.querySelector('[data-act="step"]')!;
+    this.btnReboot = this.root.querySelector('[data-act="reboot"]')!;
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context is not available for MachinePanel');
     this.ctx = ctx;
@@ -80,6 +110,23 @@ export class MachinePanel {
       this.draw();
       this.refreshControls();
     });
+    this.btnReboot.addEventListener('click', () => {
+      this.runner?.reboot();
+      this.log('reboot');
+      this.draw();
+      this.refreshControls();
+    });
+    this.speedSel.addEventListener('change', () => {
+      const v = this.speedSel.value as RunSpeed;
+      this.runner?.setSpeed(v);
+      this.refreshControls();
+    });
+    this.root.querySelector('.machine-panel-cmd')!.addEventListener('submit', (e) => {
+      e.preventDefault();
+      this.runCommandLine(this.cmdInput.value);
+      this.cmdInput.select();
+    });
+    this.root.querySelector('[data-act="load"]')!.addEventListener('click', () => this.doLoadHex());
     this.setVisible(false);
   }
 
@@ -92,8 +139,54 @@ export class MachinePanel {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
+  private log(msg: string): void {
+    if (!msg) return;
+    const prev = this.outEl.textContent ?? '';
+    const next = prev ? `${prev}\n${msg}` : msg;
+    const lines = next.split('\n');
+    this.outEl.textContent = lines.slice(-12).join('\n');
+  }
+
+  private runCommandLine(line: string): void {
+    if (!this.ram) {
+      this.log('no RAM attached');
+      return;
+    }
+    const result = runSoftCommand(this.ram.bytes, line);
+    this.log(result.ok ? result.message || 'ok' : `! ${result.message}`);
+    if (result.reboot) {
+      this.runner?.reboot();
+      this.runner?.setRunning(true);
+    }
+    this.draw();
+    this.refreshControls();
+  }
+
+  private doLoadHex(): void {
+    if (!this.ram) {
+      this.log('no RAM attached');
+      return;
+    }
+    const addr = parseHex(this.loadAddr.value);
+    if (addr === null) {
+      this.log('! bad load address');
+      return;
+    }
+    const blob = parseHexBlob(this.loadHex.value);
+    if (!blob) {
+      this.log('! bad hex blob');
+      return;
+    }
+    const result = loadHexAt(this.ram.bytes, addr, blob);
+    this.log(result.ok ? result.message : `! ${result.message}`);
+    this.draw();
+  }
+
   bindRunner(runner: MachineRunner | null): void {
     this.runner = runner;
+    if (runner) {
+      this.speedSel.value = runner.speed;
+    }
     this.refreshControls();
   }
 
@@ -109,7 +202,7 @@ export class MachinePanel {
     this.keyHandler = (e: KeyboardEvent) => this.onKeyDown(e);
     this.canvas.addEventListener('keydown', this.keyHandler);
     this.hint.textContent =
-      'Click canvas, then type. Keys overwrite if unread. Run = throttled auto-clock; first boot after place is slow.';
+      'Canvas keys → Z80 echo. Cmd: M/W/G/R/H. Load hex into RAM. Speed = phases/frame; first boot slow.';
     this.setVisible(true);
     this.draw();
     this.refreshControls();
@@ -143,11 +236,17 @@ export class MachinePanel {
     this.btnRun.disabled = !has;
     this.btnPause.disabled = !has;
     this.btnStep.disabled = !has;
+    this.btnReboot.disabled = !has;
+    this.speedSel.disabled = !has;
+    this.cmdInput.disabled = !this.ram;
+    this.loadAddr.disabled = !this.ram;
+    this.loadHex.disabled = !this.ram;
     if (!has) {
       this.statusEl.textContent = 'idle';
       return;
     }
-    this.statusEl.textContent = this.runner!.running ? 'running' : 'paused';
+    const spd = this.runner!.speed;
+    this.statusEl.textContent = `${this.runner!.running ? 'run' : 'pause'} · ${spd} ${this.runner!.phasesPerFrame}/f`;
     this.btnRun.classList.toggle('active', this.runner!.running);
     this.btnPause.classList.toggle('active', !this.runner!.running);
   }
@@ -186,6 +285,9 @@ export class MachinePanel {
 
   private onKeyDown(e: KeyboardEvent): void {
     if (!this.ram) return;
+    // Don't steal keys while typing in cmd/load fields.
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
     const code = mapKey(e);
     if (code === null) return;
     e.preventDefault();

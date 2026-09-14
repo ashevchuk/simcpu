@@ -97,8 +97,8 @@
 
       #machine-panel {
         flex: 0 0 auto;
-        width: 360px;
-        max-width: 40vw;
+        width: 400px;
+        max-width: 42vw;
         display: flex;
         flex-direction: column;
         gap: 8px;
@@ -147,10 +147,60 @@
         border-color: var(--accent);
         font-weight: 600;
       }
+      .machine-panel-speed {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--text-dim);
+        font: 11px ui-monospace, monospace;
+      }
+      .machine-panel-speed select {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        font: 11px ui-monospace, monospace;
+        padding: 2px 4px;
+      }
       .machine-panel-status {
         margin-left: auto;
         font: 11px ui-monospace, monospace;
         color: var(--text-dim);
+      }
+      .machine-panel-cmd, .machine-panel-load {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: flex-start;
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+      }
+      .machine-panel-cmd input, .machine-panel-load input, .machine-panel-load textarea {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        font: 11px ui-monospace, monospace;
+        padding: 4px 6px;
+      }
+      .machine-panel-cmd input { width: 220px; }
+      .machine-panel-load textarea {
+        width: 100%;
+        min-height: 3.2em;
+        resize: vertical;
+      }
+      .machine-panel-out {
+        margin: 0;
+        max-height: 9em;
+        overflow: auto;
+        padding: 6px 8px;
+        background: #0a0c10;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font: 11px/1.35 ui-monospace, monospace;
+        color: var(--text-dim);
+        white-space: pre-wrap;
+        word-break: break-all;
       }
       .machine-panel-hint {
         font: 11px ui-monospace, monospace;

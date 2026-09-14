@@ -416,6 +416,7 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
     machineRunner.attach(editor.circuit, library, cpu, simTick);
     // Boot blocks on first flatten — status hint already warns.
     machineRunner.boot();
+    machineRunner.setSpeed('normal');
     machineRunner.setRunning(true);
     machinePanel.refreshControls();
     machinePanel.draw();
@@ -699,7 +700,7 @@ const statusEl = document.getElementById('status') as HTMLDivElement;
 function frame(): void {
   // Throttled soft auto-clock before the normal sim/draw pass.
   if (machineRunner.running) {
-    machineRunner.tickBudget(2);
+    machineRunner.tickBudget();
     uiDirty = true;
   }
   if (uiDirty || !simState.settled) {

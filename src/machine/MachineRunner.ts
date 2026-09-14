@@ -6,12 +6,21 @@ import type { InputComponent, Pin } from '../sim/types.js';
 
 type TickFn = () => void;
 
+export type RunSpeed = 'slow' | 'normal' | 'turbo';
+
+/** FSM phases advanced per animation frame while running. */
+export const PHASES_PER_FRAME: Record<RunSpeed, number> = {
+  slow: 2,
+  normal: 10,
+  turbo: 40,
+};
+
 /**
  * Soft auto-clock for a placed Z80CPU: wires Input drivers (like the test
  * harness) and pulses them. Not a transistor oscillator.
  *
- * `tick` must flatten+step the shared top-level sim so canvas colors stay
- * consistent with main.ts's frame loop.
+ * Seeds only B–L + SP (enough for the echo monitor). IX/IY/shadows stay
+ * uninitialized until a program writes them — keeps the Input clutter down.
  */
 export class MachineRunner {
   private circuit: Circuit | null = null;
@@ -26,13 +35,22 @@ export class MachineRunner {
   private seedWes: InputComponent[] = [];
   private booted = false;
   running = false;
+  speed: RunSpeed = 'normal';
 
   get attached(): boolean {
     return this.circuit !== null && this.cpu !== null;
   }
 
+  get phasesPerFrame(): number {
+    return PHASES_PER_FRAME[this.speed];
+  }
+
+  setSpeed(speed: RunSpeed): void {
+    this.speed = speed;
+  }
+
   /**
-   * Wire clocks/reset/FSM seed/register zero-seeds beside the CPU.
+   * Wire clocks/reset/FSM seed/lean register zero-seeds beside the CPU.
    * Call `boot()` once afterward before Run/Step.
    */
   attach(circuit: Circuit, _library: ChipLibrary, cpu: Z80Cpu, tick: TickFn): void {
@@ -44,8 +62,10 @@ export class MachineRunner {
     const base = { x: cpu.ram.pos.x - 200, y: cpu.ram.pos.y - 12000 };
     let row = 0;
     const place = (value: 0 | 1): InputComponent => {
-      // Park off-canvas above the CPU so the editor view stays usable.
-      const inp = makeInput(circuit, value, { x: base.x + (row % 8) * 50, y: base.y + Math.floor(row / 8) * 36 });
+      const inp = makeInput(circuit, value, {
+        x: base.x + (row % 8) * 50,
+        y: base.y + Math.floor(row / 8) * 36,
+      });
       row++;
       this.inputIds.push(inp.id);
       return inp;
@@ -77,25 +97,14 @@ export class MachineRunner {
       }
     };
 
+    // Lean set — echo monitor needs HL/A/B; SP for any stack use.
     seedReg(cpu.rB);
     seedReg(cpu.rC);
     seedReg(cpu.rD);
     seedReg(cpu.rE);
     seedReg(cpu.rH);
     seedReg(cpu.rL);
-    seedReg(cpu.rIXH);
-    seedReg(cpu.rIXL);
-    seedReg(cpu.rIYH);
-    seedReg(cpu.rIYL);
     seedReg(cpu.sp, cpu.sp.d.length);
-    seedReg(cpu.aP);
-    seedReg(cpu.fP);
-    seedReg(cpu.bP);
-    seedReg(cpu.cP);
-    seedReg(cpu.dP);
-    seedReg(cpu.eP);
-    seedReg(cpu.hP);
-    seedReg(cpu.lP);
 
     this.booted = false;
     this.running = false;
@@ -125,15 +134,34 @@ export class MachineRunner {
       tick();
     };
 
-    tick(); // settle clocks low
-    pulse(this.phaseClk); // FSM -> phase 0
+    tick();
+    pulse(this.phaseClk);
     this.fsmLoad.value = 0;
-    pulse(this.dataClk); // PC/A reset + register seeds
+    pulse(this.dataClk);
     this.reset.value = 0;
     this.aReset.value = 0;
     for (const we of this.seedWes) we.value = 0;
-    pulse(this.dataClk); // first fetch
+    pulse(this.dataClk);
     this.booted = true;
+  }
+
+  /**
+   * Force PC back through reset + re-seed + first fetch.
+   * Used after soft `G addr` patches JP at 0000.
+   */
+  reboot(): void {
+    if (!this.tick || !this.cpu) return;
+    const wasRunning = this.running;
+    this.running = false;
+    this.booted = false;
+    this.reset.value = 1;
+    this.aReset.value = 1;
+    this.fsmLoad.value = 1;
+    for (const we of this.seedWes) we.value = 1;
+    this.dataClk.value = 0;
+    this.phaseClk.value = 0;
+    this.boot();
+    if (wasRunning) this.running = true;
   }
 
   private pulse(sig: InputComponent): void {
@@ -144,20 +172,17 @@ export class MachineRunner {
     this.tick();
   }
 
-  /** One FSM phase: phaseClk edge then dataClk edge. */
   stepPhase(): void {
     if (!this.booted) this.boot();
     this.pulse(this.phaseClk);
     this.pulse(this.dataClk);
   }
 
-  /** Full 10-phase instruction ring. */
   stepInstruction(): void {
     for (let i = 0; i < 10; i++) this.stepPhase();
   }
 
-  /** Continuous-run budget: advance up to `n` phases (default 2 per frame). */
-  tickBudget(n = 2): void {
+  tickBudget(n = this.phasesPerFrame): void {
     if (!this.running || !this.booted) return;
     for (let i = 0; i < n; i++) this.stepPhase();
   }
