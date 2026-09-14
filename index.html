@@ -186,8 +186,29 @@
       .machine-panel-cmd input { width: 220px; }
       .machine-panel-load textarea {
         width: 100%;
-        min-height: 3.2em;
+        min-height: 2.4em;
         resize: vertical;
+      }
+      .machine-panel-asm {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .machine-panel-asm textarea {
+        width: 100%;
+        min-height: 5.5em;
+        resize: vertical;
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        font: 11px ui-monospace, monospace;
+        padding: 4px 6px;
+      }
+      .machine-panel-asm-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
       }
       .machine-panel-out {
         margin: 0;

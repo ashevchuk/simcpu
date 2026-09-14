@@ -9,6 +9,7 @@ import {
   KEY_STATUS,
   requiresMachineMap,
 } from '../machine/memoryMap.js';
+import { assemble, bytesToHexPrompt } from '../machine/assembler.js';
 import { loadHexAt, parseHex, parseHexBlob, runSoftCommand } from '../machine/softConsole.js';
 import { injectKey } from '../machine/tty.js';
 
@@ -30,6 +31,7 @@ export class MachinePanel {
   private readonly cmdInput: HTMLInputElement;
   private readonly loadAddr: HTMLInputElement;
   private readonly loadHex: HTMLTextAreaElement;
+  private readonly asmSource: HTMLTextAreaElement;
   private readonly speedSel: HTMLSelectElement;
   private readonly btnRun: HTMLButtonElement;
   private readonly btnPause: HTMLButtonElement;
@@ -45,7 +47,7 @@ export class MachinePanel {
     this.root.innerHTML = `
       <div class="machine-panel-header">
         <span class="machine-panel-title">TTY</span>
-        <span class="machine-panel-meta">32×8 · soft console</span>
+        <span class="machine-panel-meta">32×8 · asm</span>
       </div>
       <div class="machine-panel-controls">
         <button type="button" data-act="run" title="Auto-clock">Run</button>
@@ -68,11 +70,22 @@ export class MachinePanel {
       </form>
       <div class="machine-panel-load">
         <label>Load @ <input name="addr" spellcheck="false" value="0100" size="4" /></label>
-        <textarea name="hex" rows="3" spellcheck="false" placeholder="hex bytes: 3e,41,32,00,0e ..."></textarea>
+        <textarea name="hex" rows="2" spellcheck="false" placeholder="hex: 3e,41,32,00,0e ..."></textarea>
         <button type="button" data-act="load">Load hex</button>
       </div>
+      <div class="machine-panel-asm">
+        <textarea name="asm" rows="5" spellcheck="false">; origin = Load @
+LD A,'A'
+LD (0xE00),A
+spin:
+JR spin</textarea>
+        <div class="machine-panel-asm-actions">
+          <button type="button" data-act="asm">Assemble → Load @</button>
+          <button type="button" data-act="asm-go" title="Assemble, load, G origin, reboot">Assemble + Go</button>
+        </div>
+      </div>
       <pre class="machine-panel-out"></pre>
-      <div class="machine-panel-hint">Z80 echo on canvas keys; soft Cmd/Load mutate RAM. First boot is slow.</div>
+      <div class="machine-panel-hint">Asm subset → RAM. Canvas keys = Z80 echo. Cmd M/W/G/R. First boot slow.</div>
     `;
     this.canvas = this.root.querySelector('canvas')!;
     this.hint = this.root.querySelector('.machine-panel-hint')!;
@@ -81,6 +94,7 @@ export class MachinePanel {
     this.cmdInput = this.root.querySelector('input[name="cmd"]')!;
     this.loadAddr = this.root.querySelector('input[name="addr"]')!;
     this.loadHex = this.root.querySelector('textarea[name="hex"]')!;
+    this.asmSource = this.root.querySelector('textarea[name="asm"]')!;
     this.speedSel = this.root.querySelector('[data-act="speed"]')!;
     this.btnRun = this.root.querySelector('[data-act="run"]')!;
     this.btnPause = this.root.querySelector('[data-act="pause"]')!;
@@ -127,6 +141,8 @@ export class MachinePanel {
       this.cmdInput.select();
     });
     this.root.querySelector('[data-act="load"]')!.addEventListener('click', () => this.doLoadHex());
+    this.root.querySelector('[data-act="asm"]')!.addEventListener('click', () => this.doAssemble(false));
+    this.root.querySelector('[data-act="asm-go"]')!.addEventListener('click', () => this.doAssemble(true));
     this.setVisible(false);
   }
 
@@ -144,7 +160,39 @@ export class MachinePanel {
     const prev = this.outEl.textContent ?? '';
     const next = prev ? `${prev}\n${msg}` : msg;
     const lines = next.split('\n');
-    this.outEl.textContent = lines.slice(-12).join('\n');
+    this.outEl.textContent = lines.slice(-24).join('\n');
+  }
+
+  private doAssemble(go: boolean): void {
+    if (!this.ram) {
+      this.log('no RAM attached');
+      return;
+    }
+    const addr = parseHex(this.loadAddr.value);
+    if (addr === null) {
+      this.log('! bad Load @ address (used as asm origin)');
+      return;
+    }
+    const result = assemble(this.asmSource.value, addr);
+    if (!result.ok) {
+      for (const err of result.errors) this.log(`! ${err}`);
+      return;
+    }
+    for (const line of result.listing) this.log(line);
+    this.loadHex.value = bytesToHexPrompt(result.bytes);
+    const loaded = loadHexAt(this.ram.bytes, addr, [...result.bytes]);
+    this.log(loaded.ok ? loaded.message : `! ${loaded.message}`);
+    if (!loaded.ok) return;
+    if (go) {
+      const g = runSoftCommand(this.ram.bytes, `G ${addr.toString(16)}`);
+      this.log(g.message);
+      if (g.reboot) {
+        this.runner?.reboot();
+        this.runner?.setRunning(true);
+      }
+    }
+    this.draw();
+    this.refreshControls();
   }
 
   private runCommandLine(line: string): void {
@@ -202,7 +250,7 @@ export class MachinePanel {
     this.keyHandler = (e: KeyboardEvent) => this.onKeyDown(e);
     this.canvas.addEventListener('keydown', this.keyHandler);
     this.hint.textContent =
-      'Canvas keys → Z80 echo. Cmd: M/W/G/R/H. Load hex into RAM. Speed = phases/frame; first boot slow.';
+      'Asm → Load @. Canvas keys = Z80 echo. Cmd M/W/G/R. Speed = phases/frame; first boot slow.';
     this.setVisible(true);
     this.draw();
     this.refreshControls();
@@ -241,6 +289,7 @@ export class MachinePanel {
     this.cmdInput.disabled = !this.ram;
     this.loadAddr.disabled = !this.ram;
     this.loadHex.disabled = !this.ram;
+    this.asmSource.disabled = !this.ram;
     if (!has) {
       this.statusEl.textContent = 'idle';
       return;

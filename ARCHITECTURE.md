@@ -18,7 +18,7 @@ for LD / LD n / INC/DEC / ALU `A,IXH/IXL`). A soft memory-mapped text TTY
 (framebuffer + keyboard over `RamComponent.bytes`, canvas side panel), a
 soft echo monitor in RAM, and a throttled MachineRunner auto-clock are
 the first machine-facing I/O layer — see "Memory-mapped TTY (behavioral)".
-BASIC and a full assembler remain later phases.
+BASIC remains a later phase.
 
 ## Layout
 
@@ -146,7 +146,7 @@ src/ui/         Canvas editor — thin layer on top of src/sim, swappable.
                    glance from any one of three independent visual cues.
   MachinePanel.ts Soft text TTY: samples `ram.bytes[FB_BASE..]`, injects
                    keys, Run/Pause/Step/Reboot/speed, soft Cmd + Load hex
-                   — see "Memory-mapped TTY (behavioral)".
+                   + mini assembler — see "Memory-mapped TTY (behavioral)".
 
 src/machine/    Soft machine map over RamComponent (not transistor devices).
   memoryMap.ts    Locked 12-bit demo layout: FB @ 0xE00 (32×8), keys @
@@ -154,6 +154,7 @@ src/machine/    Soft machine map over RamComponent (not transistor devices).
   tty.ts          paintCell / injectKey helpers for tests and the panel.
   monitor.ts      Soft echo monitor opcode image (poll keys, CR/BS, wrap).
   softConsole.ts  Panel command line: M/W/G/R/H + loadHexAt (JS, not Z80).
+  assembler.ts    Mini two-pass Z80 subset assembler (labels, DB/DW).
   MachineRunner.ts Auto-wires Input clocks/reset/seeds and pulses them
                    (throttled Run / Step / speed) — not a transistor
                    oscillator.
@@ -227,6 +228,7 @@ test/monitor.test.ts     Soft monitor opcode image shape + loadMonitor.
 test/machine-monitor.test.ts Echo monitor on addrBits=12: prompt + key
                           echo into FB, KEY_STATUS cleared.
 test/softConsole.test.ts Soft M/W/G/R/H commands + loadHexAt.
+test/assembler.test.ts   Mini assembler: LD/JR/labels/DB + error cases.
 test/serialize.test.ts   Project round-trip through a real JSON.stringify/
                           parse cycle, including a folded chip instance
                           still simulating correctly after reload; the id
@@ -936,6 +938,15 @@ echo monitor). The panel also has a **Load hex @ addr** box
 Output goes to a `<pre>` log under the TTY canvas. Typing on the canvas
 still feeds the Z80 echo monitor via KEY_*.
 
+### Mini assembler (panel)
+
+`src/machine/assembler.ts` is a two-pass subset assembler (labels,
+`DB`/`DW`, common unprefixed ops this CPU runs — `LD`/`JR`/`JP`/`CALL`/
+ALU/`INC`/`DEC`/stack/EX/…). The panel **Assemble → Load @** uses the
+Load-address box as origin, writes bytes into RAM, and fills the hex box;
+**Assemble + Go** also patches `JP` at `0000` and reboots. Not a full
+Z80ASM — no IX/IY/`CB`/`ED` yet.
+
 ### MachineRunner auto-clock
 
 `MachineRunner` wires `Input` drivers for `clk` / `phaseClk` / `reset` /
@@ -949,10 +960,10 @@ multi-second `flatten()`; later ticks hit the flatten cache.
 
 ### Explicitly later
 
-Z80-native command ROM / BASIC / assembler; port-I/O TTY (`OUT`/`IN`);
+Full Z80ASM (IX/IY/CB/ED) / BASIC; port-I/O TTY (`OUT`/`IN` devices);
 clear-on-read keyboard in the solver; bitmap graphics beyond text cells;
 drawing glyphs on the transistor canvas itself; free-running unthrottled
-clocks.
+clocks; Z80-native command ROM (vs soft Cmd).
 
 ## Decode and execute: a tiny working CPU
 
