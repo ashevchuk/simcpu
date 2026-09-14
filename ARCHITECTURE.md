@@ -87,8 +87,8 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`,
                    `IN r,(C)`/`OUT (C),r`, `LD I/R` — see "A real Z80
                    decoder" and the CB/ED/DD/FD prefix sections below.
-                   `CB` has the `BIT` column (register + `(HL)`); `DD`/`FD` and
-                   IRQ ops are still inert).
+                   `CB` has `BIT` and `SET`/`RES` (register + `(HL)`);
+                   rotates/`DD`/`FD`/IRQ ops are still inert).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -2829,8 +2829,8 @@ if it had arrived unprefixed. At the moment this mechanism landed, no
 prefixed instruction body executed yet — the foundation the next several
 passes built on. The non-interrupt half of `ED` is now wired (block
 column, `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN`/`OUT
-(C)`, `LD I/R`); CB has the `BIT` column (register + `(HL)`); `DD`/`FD`
-bodies remain inert by design.
+(C)`, `LD I/R`); CB has `BIT` and `SET`/`RES` (register + `(HL)`);
+`DD`/`FD` bodies and CB rotates remain inert by design.
 
 **Finding the four prefix bytes needed no new decode table at all.** Real
 Z80 puts all four in `x=11`'s own `z=3`/`z=5` columns — `CB`=0xCB sits at
@@ -3596,8 +3596,8 @@ already spent `PHASE2`/`PHASE3` recapturing `ir` and advancing `pc`.
 
 **(HL) form (`z=6`):** `PHASE4` reads `(HL)` into the shared `hlMemTemp`
 (OR'd with `INC`/`DEC (HL)`'s own read — mutually exclusive by prefix);
-`PHASE5` commits flags. `ram.oe` and `addr=HL` side-fold the two read
-strobes so the OE chain does not grow two sequential stages.
+`PHASE5` commits flags. `ram.oe` and `addr=HL` side-fold the read
+strobes so the OE chain does not grow sequential stages.
 
 **Flags (both forms):** `Z` ← tested bit is 0; `H=1`; `N=0`; `C` held;
 `P/V` mirrors `Z`; `S` only when testing bit 7 and it is set; `X`/`Y`
@@ -3605,10 +3605,30 @@ mirror the source byte's bits 3/5. For `(HL)`, real Z80 takes `X`/`Y`
 from internal `WZ` — this project uses the memory byte instead
 (documented simplification). Neither form writes a register or RAM.
 
-The CB rotate/shift column (`x=00`) and `RES`/`SET` (`x=10`/`x=11`) are
-next.
-
 Verified with `z80cpu-bit.test.ts` — before the full suite.
+
+### CB x=10/x=11: RES y,r / SET y,r
+
+Clear or set one bit. Real `0xCB 0x80`–`0xCB 0xFF`. No flags.
+`isCbX2Active`/`isCbX3Active` gate RES/SET; shared result byte
+`SETRESRESULT{i}` forces 1 (SET) or 0 (RES) on `y`'s bit and passes the
+other bits through from the z-selected register or `HLMEM`.
+
+**Register form (`z≠6`):** single `PHASE4` commit into B/C/D/E/H/L/A.
+
+**(HL) form (`z=6`):** `PHASE4` read into shared `hlMemTemp` (side-folded
+with `BIT`/`INC`/`DEC (HL)` reads); `PHASE5` writes `SETRESRESULT` back
+(side-folded with `INC`/`DEC (HL)` writes on `ram.we`/`addr=HL`).
+
+Side-fold discipline: when extending a two-input OR that already held two
+label terms, keep both on that first OR's `a`/`b` and add a *second* OR
+for the new term. Leaving an OR input dangling floats it high in this
+solver — found live while adding SET/RES: `addr` stuck on `HL` so every
+`LD r,n` captured `RAM[0]` (the opcode) instead of the immediate.
+
+The CB rotate/shift column (`x=00`) is next.
+
+Verified with `z80cpu-set-res.test.ts` — before the full suite.
 
 ### Solver hot-path rewrite: indexed nets
 
@@ -4407,9 +4427,9 @@ section's own success story.
   this project can observe without IRQ machinery. `RETN`/`RETI`/`IM` (and
   `IFF1`/`IFF2`, auto-increment of `R` on `M1`, and `P/V←IFF2` on
   `LD A,I`/`LD A,R`) wait until an interrupt line exists; CB is being
-  filled column by column (`BIT` register + `(HL)` done — see above);
-  `DD`/`FD` instruction bodies remain deliberately untouched until CB is
-  further along.
+  filled column by column (`BIT` and `SET`/`RES` done — see above; rotates
+  next); `DD`/`FD` instruction bodies remain deliberately untouched until
+  CB is further along.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
   `ir`/the phase ring counter) that turned out to be sensitive to this
