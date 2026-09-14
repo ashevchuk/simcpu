@@ -2,13 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { makeZ80Harness } from './z80Harness.js';
 
 /**
- * First DD/IX slice — LD IX,nn + PUSH IX + POP IX. Prefixed bodies start
- * at PHASE4 after the prefix burns PHASE2–3. See "DD: IX" in ARCHITECTURE.md.
- *
- *  0: DD 21 34 12   LD IX,0x1234
- *  4: DD E5         PUSH IX
- *  6: DD 21 00 00   LD IX,0x0000   (corrupt IX so POP must restore)
- * 10: DD E1         POP IX
+ * DD/IX — first slice (LD/PUSH/POP) plus HL-clone slice (ADD/INC/DEC/
+ * JP/LD SP/EX). Prefixed bodies start at PHASE4. See "DD: IX" in
+ * ARCHITECTURE.md.
  */
 describe('buildZ80Cpu — DD: LD IX,nn / PUSH IX / POP IX', () => {
   const ADDR_BITS = 7;
@@ -52,8 +48,8 @@ describe('buildZ80Cpu — DD: LD IX,nn / PUSH IX / POP IX', () => {
 
     h.runInstruction(); // PUSH IX
     expect(h.readReg(h.cpu.sp.q)).toBe(SP0 - 2);
-    expect(h.cpu.ram.bytes[SP0 - 1]).toBe(0x12); // high byte first
-    expect(h.cpu.ram.bytes[SP0 - 2]).toBe(0x34); // low byte second
+    expect(h.cpu.ram.bytes[SP0 - 1]).toBe(0x12);
+    expect(h.cpu.ram.bytes[SP0 - 2]).toBe(0x34);
     expect(h.readReg(h.cpu.pc)).toBe(6);
 
     h.runInstruction(); // LD IX,0x0000
@@ -66,5 +62,151 @@ describe('buildZ80Cpu — DD: LD IX,nn / PUSH IX / POP IX', () => {
     expect(h.readReg(h.cpu.rIXL.q)).toBe(0x34);
     expect(h.readReg(h.cpu.sp.q)).toBe(SP0);
     expect(h.readReg(h.cpu.pc)).toBe(12);
+  });
+});
+
+describe('buildZ80Cpu — DD: HL-clone ops (ADD/INC/DEC/JP/LD SP/EX)', () => {
+  /**
+   *  0: DD 21 10 00   LD IX,0x0010
+   *  4: 01 03 00      LD BC,0x0003
+   *  7: DD 09         ADD IX,BC     IX<-0x0013
+   *  9: DD 29         ADD IX,IX     IX<-0x0026
+   * 11: DD 23         INC IX        IX<-0x0027
+   * 13: DD 2B         DEC IX        IX<-0x0026
+   * 15: DD F9         LD SP,IX      SP<-0x26
+   * 17: 31 60 00      LD SP,0x0060  (EX setup)
+   * 20: DD 21 AA BB   LD IX,0xBBAA
+   * 24: DD E3         EX (SP),IX
+   * 26: DD E3         EX (SP),IX    round-trip
+   * 28: DD 21 40 00   LD IX,0x0040
+   * 32: DD E9         JP (IX)
+   * 64: 00            NOP at target (prove real jump)
+   *
+   * HL seeded to 0x55AA and IY to 0x66BB — must stay untouched under DD.
+   * RAM[0x60]=0x11, RAM[0x61]=0x22 for EX.
+   */
+  const ADDR_BITS = 7;
+  const HL_H = 0x55;
+  const HL_L = 0xaa;
+  const IY_H = 0x66;
+  const IY_L = 0xbb;
+  const PROGRAM = (() => {
+    const bytes = new Uint8Array(128);
+    bytes.set([0xdd, 0x21, 0x10, 0x00], 0);
+    bytes.set([0x01, 0x03, 0x00], 4);
+    bytes.set([0xdd, 0x09], 7);
+    bytes.set([0xdd, 0x29], 9);
+    bytes.set([0xdd, 0x23], 11);
+    bytes.set([0xdd, 0x2b], 13);
+    bytes.set([0xdd, 0xf9], 15);
+    bytes.set([0x31, 0x60, 0x00], 17);
+    bytes.set([0xdd, 0x21, 0xaa, 0xbb], 20);
+    bytes.set([0xdd, 0xe3], 24);
+    bytes.set([0xdd, 0xe3], 26);
+    bytes.set([0xdd, 0x21, 0x40, 0x00], 28);
+    bytes.set([0xdd, 0xe9], 32);
+    bytes.set([0x00], 0x40);
+    bytes.set([0x11], 0x60);
+    bytes.set([0x22], 0x61);
+    return bytes;
+  })();
+
+  const expectHlIyUntouched = (h: ReturnType<typeof makeZ80Harness>) => {
+    expect(h.readReg(h.cpu.rH.q)).toBe(HL_H);
+    expect(h.readReg(h.cpu.rL.q)).toBe(HL_L);
+    expect(h.readReg(h.cpu.rIYH.q)).toBe(IY_H);
+    expect(h.readReg(h.cpu.rIYL.q)).toBe(IY_L);
+  };
+
+  it('runs ADD/INC/DEC/LD SP/EX/JP on IX without clobbering HL or IY', () => {
+    const h = makeZ80Harness(PROGRAM, ADDR_BITS, (cpu, seedReg) => {
+      seedReg(cpu.rB, 0);
+      seedReg(cpu.rC, 0);
+      seedReg(cpu.rD, 0);
+      seedReg(cpu.rE, 0);
+      seedReg(cpu.rH, HL_H);
+      seedReg(cpu.rL, HL_L);
+      seedReg(cpu.rIXH, 0);
+      seedReg(cpu.rIXL, 0);
+      seedReg(cpu.rIYH, IY_H);
+      seedReg(cpu.rIYL, IY_L);
+      seedReg(cpu.sp, 0, ADDR_BITS);
+      seedReg(cpu.aP, 0);
+      seedReg(cpu.fP, 0);
+      seedReg(cpu.bP, 0);
+      seedReg(cpu.cP, 0);
+      seedReg(cpu.dP, 0);
+      seedReg(cpu.eP, 0);
+      seedReg(cpu.hP, 0);
+      seedReg(cpu.lP, 0);
+    });
+
+    h.runInstruction(); // LD IX,0x0010
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x00);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x10);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD BC,0x0003
+    expect(h.readReg(h.cpu.rB.q)).toBe(0x00);
+    expect(h.readReg(h.cpu.rC.q)).toBe(0x03);
+
+    h.runInstruction(); // ADD IX,BC
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x00);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x13);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // ADD IX,IX
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x00);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x26);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // INC IX
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x00);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x27);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // DEC IX
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x00);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x26);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD SP,IX
+    expect(h.readReg(h.cpu.sp.q)).toBe(0x26);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD SP,0x0060
+    expect(h.readReg(h.cpu.sp.q)).toBe(0x60);
+
+    h.runInstruction(); // LD IX,0xBBAA
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0xbb);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0xaa);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // EX (SP),IX
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x22);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x11);
+    expect(h.cpu.ram.bytes[0x60]).toBe(0xaa);
+    expect(h.cpu.ram.bytes[0x61]).toBe(0xbb);
+    expect(h.readReg(h.cpu.sp.q)).toBe(0x60);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // EX (SP),IX again
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0xbb);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0xaa);
+    expect(h.cpu.ram.bytes[0x60]).toBe(0x11);
+    expect(h.cpu.ram.bytes[0x61]).toBe(0x22);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // LD IX,0x0040
+    expect(h.readReg(h.cpu.rIXH.q)).toBe(0x00);
+    expect(h.readReg(h.cpu.rIXL.q)).toBe(0x40);
+
+    h.runInstruction(); // JP (IX)
+    expect(h.readReg(h.cpu.pc)).toBe(0x40);
+    expectHlIyUntouched(h);
+
+    h.runInstruction(); // NOP at 0x40
+    expect(h.readReg(h.cpu.pc)).toBe(0x41);
+    expectHlIyUntouched(h);
   });
 });

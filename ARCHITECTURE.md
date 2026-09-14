@@ -10,7 +10,9 @@ chip-folding, a canvas editor, and a transistor-level Z80-like CPU
 (`buildZ80Cpu`) that executes the unprefixed opcode table, the `CB`
 prefix table, the `ED` prefix table including a thin IM1 IRQ layer
 (`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and first `DD`/`FD`
-slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY` —
+slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY`, plus
+HL-clone `ADD`/`INC`/`DEC`/`JP`/`LD SP`/`EX (SP)` — `(IX+d)`/`DD CB`
+still later):
 `(IX+d)`/`(IY+d)` still later). Memory map, monitor, BASIC, and the
 assembler remain later phases.
 
@@ -91,7 +93,8 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    `LD I/R`, and thin IM1 IRQ — `IM 1`/`RETI`/`EI`/`DI`)
                    and the `CB` table (`BIT`, `SET`/`RES`, rotates/shifts).
                    First `DD`/`FD` slices: `IX`/`IY` + `LD IX/IY,nn` /
-                   `PUSH`/`POP IX/IY` (`(IX+d)`/`(IY+d)` still later) — see
+                   `PUSH`/`POP IX/IY` plus HL-clone ADD/INC/DEC/JP/LD SP/EX
+                   (`(IX+d)`/`(IY+d)`/`DD CB` still later) — see
                    "DD: IX" / "FD: IY" and the CB/ED/DD/FD prefix sections
                    below).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
@@ -2945,13 +2948,14 @@ a dedicated branch — a real rollback point for a change this invasive to
 code that had never needed one before, this project having had no git
 history at all until this pass.
 
-### DD: IX (first slice)
+### DD: IX (first slice + HL-clone)
 
 Real Z80's `DD` prefix remaps many `HL` ops onto the `IX` index register.
-This project's first DD body is deliberately narrow: the `IX` register
-itself (`IXH`/`IXL`, same seed-path contract as `B`/`C`), plus three
-ops that reuse unprefixed HL-pair shapes after the prefix burns
-PHASE2–3:
+This project's DD body is still displacement-free: the `IX` register
+itself (`IXH`/`IXL`, same seed-path contract as `B`/`C`), plus the
+HL-pair shapes that need no `(IX+d)`.
+
+**First slice** — load / stack:
 
 - **`LD IX,nn`** (`DD 21 nn nn`) — decode `isDdActive ∧ dec.x[0] ∧
   dec.z[1] ∧ dec.y[4]`. PHASE4 reads the low immediate into `IXL`,
@@ -2967,32 +2971,49 @@ PHASE2–3:
   `REGIXL` onto `BUS` for PUSH; another `wrapWithPairCommit` layer
   commits POP from `BUS`.
 
-Unprefixed `LD HL,nn` / `PUSH HL` / `POP HL` stay quiet under DD because
-`NOT_PREFIX_ACTIVE` already gates those group decode paths — the DD
-bodies are a parallel decode, not a remapping of the HL gates.
-Displacement addressing (`(IX+d)`) remains later. Verified by
-`z80cpu-dd-ix.test.ts` (one program: load, push, corrupt, pop).
+**HL-clone slice** (no displacement) — parallel decode on raw
+`dec.x/y/z` ∧ `isDdActive`, bodies at **PHASE4** (prefix burns
+PHASE2–3). Never reopen `isX0Group` / `isStackGroup`
+(`NOT_PREFIX_ACTIVE` kills those under DD):
 
-### FD: IY (first slice)
+- **`ADD IX,rr`** (`DD 09/19/29/39`) — widens the shared `addHlAdder`
+  (`a` muxes HL/IX/IY; HL-pair `b` slot uses IX under DD so `ADD IX,IX`
+  works). `ADDIX_NOW` @ PHASE4; `wrapWithPairCommit` on IX from
+  `ADDHLHI`/`ADDHLLO`; F C-bit mux / `we` OR with `ADDIX_NOW` (same
+  `ADDHL_C`). Unprefixed `ADDHL_NOW` stays quiet under prefix.
+- **`INC/DEC IX`** (`DD 23`/`2B`) — `buildPairAdder` → `IXADD`;
+  `INCDEC_IX_NOW` @ PHASE4; no flags.
+- **`JP (IX)`** (`DD E9`) — `JPIX_NOW` @ PHASE4; PC mux layer after
+  `jpHlMux` from `IXL`/`IXH`.
+- **`LD SP,IX`** (`DD F9`) — `LDSPIX_NOW` @ PHASE4; SP mux from IX;
+  widen SP `we`.
+- **`EX (SP),IX`** (`DD E3`) — PHASE4–7 with adjacent exclusions;
+  shares `spLoTemp`/`spHiTemp`/`oldLTemp`/`oldHTemp`/`exSpHlPlusOne`
+  and the EXSPHL addr mux (strobes OR'd). Old IX captured into the
+  holding temps at first read (never drive bus from live `REGIX*`
+  while committing IX). IX write-back from `SPLOTEMP`/`SPHITEMP`.
+
+Unprefixed HL ops stay quiet under DD because `NOT_PREFIX_ACTIVE`
+already gates those group decode paths — the DD bodies are a parallel
+decode, not a remapping of the HL gates. Displacement addressing
+(`(IX+d)`) and `DD CB` remain later. Verified by `z80cpu-dd-ix.test.ts`
+(load/push/pop plus a second program covering all five HL-clone
+families, asserting HL and IY unchanged).
+
+### FD: IY (first slice + HL-clone)
 
 Mechanical mirror of "DD: IX" above, gated on `isFdActive` (`0xFD`)
-instead of `isDdActive`. Same register shape (`IYH`/`IYL`, seed-path
-contract like `IXH`/`IXL`), same PHASE4–7 / PHASE4–5 bodies:
+instead of `isDdActive`. Same register shape (`IYH`/`IYL`), same
+PHASE4–7 / PHASE4–5 / PHASE4 bodies:
 
-- **`LD IY,nn`** (`FD 21 nn nn`) — decode `isFdActive ∧ dec.x[0] ∧
-  dec.z[1] ∧ dec.y[4]`. PHASE4→`IYL`, PHASE5 advance, PHASE6→`IYH`,
-  PHASE7 advance. `ram.oe` / `pcHold` widen with the IY strobes
-  (side-folded with IX so neither OR input floats); write-back is
-  `wrapWithPairCommit` from `BUS`.
-- **`PUSH IY`** (`FD E5`) / **`POP IY`** (`FD E1`) — decode
-  `isFdActive ∧ dec.x[3]` with PUSH `z[5]∧y[4]` and POP `z[1]∧y[4]`.
-  Same high-then-low / low-then-high phase shape as PUSH/POP IX.
-  `stackWriteNow` / `readNow` widen for the FD phases; tri-buf banks
-  drive `REGIYH`/`REGIYL` onto `BUS` for PUSH; another
-  `wrapWithPairCommit` layer commits POP from `BUS`.
+- **`LD IY,nn`** / **`PUSH IY`** / **`POP IY`** — as in the first
+  slice (mirror of IX).
+- **`ADD IY,rr`** / **`INC/DEC IY`** / **`JP (IY)`** / **`LD SP,IY`** /
+  **`EX (SP),IY`** — same HL-clone wiring with `ADDIY_NOW`,
+  `IYADD`, `JPIY_NOW`, `LDSPIY_NOW`, `EXSPIY_*`.
 
-`(IY+d)` remains later. Verified by `z80cpu-fd-iy.test.ts` (mirror of
-the IX program with `0xFD`).
+`(IY+d)` and `FD CB` remain later. Verified by `z80cpu-fd-iy.test.ts`
+(mirror programs; asserts HL and IX unchanged under FD).
 
 ### x=10, z=0: LDI/LDD/LDIR/LDDR
 
@@ -4514,8 +4535,9 @@ section's own success story.
   thin IM1 IRQ (`IM 1`/`RETI`, plus unprefixed `EI`/`DI` — see "Thin IM1
   IRQ" above). `CB` is closed for `BIT`/`SET`/`RES`/rotates (see above).
   `DD` has a first index-register slice (`IX`, `LD IX,nn`, `PUSH IX`,
-  `POP IX` — see "DD: IX" above); `FD` has the matching IY slice
-  (`IY`, `LD IY,nn`, `PUSH IY`, `POP IY` — see "FD: IY" above);
+  `POP IX`, plus HL-clone ADD/INC/DEC/JP/LD SP/EX — see "DD: IX" above);
+  `FD` has the matching IY slice (`IY`, `LD IY,nn`, `PUSH IY`, `POP IY`,
+  plus the same HL-clone set — see "FD: IY" above);
   `(IX+d)`/`(IY+d)` remain later.
 - `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
   (a transient forced-driver conflict on the RAM address bus, corrupting
