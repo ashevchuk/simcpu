@@ -983,12 +983,11 @@ export interface Z80Cpu {
  *
  * `z=110` (`(HL)`) is real Z80 memory-indirect addressing — the operand is
  * the byte at the address held in registers H and L, not a register at
- * all. This slice's RAM is far smaller than the 64K a real 16-bit H:L
- * pair could address, so only `L`'s own low `addrBits` bits are actually
- * wired to the address bus; `H` exists as a register (so `y`/`z`
- * decoding stays complete and `LD r,H`-style code works) but never
- * participates in addressing here — a real, documented limitation, not a
- * hidden one.
+ * all. Address bits `0..7` come from `L`; bits `8..addrBits-1` come from
+ * `H` (same split `JP (HL)` / `ADD HL,rr` already use). When
+ * `addrBits <= 8`, only `L` participates — the historical small-RAM
+ * convention. `BC`/`DE` register-indirect addressing uses the same
+ * low/high split (`C`/`B`, `E`/`D`).
  *
  * All eight `z` sources — six registers, `(HL)`, and `A` itself — share
  * one bus (the same `ir.d`/`ram.data` pins `buildMinimalCpu` already
@@ -7751,10 +7750,15 @@ export function buildZ80Cpu(
   tieToLabel('OUTBLOCK_REPEAT_NOW', outBlockRepeatNow.out, { x: pos.x - 650, y: pos.y - 5300 }); // anchor — pc's own mux chain (far) reads this
 
   ramAddrPins(ram).forEach((p, i) => {
+    // 8-bit register pairs: low byte for bits 0..7, high byte for 8+.
+    const hlBit = i < 8 ? rL.q[i]! : (rH.q[i - 8] ?? gnd);
+    const bcBit = i < 8 ? rC.q[i]! : (rB.q[i - 8] ?? gnd);
+    const deBit = i < 8 ? rE.q[i]! : (rD.q[i - 8] ?? gnd);
+
     const mux = makeChipInstance(parent, muxDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
     wire(parent, addrIsHl.out, mux.pins[muxDef.ports[0]!]!);
     wire(parent, pc.q[i]!, mux.pins[muxDef.ports[1]!]!);
-    wire(parent, rL.q[i]!, mux.pins[muxDef.ports[2]!]!);
+    wire(parent, hlBit, mux.pins[muxDef.ports[2]!]!);
 
     const writeMux = makeChipInstance(parent, muxDef, { x: pos.x + 900, y: pos.y - 300 - i * 100 });
     tieToLabel('STACK_WRITE_NOW', writeMux.pins[muxDef.ports[0]!]!, { x: pos.x + 800, y: pos.y - 320 - i * 100 });
@@ -7769,19 +7773,18 @@ export function buildZ80Cpu(
     // Indirect loads' own four address sources (see "x=00: indirect loads
     // through (BC)/(DE)/(nn)" above) — four more override layers, the
     // identical shape `writeMux`/`readMux` above already established:
-    // `BC`/`DE` for the register-indirect opcodes (`rC.q`/`rE.q` — this
-    // simulator's own "only the low byte matters" convention `HL`'s own
-    // addressing above already relies on), then `nnAddr` and
-    // `nnAddr + 1` for the absolute-indirect ones.
+    // `BC`/`DE` for the register-indirect opcodes (low/high byte split when
+    // addrBits > 8), then `nnAddr` and `nnAddr + 1` for the absolute-
+    // indirect ones.
     const bcMux = makeChipInstance(parent, muxDef, { x: pos.x + 1300, y: pos.y - 300 - i * 100 });
     tieToLabel('LDBC_ADDR_NOW', bcMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1200, y: pos.y - 320 - i * 100 });
     wire(parent, readMux.pins[muxDef.ports[3]!]!, bcMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rC.q[i]!, bcMux.pins[muxDef.ports[2]!]!);
+    wire(parent, bcBit, bcMux.pins[muxDef.ports[2]!]!);
 
     const deMux = makeChipInstance(parent, muxDef, { x: pos.x + 1500, y: pos.y - 300 - i * 100 });
     tieToLabel('LDDE_ADDR_NOW', deMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1400, y: pos.y - 320 - i * 100 });
     wire(parent, bcMux.pins[muxDef.ports[3]!]!, deMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rE.q[i]!, deMux.pins[muxDef.ports[2]!]!);
+    wire(parent, deBit, deMux.pins[muxDef.ports[2]!]!);
 
     const nnLowMux = makeChipInstance(parent, muxDef, { x: pos.x + 1700, y: pos.y - 300 - i * 100 });
     tieToLabel('NN_DATA_ADDR_NOW', nnLowMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1600, y: pos.y - 320 - i * 100 });
@@ -7811,67 +7814,43 @@ export function buildZ80Cpu(
     wire(parent, exSpHlLowMux.pins[muxDef.ports[3]!]!, exSpHlHighMux.pins[muxDef.ports[1]!]!);
     tieToLabel(`SPPLUS1_${i}`, exSpHlHighMux.pins[muxDef.ports[2]!]!, { x: pos.x + 2200, y: pos.y - 280 - i * 100 });
 
-    // LDI (see "x=10, y=4, z=0: LDI" above) — two more override layers, the
-    // identical shape every earlier address source above already
-    // established: `HL` during its own read phase (`rL.q`, the same
-    // low-byte-only convention `HL`'s own addressing at the very top of
-    // this chain already uses — a new layer here rather than widening that
-    // one directly, so this stays exactly as auditable as `EX (SP),HL`'s
-    // own two layers just above), `DE` during its own write phase (`rE.q`,
-    // the same convention `deMux` above already established for it).
+    // LDI — HL during read, DE during write (full pair width when addrBits > 8).
     const ldBlockReadMux = makeChipInstance(parent, muxDef, { x: pos.x + 2500, y: pos.y - 300 - i * 100 });
     tieToLabel('LDBLOCK_READ_NOW', ldBlockReadMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2400, y: pos.y - 320 - i * 100 });
     wire(parent, exSpHlHighMux.pins[muxDef.ports[3]!]!, ldBlockReadMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rL.q[i]!, ldBlockReadMux.pins[muxDef.ports[2]!]!);
+    wire(parent, hlBit, ldBlockReadMux.pins[muxDef.ports[2]!]!);
 
     const ldBlockWriteMux = makeChipInstance(parent, muxDef, { x: pos.x + 2700, y: pos.y - 300 - i * 100 });
     tieToLabel('LDBLOCK_WRITE_NOW', ldBlockWriteMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2600, y: pos.y - 320 - i * 100 });
     wire(parent, ldBlockReadMux.pins[muxDef.ports[3]!]!, ldBlockWriteMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rE.q[i]!, ldBlockWriteMux.pins[muxDef.ports[2]!]!);
+    wire(parent, deBit, ldBlockWriteMux.pins[muxDef.ports[2]!]!);
 
-    // CPI/CPD/CPIR/CPDR (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above) — one
-    // more override layer, the identical shape LDI's own two just above
-    // establish: `HL` during this family's own (and only) read phase, the
-    // same `rL.q` source `ldBlockReadMux` above already uses (a new layer
-    // here rather than widening that one's own select condition, so this
-    // stays exactly as auditable — `LDBLOCK_READ_NOW` keeps meaning only
-    // the LD-block family, never quietly growing to cover this one too).
+    // CPI/CPD/CPIR/CPDR — HL read address.
     const cpBlockReadMux = makeChipInstance(parent, muxDef, { x: pos.x + 2900, y: pos.y - 300 - i * 100 });
     tieToLabel('CPBLOCK_READ_NOW', cpBlockReadMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2800, y: pos.y - 320 - i * 100 });
     wire(parent, ldBlockWriteMux.pins[muxDef.ports[3]!]!, cpBlockReadMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rL.q[i]!, cpBlockReadMux.pins[muxDef.ports[2]!]!);
+    wire(parent, hlBit, cpBlockReadMux.pins[muxDef.ports[2]!]!);
 
-    // INI (see "x=10, y=4, z=2: INI" above) — one more override layer:
-    // `HL` during its own write-to-RAM phase (`rL.q`, the same low-byte-
-    // only convention every earlier `HL` address source above already
-    // uses). No read-phase layer needed here at all — `INBLOCK_READ_NOW`
-    // never touches RAM's own address, only the bus (`C`'s own tri-buf
-    // bank, far below, publishes the port address there instead).
+    // INI — HL write-to-RAM address.
     const inBlockWriteMux = makeChipInstance(parent, muxDef, { x: pos.x + 3100, y: pos.y - 300 - i * 100 });
     tieToLabel('INBLOCK_WRITE_NOW', inBlockWriteMux.pins[muxDef.ports[0]!]!, { x: pos.x + 3000, y: pos.y - 320 - i * 100 });
     wire(parent, cpBlockReadMux.pins[muxDef.ports[3]!]!, inBlockWriteMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rL.q[i]!, inBlockWriteMux.pins[muxDef.ports[2]!]!);
+    wire(parent, hlBit, inBlockWriteMux.pins[muxDef.ports[2]!]!);
 
-    // OUTI/OUTD/OTIR/OTDR (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above) —
-    // one more override layer: `HL` during its own read-from-RAM phase,
-    // the mirror image of `INI`'s own write-phase layer just above.
+    // OUTI/OUTD/OTIR/OTDR — HL read-from-RAM address.
     const outBlockReadMux = makeChipInstance(parent, muxDef, { x: pos.x + 3300, y: pos.y - 300 - i * 100 });
     tieToLabel('OUTBLOCK_READ_NOW', outBlockReadMux.pins[muxDef.ports[0]!]!, { x: pos.x + 3200, y: pos.y - 320 - i * 100 });
     wire(parent, inBlockWriteMux.pins[muxDef.ports[3]!]!, outBlockReadMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rL.q[i]!, outBlockReadMux.pins[muxDef.ports[2]!]!);
+    wire(parent, hlBit, outBlockReadMux.pins[muxDef.ports[2]!]!);
 
-    // RRD/RLD (see "x=01, z=7: RRD/RLD" above) — one more override
-    // layer: `HL` during either of its own two phases (`RRDRLD_READ_NOW`
-    // or `RRDRLD_WRITE_NOW` — both read and write hit the *same*
-    // address, unlike every earlier family's own two-address shape, so
-    // one shared select line covers both).
+    // RRD/RLD — HL for both read and write phases.
     const rrdRldAddrNow = buildOr(parent, vcc, gnd, { x: pos.x + 3400, y: pos.y - 340 - i * 100 });
     tieToLabel('RRDRLD_READ_NOW', rrdRldAddrNow.a, { x: pos.x + 3350, y: pos.y - 340 - i * 100 });
     tieToLabel('RRDRLD_WRITE_NOW', rrdRldAddrNow.b, { x: pos.x + 3350, y: pos.y - 360 - i * 100 });
     const rrdRldAddrMux = makeChipInstance(parent, muxDef, { x: pos.x + 3500, y: pos.y - 300 - i * 100 });
     wire(parent, rrdRldAddrNow.out, rrdRldAddrMux.pins[muxDef.ports[0]!]!);
     wire(parent, outBlockReadMux.pins[muxDef.ports[3]!]!, rrdRldAddrMux.pins[muxDef.ports[1]!]!);
-    wire(parent, rL.q[i]!, rrdRldAddrMux.pins[muxDef.ports[2]!]!);
+    wire(parent, hlBit, rrdRldAddrMux.pins[muxDef.ports[2]!]!);
 
     // ED LD (nn),dd (see "x=01, z=3") — PC+1 during the high-immediate
     // read: both imm bytes are read without an intervening PC advance, so

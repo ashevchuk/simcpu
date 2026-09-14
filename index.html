@@ -80,13 +80,66 @@
       #chip-palette { font: 12px ui-monospace, monospace; flex-wrap: wrap; }
       #chip-palette .hint { color: var(--text-dim); }
 
-      #stage {
-        position: relative;
+      #workspace {
+        display: flex;
         flex: 1 1 auto;
         min-height: 0;
         overflow: hidden;
       }
-      canvas { display: block; width: 100%; height: 100%; }
+      #stage {
+        position: relative;
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+      }
+      #stage > canvas { display: block; width: 100%; height: 100%; }
+
+      #machine-panel {
+        flex: 0 0 auto;
+        width: 360px;
+        max-width: 40vw;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 12px;
+        background: var(--panel);
+        border-left: 1px solid var(--border);
+        overflow: auto;
+      }
+      #machine-panel[hidden] { display: none !important; }
+      .machine-panel-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .machine-panel-title {
+        font: 600 12px ui-monospace, monospace;
+        color: var(--accent);
+        letter-spacing: 0.04em;
+      }
+      .machine-panel-meta {
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+      }
+      .machine-panel-canvas {
+        display: block;
+        background: #0a0c10;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: text;
+        outline: none;
+      }
+      .machine-panel-canvas:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px rgba(245, 197, 24, 0.35);
+      }
+      .machine-panel-hint {
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+        line-height: 1.35;
+      }
 
       #zoom-controls {
         position: absolute;
@@ -171,16 +224,19 @@
     <input type="file" id="import-chip-file" accept="application/json" hidden />
     <div id="breadcrumb"></div>
     <div id="chip-palette"><span class="hint">chips:</span></div>
-    <div id="stage">
-      <canvas id="canvas"></canvas>
-      <div id="zoom-controls">
-        <button id="zoom-out" title="Zoom out">−</button>
-        <span id="zoom-pct">100%</span>
-        <button id="zoom-in" title="Zoom in">+</button>
-        <button id="zoom-100" title="Reset to 100%">1:1</button>
-        <button id="zoom-fit" title="Fit everything in view">fit</button>
+    <div id="workspace">
+      <div id="stage">
+        <canvas id="canvas"></canvas>
+        <div id="zoom-controls">
+          <button id="zoom-out" title="Zoom out">−</button>
+          <span id="zoom-pct">100%</span>
+          <button id="zoom-in" title="Zoom in">+</button>
+          <button id="zoom-100" title="Reset to 100%">1:1</button>
+          <button id="zoom-fit" title="Fit everything in view">fit</button>
+        </div>
+        <div id="hint">1-9/L for tools · drag to move · arrows to nudge · scroll to zoom · space/middle-drag to pan · dblclick a chip to dive in</div>
       </div>
-      <div id="hint">1-9/L for tools · drag to move · arrows to nudge · scroll to zoom · space/middle-drag to pan · dblclick a chip to dive in</div>
+      <aside id="machine-panel" hidden></aside>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

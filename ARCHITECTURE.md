@@ -14,8 +14,10 @@ slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY`, HL-clone
 `ADD`/`INC`/`DEC`/`JP`/`LD SP`/`EX (SP)`, `(IX+d)`/`(IY+d)` LD /
 `INC`/`DEC` / ALU `A,(IX+d)`, nested `DD CB`/`FD CB` BIT / SET/RES / rot
 on `(IX+d)`/`(IY+d)`, and H→IXH / L→IXL (IYH/IYL) 8-bit register remap
-for LD / LD n / INC/DEC / ALU `A,IXH/IXL`). Memory map, monitor,
-BASIC, and the assembler remain later phases.
+for LD / LD n / INC/DEC / ALU `A,IXH/IXL`). A soft memory-mapped text TTY
+(framebuffer + keyboard over `RamComponent.bytes`, canvas side panel) is
+the first machine-facing I/O layer — see "Memory-mapped TTY (behavioral)".
+Monitor ROM, BASIC, and the assembler remain later phases.
 
 ## Layout
 
@@ -96,11 +98,11 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    First `DD`/`FD` slices: `IX`/`IY` + `LD IX/IY,nn` /
                    `PUSH`/`POP IX/IY` plus HL-clone ADD/INC/DEC/JP/LD SP/EX
                    plus `(IX+d)`/`(IY+d)` LD (`r,(IX+d)`, `(IX+d),r`,
-                   `(IX+d),n`), `INC`/`DEC (IX+d)`, ALU `A,(IX+d)`, and
-                   nested `DD CB`/`FD CB` BIT `y,(IX+d)`/`(IY+d)` —
-                   SET/RES/rot and H→IXH remap still later — see "DD: IX" /
-                   "FD: IY" / "DD CB / FD CB" and the CB/ED/DD/FD prefix
-                   sections below).
+                   `(IX+d),n`), `INC`/`DEC (IX+d)`, ALU `A,(IX+d)`, nested
+                   `DD CB`/`FD CB` BIT / SET/RES / rot on `(IX+d)`/`(IY+d)`,
+                   and H→IXH / L→IXL remap — see "DD: IX" / "FD: IY" /
+                   "DD CB / FD CB" and the CB/ED/DD/FD prefix sections
+                   below).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
                    chips and registers them in a ChipLibrary — called once
@@ -141,6 +143,15 @@ src/ui/         Canvas editor — thin layer on top of src/sim, swappable.
                    labels beside each pin — the color-coded border and the
                    N/P letter are still there too, so type is legible at a
                    glance from any one of three independent visual cues.
+  MachinePanel.ts Soft text TTY: samples `ram.bytes[FB_BASE..]` onto a
+                   side-panel canvas and injects keydowns into
+                   KEY_STATUS/KEY_DATA — see "Memory-mapped TTY
+                   (behavioral)".
+
+src/machine/    Soft machine map over RamComponent (not transistor devices).
+  memoryMap.ts    Locked 12-bit demo layout: FB @ 0xE00 (32×8), keys @
+                   0xF00/0xF01.
+  tty.ts          paintCell / injectKey helpers for tests and the panel.
 
 src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 demo, owns the hierarchy navigation stack (dive in/out,
@@ -151,7 +162,10 @@ src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 index.html, so the key and its on-screen hint can't drift
                 apart), arrow-key nudge for the current selection, and runs
                 the requestAnimationFrame loop: flatten the *top* circuit ->
-                step solver -> draw the *currently viewed* level -> repeat.
+                step solver -> draw the *currently viewed* level -> sample
+                the soft TTY panel when a 12-bit Z80 RAM is attached ->
+                repeat. `+ Z80CPU` defaults to 12-bit address space and a
+                tiny "Hi!" framebuffer demo program.
 
 test/solver.test.ts      Engine correctness: NOT/NAND/AND truth tables, an
                           SR latch's feedback-held state, and short detection
@@ -198,6 +212,11 @@ test/ram.test.ts         RAM read/write correctness (see "Real RAM"): reads
                           to prove a write survives the next flatten() call
                           — the actual bug this component's design guards
                           against, not just "the logic works once".
+test/memoryMap.test.ts   Soft machine-map constants + paintCell / keyboard
+                          helpers (see "Memory-mapped TTY (behavioral)").
+test/machine-tty.test.ts Z80 program with addrBits=12 writes FB via
+                          LD (nn),A and clears soft KEY_STATUS after a
+                          poll of KEY_DATA.
 test/serialize.test.ts   Project round-trip through a real JSON.stringify/
                           parse cycle, including a folded chip instance
                           still simulating correctly after reload; the id
@@ -852,6 +871,52 @@ draws it as a chip-instance-shaped box (reusing `chipInstanceHeight` via a
 shape the way a chip instance's is) in a distinct dark green, labeled
 `RAM {size}x{width}`, so it doesn't read as just another folded chip at a
 glance. `geometry.ts`'s hit-testing sizes its clickable box the same way.
+
+## Memory-mapped TTY (behavioral)
+
+Same performance rationale as Real RAM: a display or keyboard built from
+gates would explode `flatten()` cost long before it was useful. The CPU
+already exposes addressable `cpu.ram.bytes` and a separate port bus
+(`ioPort*`); this slice uses **RAM windows**, not `IN`/`OUT`, so ordinary
+`LD (nn),A` / `LD A,(nn)` drive the devices. No new `ComponentKind` —
+display and keyboard are soft observers/writers of the same `Uint8Array`.
+
+### Map (locked for the interactive machine demo, `addrBits = 12`)
+
+| Region | Range | Size | Role |
+|--------|-------|------|------|
+| Program / general RAM | `0x000`–`0xDFF` | 3584 B | code + data |
+| Text framebuffer | `0xE00`–`0xEFF` | 256 B | 32×8 cells, one ASCII byte each (row-major) |
+| Keyboard status | `0xF00` | 1 B | `0` = empty, `1` = key waiting |
+| Keyboard data | `0xF01` | 1 B | last ASCII (or mapped) code |
+| Reserved | `0xF02`–`0xFFF` | rest | unused this slice |
+
+Constants and helpers live in `src/machine/memoryMap.ts` and
+`src/machine/tty.ts`. Unit tests keep their own smaller `addrBits`; only
+the interactive `+ Z80CPU` path defaults to 12. Supporting that width
+required wiring register-pair high bytes onto the RAM address mux when
+`addrBits > 8` (`H`/`B`/`D` for bits 8+, same split `JP (HL)` already
+used) — previously only the low register participated.
+
+### Soft panel
+
+`MachinePanel` (`src/ui/MachinePanel.ts`) owns a side-panel `<canvas>`
+(not the transistor editor). Each animation frame it samples
+`ram.bytes[FB_BASE .. FB_END)` and blits glyphs. When the panel is
+focused, printable keys plus Enter/Backspace/Tab write `KEY_DATA` and set
+`KEY_STATUS=1` (overwrite if unread — documented in the panel hint). Z80
+code polls and clears status with a store. Clear-on-read MMIO can come
+later if a monitor needs it.
+
+`+ Z80CPU` defaults to 12-bit RAM and seeds a tiny program that writes
+`"Hi!"` into `0xE00` then spins (`JR -2`), so the panel lights up once
+clocks are wired and stepped.
+
+### Explicitly later
+
+Full monitor / BASIC / assembler; port-I/O TTY (`OUT`/`IN`); clear-on-read
+keyboard in the solver; bitmap graphics beyond text cells; drawing glyphs
+on the transistor canvas itself.
 
 ## Decode and execute: a tiny working CPU
 
