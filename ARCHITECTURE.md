@@ -4234,50 +4234,43 @@ real net instead of leaving it floating on its own.
 **A second pass fixed the actual majority case.** Counting the flattened
 circuit's wires found *773* of *883* long (>2000-unit) wires touched a
 `source` component — `VCC`/`GND` fan-out, not signal wiring. Every
-`buildAnd`/`buildOr`/`buildNot`/`buildXor` call in `library.ts` takes
-concrete `vcc`/`gnd` *pins* from whichever `Source` pair the caller hands
-it and wires straight to them, regardless of distance — and `buildZ80Cpu`
-hands every single one of its 100+ gate calls the *same* one global pair,
+`buildAnd`/`buildOr`/`buildNot`/`buildXor` call in `library.ts` used to take
+concrete `vcc`/`gnd` *pins* from whichever `Source` pair the caller handed
+it and wire straight to them, regardless of distance — and `buildZ80Cpu`
+handed every single one of its 100+ gate calls the *same* one global pair,
 declared once at `pos.x-200`, for a composite spanning `pos.x-400` to
 `pos.x+11300`.
 
-The fix doesn't touch `library.ts` at all — it doesn't need to, because
-`VCC`/`GND` are *already* named-tied nets (`Circuit.computeNets()`'s
-`GLOBAL_NET_NAMES`): every `source` component with `value=1` joins the
-`VCC` net and every `value=0` joins `GND`, purely by value, with no wire
-between them required — the identical mechanism a same-named `label`
-uses, just built into `source` itself instead of needing one. So a
-*second* `makeSource(parent, 1, ...)` dropped right next to a distant
-cluster of gates lands on the exact same `VCC` net as the original,
-automatically. `buildZ80Cpu` now declares four extra local pairs
-(`vcc2`/`gnd2` through `vcc5`/`gnd5`), one parked beside each of its four
-gate clusters that sit far from the original pair, and points each
-cluster's own `buildAnd`/`buildOr`/`buildNot`/`buildXor` calls at its
-local pair instead of the global one. Unlike the label mistake above, a
-mismatch here can't silently create a disconnected island — every
-`Source(1)` is `VCC` and every `Source(0)` is `GND` no matter which local
-variable holds it, so the only way to get this wrong is leaving some
-gate's power pin unwired outright, not misnaming a net. All 140 tests
-stayed green through this — a floated power pin would have shown up as a
-contended or unsettled net, not a silent wrong answer.
+An intermediate fix parked extra local `Source(1)`/`Source(0)` pairs beside
+distant gate clusters (`vcc2`/`gnd2` … `vcc5`/`gnd5`) so power wires stayed
+short within each cluster. That worked because `VCC`/`GND` are already
+named-tied nets (`Circuit.computeNets()`'s `GLOBAL_NET_NAMES`): every
+`source` with `value=1` joins `VCC` and every `value=0` joins `GND`, with
+no wire between Sources required — the same mechanism same-named `label`s
+use.
 
-Measured effect, same methodology as above (unflattened top-level wires,
-`buildZ80Cpu` alone): 883 long wires before, *319* after — the remaining
-`VCC`/`GND` distance is whatever's left between each local pair and its
-own cluster's farthest gate, not the full span back to `pos.x-200`. Average
-length of the wires still over threshold dropped from 7768 to 3488, better
-than half.
+**Current approach (rail labels).** Gate power no longer draws to those
+Source pins at all. `buildNot`/`buildNand`/`buildNor`/`buildTriStateBuffer`
+call `tiePowerRail(circuit, 'VCC'|'GND', pin)`, which drops a local
+`Label("VCC"|"GND")` next to the transistor and stubs a short wire —
+`computeNets()` joins that label to the global rail the same way Sources
+do. Constant signal ties (mux in1 = 0, ALU cin = 1, immediate high bits,
+etc.) use the same helper, or `railPin()` when a `Pin` value is needed
+before wiring. `buildZ80Cpu` keeps a single Source pair to *drive* the
+rails; the old cluster aliases remain only so existing `buildAnd(parent,
+vccN, gndN, …)` call sites still type-check (the pins are unused for
+power). Dive-in shows many tiny VCC/GND labels instead of long power
+spaghetti — intentional.
 
-This is `buildZ80Cpu`-local, not a `library.ts` signature change — every
-*other* composite in this file (`buildRegister`, `buildAlu`,
-`buildProgramCounter`, `buildMinimalCpu`, ...) still declares one `vcc`/
-`gnd` pair and hands it to every gate it builds. None of them come close to
-`buildZ80Cpu`'s own footprint, so none hit this problem at the same scale —
-but the fix generalizes trivially if one ever does: drop a local
-`makeSource` pair near the far cluster, point that cluster's gate calls at
-it. No `library.ts` change either way, since the mechanism it leans on
-(`source` values auto-tying to `VCC`/`GND`) already existed for every
-composite in this codebase, used or not.
+Measured effect of the cluster-Source pass (unflattened top-level wires,
+`buildZ80Cpu` alone): 883 long wires before, *319* after. Rail labels
+remove the remaining cross-canvas power legs that clusters could not
+reach.
+
+This is now inherited by every composite that goes through `library.ts`
+gate builders, not only `buildZ80Cpu`. Remaining `vcc`/`gnd` parameters on
+those builders are unused for power; cleaning the signatures is separate
+cosmetic work.
 
 Two real risks worth flagging about this mechanism generally, not specific
 to what actually went wrong above: label names are matched by their bare
@@ -4289,8 +4282,10 @@ def instantiated more than once (e.g. inside `REG_BIT`, folded and placed
 together, and two `buildZ80Cpu`s placed in the same project reusing these
 same names would collide with each other the same way. Neither applies
 here — `buildZ80Cpu` is called once per placement, not folded into a
-multiply-instantiated chip def — but both are real enough to write down
-rather than rediscover later.
+multiply-instantiated chip def — and `VCC`/`GND` are *deliberately* global
+rails, so colliding them across instances is the intended join. Other
+signal labels still need unique names per instance if two CPUs share a
+canvas.
 
 ### UI
 
@@ -4905,26 +4900,17 @@ section's own success story.
   the clearest evidence yet that this composite's fixed-phase-count design
   has a real, now-quantified cost that grows with every instruction family
   added, independent of whether that specific instruction needs the depth.
-- Every gate-building primitive in `library.ts` (`buildAnd`/`buildOr`/
-  `buildNot`/`buildXor`/...) still wires its power pins straight to
-  whichever concrete `vcc`/`gnd` pins the caller hands it — `library.ts`
-  itself is untouched. `buildZ80Cpu` fixed its own worst case a different
-  way: four extra local `Source(1)`/`Source(0)` pairs parked beside its
-  four gate clusters far from the original pair, each cluster's gates
-  pointed at its own local pair instead of the global one. This works
-  without touching `library.ts` because `VCC`/`GND` are already
-  named-tied *by value* (`Circuit.computeNets()`'s `GLOBAL_NET_NAMES` —
-  every `source` with `value=1` joins `VCC`, `value=0` joins `GND`,
-  automatically, no wire needed), so a second `Source(1)` anywhere on the
-  canvas lands on the same net as the first one for free (see "Net labels,
-  not wire spaghetti" above for the measured effect: 883 long wires down
-  to 319). Every *other* composite in this file (`buildRegister`,
-  `buildAlu`, `buildProgramCounter`, `buildMinimalCpu`, ...) still declares
-  one `vcc`/`gnd` pair for its own entire body — untouched, since none are
-  remotely `buildZ80Cpu`'s size, but a real gap: the fix lives in
-  `buildZ80Cpu` specifically, not in `library.ts` where every composite
-  would inherit it automatically. That's still real, separate work if a
-  future composite ever grows wide enough to need it.
+- Gate-building primitives in `library.ts` (`buildNot`/`buildNand`/
+  `buildNor`/`buildTriStateBuffer`, and everything built on them) attach
+  power through `tiePowerRail` — a local `Label("VCC"|"GND")` stub next to
+  each transistor, joined to the global rails by `computeNets()` the same
+  way `Source(1)`/`Source(0)` already do. Constant 0/1 signal ties use the
+  same helper (or `railPin` when a `Pin` value is needed). Callers still
+  pass `vcc`/`gnd` pins for API compatibility, but those pins are unused
+  for power. `buildZ80Cpu` keeps one Source pair to drive the rails; the
+  older cluster-Source workaround (`vcc2`…`gnd5`) is obsolete. See "Net
+  labels, not wire spaghetti" above. Cleaning unused `vcc`/`gnd`
+  parameters off the builder signatures is separate cosmetic work.
 
 ## Running it
 

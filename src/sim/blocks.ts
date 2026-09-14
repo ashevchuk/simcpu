@@ -28,6 +28,8 @@ import {
   makeSource,
   ramAddrPins,
   ramDataPins,
+  railPin,
+  tiePowerRail,
   wire,
 } from './library.js';
 import { buildRegisterBit } from './sequential.js';
@@ -359,7 +361,7 @@ export function buildProgramCounter(parent: Circuit, library: ChipLibrary, bits:
     const resetIn1 = resetMux.pins[muxDef.ports[2]!]!;
     const resetOut = resetMux.pins[muxDef.ports[3]!]!;
     wire(parent, loadOut, resetIn0); // reset=0: whatever the load mux picked
-    wire(parent, gnd, resetIn1); // reset=1: force this bit to 0
+    tiePowerRail(parent, 'GND', resetIn1); // reset=1: force this bit to 0
     wire(parent, resetOut, reg.d[i]!);
 
     if (i === 0) {
@@ -693,7 +695,7 @@ export function buildMinimalCpu(
   wire(parent, isOri!, aluOp1.a);
   wire(parent, isXri!, aluOp1.b);
   wire(parent, aluOp1.out, alu.op1);
-  wire(parent, gnd, alu.cin);
+  tiePowerRail(parent, 'GND', alu.cin);
   acc.q.forEach((q, i) => wire(parent, q, alu.a[i]!));
 
   // ACC writes on DECODE_EXECUTE for any of the 5 ACC-writing instructions
@@ -760,7 +762,7 @@ export function buildMinimalCpu(
   // for STORE or the reserved pattern (`accWeGate` is 0 for both), so
   // what each computes for them doesn't matter.
   for (let i = 0; i < 8; i++) {
-    const imm = i < 5 ? ir.q[i]! : gnd;
+    const imm = i < 5 ? ir.q[i]! : railPin(parent, 'GND', { x: pos.x + 4000, y: pos.y + i * 100 });
     wire(parent, imm, alu.b[i]!);
 
     const stage1 = makeChipInstance(parent, muxDef, { x: pos.x + 4000, y: pos.y + i * 100 });
@@ -1945,40 +1947,22 @@ export function buildZ80Cpu(
   program?: Uint8Array,
   pos: Point = { x: 0, y: 0 },
 ): Z80Cpu {
+  // One Source pair drives the global VCC/GND rails. Gate primitives attach
+  // power through local Label("VCC"|"GND") stubs (tiePowerRail in library.ts)
+  // — same computeNets join as these Sources, without cross-canvas power
+  // wires. Extra cluster Sources used to shorten those wires are obsolete.
   const vcc = makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 400 }).pins.out;
   const gnd = makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 360 }).pins.out;
-
-  // Every gate primitive in library.ts (buildAnd/buildOr/buildNot/buildXor,
-  // etc.) takes concrete vcc/gnd *pins* and wires straight to them — so
-  // reusing the one pair above for a composite this wide (pos.x-400 to
-  // pos.x+11300) means the vast majority of this function's own wire()
-  // calls are actually the power rail, not signal, stretching clear across
-  // the canvas to reach it. Measured: 773 of 883 long top-level wires here
-  // were exactly this, before the fix below.
-  //
-  // The fix leans on a mechanism that already exists for a different
-  // reason: Circuit.computeNets() ties every `source` component's output
-  // pin to the net named "VCC" (value=1) or "GND" (value=0) *by value*,
-  // the same GLOBAL_NET_NAMES path a same-named `label` uses — no wire
-  // between them required. So a *second* makeSource(parent, 1, ...) placed
-  // right next to a distant cluster of gates lands on the exact same VCC
-  // net as the original, automatically, regardless of position or which
-  // local variable holds it. These are that: four more (vcc2/gnd2 ...
-  // vcc5/gnd5) parked beside the four gate clusters far enough from the
-  // original pair to matter, each feeding only the buildAnd/Or/Not/Xor
-  // calls physically near it. Unlike the label refactor, a mismatch here
-  // can't silently create a disconnected island — every Source(1) is VCC
-  // and every Source(0) is GND no matter what it's called, so the only way
-  // to get this wrong is leaving some gate's power pin unwired entirely,
-  // not misnaming a net.
-  const vcc2 = makeSource(parent, 1, { x: pos.x + 3700, y: pos.y + 1520 }).pins.out; // ALU / flags / A-write cluster
-  const gnd2 = makeSource(parent, 0, { x: pos.x + 3700, y: pos.y + 1560 }).pins.out;
-  const vcc3 = makeSource(parent, 1, { x: pos.x + 9700, y: pos.y - 380 }).pins.out; // x=10/x=01/x=11 decode cluster
-  const gnd3 = makeSource(parent, 0, { x: pos.x + 9700, y: pos.y - 340 }).pins.out;
-  const vcc4 = makeSource(parent, 1, { x: pos.x + 8300, y: pos.y + 2820 }).pins.out; // SP adder / F mux / SP mux cluster
-  const gnd4 = makeSource(parent, 0, { x: pos.x + 8300, y: pos.y + 2860 }).pins.out;
-  const vcc5 = makeSource(parent, 1, { x: pos.x + 10500, y: pos.y - 580 }).pins.out; // operand bus / push-pop banks cluster
-  const gnd5 = makeSource(parent, 0, { x: pos.x + 10500, y: pos.y - 540 }).pins.out;
+  // Alias names kept so existing buildAnd/Or/... call sites that still pass
+  // a nearby rail pin compile; the pins are unused for gate power now.
+  const vcc2 = vcc;
+  const gnd2 = gnd;
+  const vcc3 = vcc;
+  const gnd3 = gnd;
+  const vcc4 = vcc;
+  const gnd4 = gnd;
+  const vcc5 = vcc;
+  const gnd5 = gnd;
 
   const pc = buildProgramCounter(parent, library, addrBits, { x: pos.x, y: pos.y });
   const ram = makeRam(parent, addrBits, 8, program, { x: pos.x + 1400, y: pos.y });
@@ -2261,7 +2245,7 @@ export function buildZ80Cpu(
     const dMux = makeChipInstance(parent, muxDef, { x: pos.x + 9000, y: pos.y - 6600 + i * 100 });
     tieToLabel('PHASE0', dMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8900, y: pos.y - 6600 + i * 100 }); // sel: FETCH forces the reset branch
     wire(parent, prefixBits[i]!, dMux.pins[muxDef.ports[1]!]!); // in0: the freshly-detected prefix, valid only when PHASE0=0 (i.e. this write is really prefixReadNow's)
-    wire(parent, gnd3, dMux.pins[muxDef.ports[2]!]!); // in1: FETCH's own reset-to-0
+    tiePowerRail(parent, 'GND', dMux.pins[muxDef.ports[2]!]!); // in1: FETCH's own reset-to-0
     wire(parent, dMux.pins[muxDef.ports[3]!]!, activePrefix.d[i]!);
   }
   const isCbActive = activePrefix.q[0]!;
@@ -2321,7 +2305,7 @@ export function buildZ80Cpu(
     const dMux = makeChipInstance(parent, muxDef, { x: pos.x + 9100, y: pos.y - 6700 });
     tieToLabel('PHASE0', dMux.pins[muxDef.ports[0]!]!, { x: pos.x + 9000, y: pos.y - 6700 });
     wire(parent, ddCbModeSetPhase.out, dMux.pins[muxDef.ports[1]!]!);
-    wire(parent, gnd3, dMux.pins[muxDef.ports[2]!]!);
+    tiePowerRail(parent, 'GND', dMux.pins[muxDef.ports[2]!]!);
     wire(parent, dMux.pins[muxDef.ports[3]!]!, ddCbMode.d[0]!);
   }
   tieToLabel('IS_DDCB_MODE', ddCbMode.q[0]!, { x: pos.x + 9200, y: pos.y - 6700 });
@@ -2342,7 +2326,7 @@ export function buildZ80Cpu(
     const dMux = makeChipInstance(parent, muxDef, { x: pos.x + 9100, y: pos.y - 6800 });
     tieToLabel('PHASE0', dMux.pins[muxDef.ports[0]!]!, { x: pos.x + 9000, y: pos.y - 6800 });
     wire(parent, fdCbModeSetPhase.out, dMux.pins[muxDef.ports[1]!]!);
-    wire(parent, gnd3, dMux.pins[muxDef.ports[2]!]!);
+    tiePowerRail(parent, 'GND', dMux.pins[muxDef.ports[2]!]!);
     wire(parent, dMux.pins[muxDef.ports[3]!]!, fdCbMode.d[0]!);
   }
   tieToLabel('IS_FDCB_MODE', fdCbMode.q[0]!, { x: pos.x + 9200, y: pos.y - 6800 });
@@ -4470,11 +4454,11 @@ export function buildZ80Cpu(
   // path uses, just with a genuine `0` for the left operand instead of a
   // register.
   const negAdder = buildAlu(parent, library, 8, { x: pos.x + 9300, y: pos.y - 7300 });
-  wire(parent, gnd, negAdder.op0);
-  wire(parent, gnd, negAdder.op1);
-  wire(parent, vcc, negAdder.cin);
+  tiePowerRail(parent, 'GND', negAdder.op0);
+  tiePowerRail(parent, 'GND', negAdder.op1);
+  tiePowerRail(parent, 'VCC', negAdder.cin);
   for (let i = 0; i < 8; i++) {
-    wire(parent, gnd, negAdder.a[i]!);
+    tiePowerRail(parent, 'GND', negAdder.a[i]!);
     const negBInv = buildNot(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7300 + i * 20 });
     wire(parent, a.q[i]!, negBInv.in);
     wire(parent, negBInv.out, negAdder.b[i]!);
@@ -5029,7 +5013,7 @@ export function buildZ80Cpu(
     const irForceMux = makeChipInstance(parent, muxDef, { x: pos.x + 2550, y: pos.y - 60 - i * 100 });
     tieToLabel('INT_ACCEPT_NOW', irForceMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2450, y: pos.y - 60 - i * 100 });
     wire(parent, p, irForceMux.pins[muxDef.ports[1]!]!); // in0: normal FETCH from RAM
-    wire(parent, vcc3, irForceMux.pins[muxDef.ports[2]!]!); // in1: force 1 (RST 38h)
+    tiePowerRail(parent, 'VCC', irForceMux.pins[muxDef.ports[2]!]!); // in1: force 1 (RST 38h)
     wire(parent, irForceMux.pins[muxDef.ports[3]!]!, ir.d[i]!);
   });
 
@@ -5142,8 +5126,8 @@ export function buildZ80Cpu(
   // whether any of this is ever read.
   const buildPairAdder = (highRegLabel: string, lowRegLabel: string, outLabel: string, decY: Pin, adderPos: Point): void => {
     const adder = buildAlu(parent, library, 16, adderPos);
-    wire(parent, gnd4, adder.op0);
-    wire(parent, gnd4, adder.op1);
+    tiePowerRail(parent, 'GND', adder.op0);
+    tiePowerRail(parent, 'GND', adder.op1);
     const notDecY = buildNot(parent, vcc4, gnd4, { x: adderPos.x - 100, y: adderPos.y - 50 });
     wire(parent, decY, notDecY.in);
     wire(parent, notDecY.out, adder.cin);
@@ -5279,7 +5263,7 @@ export function buildZ80Cpu(
   // NOT_PREFIX_ACTIVE vs isCbActive; share one holding register.
   const hlMemTempWe = buildOr(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 6220 });
   wire(parent, hlMemReadNow.out, hlMemTempWe.a);
-  wire(parent, gnd3, hlMemTempWe.b); // never leave OR inputs floating (found live)
+  tiePowerRail(parent, 'GND', hlMemTempWe.b); // never leave OR inputs floating (found live)
   const hlMemTempWe2 = buildOr(parent, vcc3, gnd3, { x: pos.x - 720, y: pos.y - 6220 });
   wire(parent, hlMemTempWe.out, hlMemTempWe2.a);
   tieToLabel('BIT_HL_READ_NOW', hlMemTempWe2.b, { x: pos.x - 850, y: pos.y - 6220 });
@@ -5462,16 +5446,19 @@ export function buildZ80Cpu(
       wire(parent, i === 7 ? f.q[0]! : next, rrTerm.b);
       const slaTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 120, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[4]!, slaTerm.a);
-      wire(parent, i === 0 ? gnd3 : prev, slaTerm.b);
+      if (i === 0) tiePowerRail(parent, 'GND', slaTerm.b);
+      else wire(parent, prev, slaTerm.b);
       const sraTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 100, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[5]!, sraTerm.a);
       wire(parent, i === 7 ? src[7]! : next, sraTerm.b);
       const sllTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 80, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[6]!, sllTerm.a);
-      wire(parent, i === 0 ? vcc3 : prev, sllTerm.b);
+      if (i === 0) tiePowerRail(parent, 'VCC', sllTerm.b);
+      else wire(parent, prev, sllTerm.b);
       const srlTerm = buildAnd(parent, vcc3, gnd3, { x: xBase - 60, y: pos.y - 7100 + i * 100 });
       wire(parent, dec.y[7]!, srlTerm.a);
-      wire(parent, i === 7 ? gnd3 : next, srlTerm.b);
+      if (i === 7) tiePowerRail(parent, 'GND', srlTerm.b);
+      else wire(parent, next, srlTerm.b);
       const s1 = buildOr(parent, vcc3, gnd3, { x: xBase - 40, y: pos.y - 7100 + i * 100 });
       wire(parent, rlcTerm.out, s1.a);
       wire(parent, rrcTerm.out, s1.b);
@@ -5507,7 +5494,7 @@ export function buildZ80Cpu(
   for (let i = 0; i < 8; i++) {
     const m = makeChipInstance(parent, muxDef, { x: pos.x + 300, y: pos.y - 7000 + i * 40 });
     tieToLabel('CBROT_MEM_WRITE_ANY', m.pins[muxDef.ports[0]!]!, { x: pos.x + 250, y: pos.y - 7000 + i * 40 });
-    wire(parent, gnd3, m.pins[muxDef.ports[1]!]!);
+    tiePowerRail(parent, 'GND', m.pins[muxDef.ports[1]!]!);
     wire(parent, memBit[i]!, m.pins[muxDef.ports[2]!]!);
     hlSrc.push(m.pins[muxDef.ports[3]!]!);
   }
@@ -5633,8 +5620,8 @@ export function buildZ80Cpu(
     ['REGIYL', 'FDIYL_INC_NOW'],
   ];
   const r8Adder = buildAlu(parent, library, 8, { x: pos.x + 9600, y: pos.y - 1900 });
-  wire(parent, gnd3, r8Adder.op0);
-  wire(parent, gnd3, r8Adder.op1);
+  tiePowerRail(parent, 'GND', r8Adder.op0);
+  tiePowerRail(parent, 'GND', r8Adder.op1);
   const notIsDecR8 = buildNot(parent, vcc3, gnd3, { x: pos.x + 9500, y: pos.y - 1950 });
   wire(parent, isDecR8Any.out, notIsDecR8.in);
   wire(parent, notIsDecR8.out, r8Adder.cin);
@@ -5996,8 +5983,8 @@ export function buildZ80Cpu(
   tieToLabel('ADCSBCHL_COMMIT_NOW', adcSbcHlCommitNow.out, { x: pos.x - 800, y: pos.y - 5540 }); // anchor — H's/L's own sixth write-back layer and F's own we/per-bit layer (all far) read this
 
   const addHlAdder = buildAlu(parent, library, 16, { x: pos.x - 700, y: pos.y - 5300 });
-  wire(parent, gnd, addHlAdder.op0);
-  wire(parent, gnd, addHlAdder.op1);
+  tiePowerRail(parent, 'GND', addHlAdder.op0);
+  tiePowerRail(parent, 'GND', addHlAdder.op1);
   // `cin`: `0` for plain `ADD HL,rr`, the old `C` for `ADC HL,rr`, the
   // old `C` inverted for `SBC HL,rr` — the identical `ADC`/`SBC` recipe
   // "x=10: ADC/SBC" above already establishes for the 8-bit ALU group,
@@ -6063,7 +6050,16 @@ export function buildZ80Cpu(
     wire(parent, aFinal.out, addHlAdder.a[i]!);
     let term: Pin | null = null;
     addHlPairs.forEach(({ y, lowQ, highQ }, pairIdx) => {
-      let bit = i < 8 ? (i < lowQ.length ? lowQ[i]! : gnd) : highQ === null ? gnd : i - 8 < highQ.length ? highQ[i - 8]! : gnd;
+      let bit =
+        i < 8
+          ? i < lowQ.length
+            ? lowQ[i]!
+            : railPin(parent, 'GND', { x: pos.x - 540, y: pos.y - 5300 + i * 60 })
+          : highQ === null
+            ? railPin(parent, 'GND', { x: pos.x - 540, y: pos.y - 5300 + i * 60 })
+            : i - 8 < highQ.length
+              ? highQ[i - 8]!
+              : railPin(parent, 'GND', { x: pos.x - 540, y: pos.y - 5300 + i * 60 });
       // Pair slot HL (index 2): under DD use IX, under FD use IY.
       if (pairIdx === 2) {
         const bHlGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 590, y: pos.y - 5300 + i * 60 });
@@ -6267,12 +6263,12 @@ export function buildZ80Cpu(
   // `LD (nn),HL`/`LD HL,(nn)` need the address one past `nn` for `HL`'s
   // own high byte, real Z80's own low-byte-first-at-nn convention.
   const nnAddrPlusOne = buildAlu(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 6000 });
-  wire(parent, gnd, nnAddrPlusOne.op0);
-  wire(parent, gnd, nnAddrPlusOne.op1);
-  wire(parent, vcc, nnAddrPlusOne.cin);
+  tiePowerRail(parent, 'GND', nnAddrPlusOne.op0);
+  tiePowerRail(parent, 'GND', nnAddrPlusOne.op1);
+  tiePowerRail(parent, 'VCC', nnAddrPlusOne.cin);
   nnAddr.q.forEach((q, i) => {
     wire(parent, q, nnAddrPlusOne.a[i]!);
-    wire(parent, gnd, nnAddrPlusOne.b[i]!);
+    tiePowerRail(parent, 'GND', nnAddrPlusOne.b[i]!);
   });
 
   const isLdNnHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 5700 });
@@ -6911,12 +6907,12 @@ export function buildZ80Cpu(
   wire(parent, isX0Z0.out, isDjnz.a);
   wire(parent, dec.y[2]!, isDjnz.b);
   const djnzAdder = buildAlu(parent, library, 8, { x: pos.x - 700, y: pos.y - 5100 });
-  wire(parent, gnd3, djnzAdder.op0);
-  wire(parent, gnd3, djnzAdder.op1);
-  wire(parent, gnd3, djnzAdder.cin);
+  tiePowerRail(parent, 'GND', djnzAdder.op0);
+  tiePowerRail(parent, 'GND', djnzAdder.op1);
+  tiePowerRail(parent, 'GND', djnzAdder.cin);
   rB.q.forEach((q, i) => {
     wire(parent, q, djnzAdder.a[i]!);
-    wire(parent, vcc3, djnzAdder.b[i]!);
+    tiePowerRail(parent, 'VCC', djnzAdder.b[i]!);
     tieToLabel(`DJNZRESULT${i}`, djnzAdder.out[i]!, { x: pos.x - 600, y: pos.y - 5100 + i * 60 }); // anchor — B's own fourth write-back layer (far) reads this
   });
   let bNotZeroChain: Pin = rB.q[0]!;
@@ -6999,9 +6995,9 @@ export function buildZ80Cpu(
   // that combination, an explicit, documented limitation rather than a
   // silent one (see "x=00: JR cc,e" above).
   const jrOffsetAdder = buildAlu(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 4900 });
-  wire(parent, gnd, jrOffsetAdder.op0);
-  wire(parent, gnd, jrOffsetAdder.op1);
-  wire(parent, gnd, jrOffsetAdder.cin);
+  tiePowerRail(parent, 'GND', jrOffsetAdder.op0);
+  tiePowerRail(parent, 'GND', jrOffsetAdder.op1);
+  tiePowerRail(parent, 'GND', jrOffsetAdder.cin);
   for (let i = 0; i < addrBits; i++) {
     wire(parent, pc.q[i]!, jrOffsetAdder.a[i]!);
     if (i < 8) wire(parent, jrCcOffset.q[i]!, jrOffsetAdder.b[i]!);
@@ -7017,12 +7013,13 @@ export function buildZ80Cpu(
   ixDisp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 5430 - i * 20 }));
   tieToLabel('CLK', ixDisp.clk, { x: pos.x - 700, y: pos.y - 5470 });
   const ixDispAdder = buildAlu(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 5650 });
-  wire(parent, gnd, ixDispAdder.op0);
-  wire(parent, gnd, ixDispAdder.op1);
-  wire(parent, gnd, ixDispAdder.cin);
+  tiePowerRail(parent, 'GND', ixDispAdder.op0);
+  tiePowerRail(parent, 'GND', ixDispAdder.op1);
+  tiePowerRail(parent, 'GND', ixDispAdder.cin);
   for (let i = 0; i < addrBits; i++) {
-    const aBit = i < 8 ? rIXL.q[i]! : (rIXH.q[i - 8] ?? gnd);
-    wire(parent, aBit, ixDispAdder.a[i]!);
+    if (i < 8) wire(parent, rIXL.q[i]!, ixDispAdder.a[i]!);
+    else if (rIXH.q[i - 8]) wire(parent, rIXH.q[i - 8]!, ixDispAdder.a[i]!);
+    else tiePowerRail(parent, 'GND', ixDispAdder.a[i]!);
     if (i < 8) wire(parent, ixDisp.q[i]!, ixDispAdder.b[i]!);
     else wire(parent, ixDisp.q[7]!, ixDispAdder.b[i]!); // sign-extend
     tieToLabel(`IXDISPADD${i}`, ixDispAdder.out[i]!, { x: pos.x - 600, y: pos.y - 5650 - i * 20 });
@@ -7033,12 +7030,13 @@ export function buildZ80Cpu(
   iyDisp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 5830 - i * 20 }));
   tieToLabel('CLK', iyDisp.clk, { x: pos.x - 700, y: pos.y - 5870 });
   const iyDispAdder = buildAlu(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 6050 });
-  wire(parent, gnd, iyDispAdder.op0);
-  wire(parent, gnd, iyDispAdder.op1);
-  wire(parent, gnd, iyDispAdder.cin);
+  tiePowerRail(parent, 'GND', iyDispAdder.op0);
+  tiePowerRail(parent, 'GND', iyDispAdder.op1);
+  tiePowerRail(parent, 'GND', iyDispAdder.cin);
   for (let i = 0; i < addrBits; i++) {
-    const aBit = i < 8 ? rIYL.q[i]! : (rIYH.q[i - 8] ?? gnd);
-    wire(parent, aBit, iyDispAdder.a[i]!);
+    if (i < 8) wire(parent, rIYL.q[i]!, iyDispAdder.a[i]!);
+    else if (rIYH.q[i - 8]) wire(parent, rIYH.q[i - 8]!, iyDispAdder.a[i]!);
+    else tiePowerRail(parent, 'GND', iyDispAdder.a[i]!);
     if (i < 8) wire(parent, iyDisp.q[i]!, iyDispAdder.b[i]!);
     else wire(parent, iyDisp.q[7]!, iyDispAdder.b[i]!); // sign-extend
     tieToLabel(`IYDISPADD${i}`, iyDispAdder.out[i]!, { x: pos.x - 600, y: pos.y - 6050 - i * 20 });
@@ -7066,12 +7064,12 @@ export function buildZ80Cpu(
   // *opcode byte itself* (`ED` then the real opcode, two bytes both
   // already advanced past), not one byte short of it.
   const pcMinus2Adder = buildAlu(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 5100 });
-  wire(parent, gnd, pcMinus2Adder.op0);
-  wire(parent, gnd, pcMinus2Adder.op1);
-  wire(parent, gnd, pcMinus2Adder.cin);
+  tiePowerRail(parent, 'GND', pcMinus2Adder.op0);
+  tiePowerRail(parent, 'GND', pcMinus2Adder.op1);
+  tiePowerRail(parent, 'GND', pcMinus2Adder.cin);
   for (let i = 0; i < addrBits; i++) {
     wire(parent, pc.q[i]!, pcMinus2Adder.a[i]!);
-    wire(parent, i === 0 ? gnd : vcc, pcMinus2Adder.b[i]!);
+    tiePowerRail(parent, i === 0 ? 'GND' : 'VCC', pcMinus2Adder.b[i]!);
   }
 
   const stackWriteNowStage = buildOr(parent, vcc3, gnd3, { x: pos.x + 9950, y: pos.y + 900 }); // pushNow OR rstNow — decrements SP, and is the RAM-write/address-select condition
@@ -7584,8 +7582,8 @@ export function buildZ80Cpu(
   const notSpWantDec = buildNot(parent, vcc4, gnd4, { x: pos.x + 8300, y: pos.y + 2950 });
   wire(parent, spWantDec.out, notSpWantDec.in);
   wire(parent, notSpWantDec.out, spAdder.cin);
-  wire(parent, gnd4, spAdder.op0);
-  wire(parent, gnd4, spAdder.op1);
+  tiePowerRail(parent, 'GND', spAdder.op0);
+  tiePowerRail(parent, 'GND', spAdder.op1);
   sp.q.forEach((q, i) => {
     wire(parent, q, spAdder.a[i]!);
     tieToLabel(`SP_Q${i}`, q, { x: pos.x + 7900, y: pos.y + 3000 + i * 20 }); // anchor — the far address-mux write/readMux below read this via the label
@@ -7751,9 +7749,12 @@ export function buildZ80Cpu(
 
   ramAddrPins(ram).forEach((p, i) => {
     // 8-bit register pairs: low byte for bits 0..7, high byte for 8+.
-    const hlBit = i < 8 ? rL.q[i]! : (rH.q[i - 8] ?? gnd);
-    const bcBit = i < 8 ? rC.q[i]! : (rB.q[i - 8] ?? gnd);
-    const deBit = i < 8 ? rE.q[i]! : (rD.q[i - 8] ?? gnd);
+    const hlBit =
+      i < 8 ? rL.q[i]! : rH.q[i - 8] ?? railPin(parent, 'GND', { x: pos.x + 700, y: pos.y - 300 - i * 100 });
+    const bcBit =
+      i < 8 ? rC.q[i]! : rB.q[i - 8] ?? railPin(parent, 'GND', { x: pos.x + 1300, y: pos.y - 300 - i * 100 });
+    const deBit =
+      i < 8 ? rE.q[i]! : rD.q[i - 8] ?? railPin(parent, 'GND', { x: pos.x + 1500, y: pos.y - 300 - i * 100 });
 
     const mux = makeChipInstance(parent, muxDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
     wire(parent, addrIsHl.out, mux.pins[muxDef.ports[0]!]!);
@@ -7877,7 +7878,7 @@ export function buildZ80Cpu(
   // (see "x=01, z=3") — a light XOR/AND chain rather than a full
   // `buildAlu`, since only +1 is ever needed here.
   {
-    let carry: Pin = vcc;
+    let carry: Pin = railPin(parent, 'VCC', { x: pos.x - 700, y: pos.y - 6400 });
     for (let i = 0; i < addrBits; i++) {
       const sum = buildXor(parent, vcc, gnd, { x: pos.x - 700, y: pos.y - 6400 - i * 40 });
       wire(parent, pc.q[i]!, sum.a);
@@ -8176,7 +8177,7 @@ export function buildZ80Cpu(
     // 0 for every single RST n (since no bit of a one-hot "y==k" line ever
     // reconstructs y's own value), overwriting PC with the wrong thing on
     // every attempt and no other symptom until IR itself was traced next.
-    if (i < 3 || i >= 6) wire(parent, gnd, rstMux.pins[muxDef.ports[2]!]!);
+    if (i < 3 || i >= 6) tiePowerRail(parent, 'GND', rstMux.pins[muxDef.ports[2]!]!);
     else tieToLabel(`IRQ${i}`, rstMux.pins[muxDef.ports[2]!]!, { x: pos.x - 300, y: pos.y - 300 - i * 100 });
 
     // JP nn's own jump: a third mux layer, taking the hold-or-RET-or-RST
@@ -8246,17 +8247,23 @@ export function buildZ80Cpu(
     const jpHlMux = makeChipInstance(parent, muxDef, { x: pos.x + 450, y: pos.y - 300 - i * 100 });
     tieToLabel('JPHL_NOW', jpHlMux.pins[muxDef.ports[0]!]!, { x: pos.x + 400, y: pos.y - 300 - i * 100 });
     wire(parent, jrMux.pins[muxDef.ports[3]!]!, jpHlMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
-    wire(parent, i < 8 ? rL.q[i]! : (rH.q[i - 8] ?? gnd), jpHlMux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
+    if (i < 8) wire(parent, rL.q[i]!, jpHlMux.pins[muxDef.ports[2]!]!);
+    else if (rH.q[i - 8]) wire(parent, rH.q[i - 8]!, jpHlMux.pins[muxDef.ports[2]!]!);
+    else tiePowerRail(parent, 'GND', jpHlMux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
 
     // JP (IX) / JP (IY) — stacked after JP (HL); PHASE4 under DD/FD.
     const jpIxMux = makeChipInstance(parent, muxDef, { x: pos.x + 470, y: pos.y - 300 - i * 100 });
     tieToLabel('JPIX_NOW', jpIxMux.pins[muxDef.ports[0]!]!, { x: pos.x + 420, y: pos.y - 300 - i * 100 });
     wire(parent, jpHlMux.pins[muxDef.ports[3]!]!, jpIxMux.pins[muxDef.ports[1]!]!);
-    wire(parent, i < 8 ? rIXL.q[i]! : (rIXH.q[i - 8] ?? gnd), jpIxMux.pins[muxDef.ports[2]!]!);
+    if (i < 8) wire(parent, rIXL.q[i]!, jpIxMux.pins[muxDef.ports[2]!]!);
+    else if (rIXH.q[i - 8]) wire(parent, rIXH.q[i - 8]!, jpIxMux.pins[muxDef.ports[2]!]!);
+    else tiePowerRail(parent, 'GND', jpIxMux.pins[muxDef.ports[2]!]!);
     const jpIyMux = makeChipInstance(parent, muxDef, { x: pos.x + 490, y: pos.y - 300 - i * 100 });
     tieToLabel('JPIY_NOW', jpIyMux.pins[muxDef.ports[0]!]!, { x: pos.x + 440, y: pos.y - 300 - i * 100 });
     wire(parent, jpIxMux.pins[muxDef.ports[3]!]!, jpIyMux.pins[muxDef.ports[1]!]!);
-    wire(parent, i < 8 ? rIYL.q[i]! : (rIYH.q[i - 8] ?? gnd), jpIyMux.pins[muxDef.ports[2]!]!);
+    if (i < 8) wire(parent, rIYL.q[i]!, jpIyMux.pins[muxDef.ports[2]!]!);
+    else if (rIYH.q[i - 8]) wire(parent, rIYH.q[i - 8]!, jpIyMux.pins[muxDef.ports[2]!]!);
+    else tiePowerRail(parent, 'GND', jpIyMux.pins[muxDef.ports[2]!]!);
 
     // LDIR/LDDR's own repeat (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above): a
     // tenth and final mux layer, `in1` wired to `pcMinus2Adder`'s own
@@ -8557,7 +8564,7 @@ export function buildZ80Cpu(
   if (addrBits <= 8) {
     for (let i = 0; i < 8; i++) {
       const bufHi = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 9300 + i * 20 });
-      wire(parent, gnd5, bufHi.pins[bufDef.ports[0]!]!);
+      tiePowerRail(parent, 'GND', bufHi.pins[bufDef.ports[0]!]!);
       tieToLabel('EDNN_BUS_SPHI_NOW', bufHi.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 9320 + i * 20 });
       tieToLabel(`BUS${i}`, bufHi.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 9300 + i * 20 });
     }
@@ -9003,7 +9010,7 @@ export function buildZ80Cpu(
     if (i === 0) aReset = sel;
     else wire(parent, aReset, sel);
     wire(parent, srcMux.pins[muxDef.ports[3]!]!, resetMux.pins[muxDef.ports[1]!]!); // in0: normal (ALU, LD, or INC/DEC A, per srcMux above)
-    wire(parent, gnd2, resetMux.pins[muxDef.ports[2]!]!); // in1: reset — force 0
+    tiePowerRail(parent, 'GND', resetMux.pins[muxDef.ports[2]!]!); // in1: reset — force 0
     wire(parent, resetMux.pins[muxDef.ports[3]!]!, a.d[i]!);
   }
   const aWeStage = buildOr(parent, vcc2, gnd2, { x: pos.x + 4300, y: pos.y + 1950 });
@@ -9212,8 +9219,8 @@ export function buildZ80Cpu(
   // Hold the external-seed `we` at 0 — I/R have no seed contract (every
   // pre-existing test would otherwise leave these floating). Writes go
   // only through LDIA_NOW / LDRA_NOW.
-  wire(parent, gnd5, rIExt.we);
-  wire(parent, gnd5, rRExt.we);
+  tiePowerRail(parent, 'GND', rIExt.we);
+  tiePowerRail(parent, 'GND', rRExt.we);
   // DD: IX write-back — LD IX,nn then POP IX, each a wrapWithPairCommit
   // layer with BUS as the value (labels BUS0..7 already exist). Seed path
   // stays on the outermost `.d`/`.we` (same contract as rB).
@@ -9263,11 +9270,11 @@ export function buildZ80Cpu(
   const iff1EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12300, y: pos.y - 900 });
   tieToLabel('EI_NOW', iff1EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12200, y: pos.y - 900 });
   wire(parent, iff1RetiMux.pins[muxDef.ports[3]!]!, iff1EiMux.pins[muxDef.ports[1]!]!);
-  wire(parent, vcc5, iff1EiMux.pins[muxDef.ports[2]!]!);
+  tiePowerRail(parent, 'VCC', iff1EiMux.pins[muxDef.ports[2]!]!);
   const iff1ClearMux = makeChipInstance(parent, muxDef, { x: pos.x + 12400, y: pos.y - 900 });
   wire(parent, iff1Clear.out, iff1ClearMux.pins[muxDef.ports[0]!]!);
   wire(parent, iff1EiMux.pins[muxDef.ports[3]!]!, iff1ClearMux.pins[muxDef.ports[1]!]!);
-  wire(parent, gnd5, iff1ClearMux.pins[muxDef.ports[2]!]!);
+  tiePowerRail(parent, 'GND', iff1ClearMux.pins[muxDef.ports[2]!]!);
   wire(parent, iff1ClearMux.pins[muxDef.ports[3]!]!, iff1.d[0]!);
   const iff1We1 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 820 });
   tieToLabel('DI_NOW', iff1We1.a, { x: pos.x + 12000, y: pos.y - 820 });
@@ -9280,9 +9287,9 @@ export function buildZ80Cpu(
   tieToLabel('RETI_NOW', iff1We3.b, { x: pos.x + 12200, y: pos.y - 800 });
   const iff1WeFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 12400, y: pos.y - 820 });
   wire(parent, iff1We3.out, iff1WeFinal.a);
-  wire(parent, gnd5, iff1WeFinal.b); // no external seed — EI/DI/accept/RETI only (same as I/R)
+  tiePowerRail(parent, 'GND', iff1WeFinal.b); // no external seed — EI/DI/accept/RETI only (same as I/R)
   wire(parent, iff1WeFinal.out, iff1.we);
-  wire(parent, gnd5, iff1SeedD);
+  tiePowerRail(parent, 'GND', iff1SeedD);
 
   const iff2Clear = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 700 });
   tieToLabel('DI_NOW', iff2Clear.a, { x: pos.x + 12000, y: pos.y - 700 });
@@ -9290,11 +9297,11 @@ export function buildZ80Cpu(
   const iff2EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 700 });
   tieToLabel('EI_NOW', iff2EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 700 });
   const iff2SeedD = iff2EiMux.pins[muxDef.ports[1]!]!;
-  wire(parent, vcc5, iff2EiMux.pins[muxDef.ports[2]!]!);
+  tiePowerRail(parent, 'VCC', iff2EiMux.pins[muxDef.ports[2]!]!);
   const iff2ClearMux = makeChipInstance(parent, muxDef, { x: pos.x + 12300, y: pos.y - 700 });
   wire(parent, iff2Clear.out, iff2ClearMux.pins[muxDef.ports[0]!]!);
   wire(parent, iff2EiMux.pins[muxDef.ports[3]!]!, iff2ClearMux.pins[muxDef.ports[1]!]!);
-  wire(parent, gnd5, iff2ClearMux.pins[muxDef.ports[2]!]!);
+  tiePowerRail(parent, 'GND', iff2ClearMux.pins[muxDef.ports[2]!]!);
   wire(parent, iff2ClearMux.pins[muxDef.ports[3]!]!, iff2.d[0]!);
   const iff2We1 = buildOr(parent, vcc5, gnd5, { x: pos.x + 12100, y: pos.y - 620 });
   tieToLabel('DI_NOW', iff2We1.a, { x: pos.x + 12000, y: pos.y - 620 });
@@ -9304,20 +9311,20 @@ export function buildZ80Cpu(
   tieToLabel('INT_ACCEPT_NOW', iff2We2.b, { x: pos.x + 12100, y: pos.y - 600 });
   const iff2WeFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 12300, y: pos.y - 620 });
   wire(parent, iff2We2.out, iff2WeFinal.a);
-  wire(parent, gnd5, iff2WeFinal.b);
+  tiePowerRail(parent, 'GND', iff2WeFinal.b);
   wire(parent, iff2WeFinal.out, iff2.we);
-  wire(parent, gnd5, iff2SeedD);
+  tiePowerRail(parent, 'GND', iff2SeedD);
 
   const im1Mux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 500 });
   tieToLabel('IM1_NOW', im1Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 500 });
   const im1SeedD = im1Mux.pins[muxDef.ports[1]!]!;
-  wire(parent, vcc5, im1Mux.pins[muxDef.ports[2]!]!);
+  tiePowerRail(parent, 'VCC', im1Mux.pins[muxDef.ports[2]!]!);
   wire(parent, im1Mux.pins[muxDef.ports[3]!]!, im1.d[0]!);
   const im1WeFinal = buildOr(parent, vcc5, gnd5, { x: pos.x + 12300, y: pos.y - 500 });
   tieToLabel('IM1_NOW', im1WeFinal.a, { x: pos.x + 12200, y: pos.y - 500 });
-  wire(parent, gnd5, im1WeFinal.b);
+  tiePowerRail(parent, 'GND', im1WeFinal.b);
   wire(parent, im1WeFinal.out, im1.we);
-  wire(parent, gnd5, im1SeedD);
+  tiePowerRail(parent, 'GND', im1SeedD);
 
   // INC r/DEC r (x=00, z=4/z=5 — see the doc comment above) needs a
   // *fourth* layer on top: `wrapWithPairCommit` is generic enough to reuse
@@ -9522,7 +9529,7 @@ export function buildZ80Cpu(
   });
   for (let i = 0; i < 8; i++) {
     const buf = makeChipInstance(parent, bufDef, { x: pos.x + 12050, y: pos.y - 1000 + i * 20 });
-    wire(parent, gnd5, buf.pins[bufDef.ports[0]!]!);
+    tiePowerRail(parent, 'GND', buf.pins[bufDef.ports[0]!]!);
     tieToLabel('OUTRC_ZERO_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11950, y: pos.y - 980 + i * 20 });
     tieToLabel(`OUTRCDATA${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 12150, y: pos.y - 1000 + i * 20 });
   }
@@ -9631,12 +9638,12 @@ export function buildZ80Cpu(
   // opcode never commits anything into `SP` at all, only ever *addresses*
   // one past it.
   const exSpHlPlusOne = buildAlu(parent, library, addrBits, { x: pos.x + 11750, y: pos.y - 1900 });
-  wire(parent, gnd, exSpHlPlusOne.op0);
-  wire(parent, gnd, exSpHlPlusOne.op1);
-  wire(parent, vcc, exSpHlPlusOne.cin);
+  tiePowerRail(parent, 'GND', exSpHlPlusOne.op0);
+  tiePowerRail(parent, 'GND', exSpHlPlusOne.op1);
+  tiePowerRail(parent, 'VCC', exSpHlPlusOne.cin);
   sp.q.forEach((q, i) => {
     wire(parent, q, exSpHlPlusOne.a[i]!);
-    wire(parent, gnd, exSpHlPlusOne.b[i]!);
+    tiePowerRail(parent, 'GND', exSpHlPlusOne.b[i]!);
   });
   exSpHlPlusOne.out.forEach((o, i) => tieToLabel(`SPPLUS1_${i}`, o, { x: pos.x + 11900, y: pos.y - 1900 + i * 20 })); // anchor — RAM's own address mux (far) reads this
 
@@ -9953,12 +9960,12 @@ export function buildZ80Cpu(
   // the commit" discipline `r8Adder` established.
   const notNinetyNine = 0x65; // ~0x9A & 0xFF
   const gt99Cmp = buildAlu(parent, library, 8, { x: pos.x + 13450, y: pos.y + 2300 });
-  wire(parent, gnd4, gt99Cmp.op0);
-  wire(parent, gnd4, gt99Cmp.op1);
-  wire(parent, vcc4, gt99Cmp.cin);
+  tiePowerRail(parent, 'GND', gt99Cmp.op0);
+  tiePowerRail(parent, 'GND', gt99Cmp.op1);
+  tiePowerRail(parent, 'VCC', gt99Cmp.cin);
   for (let i = 0; i < 8; i++) {
     wire(parent, a.q[i]!, gt99Cmp.a[i]!);
-    wire(parent, (notNinetyNine >> i) & 1 ? vcc4 : gnd4, gt99Cmp.b[i]!);
+    tiePowerRail(parent, (notNinetyNine >> i) & 1 ? 'VCC' : 'GND', gt99Cmp.b[i]!);
   }
   const aGt99 = gt99Cmp.cout;
   const loCorrect = buildOr(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 2350 });
@@ -9975,13 +9982,13 @@ export function buildZ80Cpu(
   // with old `N` (`f.q[1]`) standing in for `isSubtractLike` (DAA reverses
   // whichever direction the *previous* op actually ran).
   const daaAdder = buildAlu(parent, library, 8, { x: pos.x + 13450, y: pos.y + 2500 });
-  wire(parent, gnd4, daaAdder.op0);
-  wire(parent, gnd4, daaAdder.op1);
+  tiePowerRail(parent, 'GND', daaAdder.op0);
+  tiePowerRail(parent, 'GND', daaAdder.op1);
   wire(parent, f.q[1]!, daaAdder.cin); // old N
   const daaDiffBit: Record<number, Pin> = { 1: loCorrect.out, 2: loCorrect.out, 5: hiCorrect.out, 6: hiCorrect.out };
   for (let i = 0; i < 8; i++) {
     wire(parent, a.q[i]!, daaAdder.a[i]!);
-    const diffBit = daaDiffBit[i] ?? gnd4;
+    const diffBit = daaDiffBit[i] ?? railPin(parent, 'GND', { x: pos.x + 13500, y: pos.y + 2550 + i * 40 });
     const diffInv = buildXor(parent, vcc4, gnd4, { x: pos.x + 13500, y: pos.y + 2550 + i * 40 });
     wire(parent, diffBit, diffInv.a);
     wire(parent, f.q[1]!, diffInv.b); // old N — same operand-invert `bInv` uses for SUB/SBC/CP
@@ -10140,9 +10147,9 @@ export function buildZ80Cpu(
   cpBlockTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 1450, y: pos.y - 6300 + i * 20 }));
   tieToLabel('CLK', cpBlockTemp.clk, { x: pos.x - 1400, y: pos.y - 6320 });
   const cpBlockAdder = buildAlu(parent, library, 8, { x: pos.x - 1300, y: pos.y - 6250 });
-  wire(parent, gnd, cpBlockAdder.op0);
-  wire(parent, gnd, cpBlockAdder.op1);
-  wire(parent, vcc, cpBlockAdder.cin);
+  tiePowerRail(parent, 'GND', cpBlockAdder.op0);
+  tiePowerRail(parent, 'GND', cpBlockAdder.op1);
+  tiePowerRail(parent, 'VCC', cpBlockAdder.cin);
   for (let i = 0; i < 8; i++) {
     wire(parent, a.q[i]!, cpBlockAdder.a[i]!);
     const cpBInv = buildNot(parent, vcc4, gnd4, { x: pos.x - 1350, y: pos.y - 6250 + i * 20 });
@@ -10309,7 +10316,7 @@ export function buildZ80Cpu(
       tieToLabel('LDBLOCK_COMMIT_NOW', ldBlockFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8270, y: pos.y + 2215 + i * 100 });
       wire(parent, cLayerIn, ldBlockFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
       if (i === 2) wire(parent, blockPvBit, ldBlockFMux.pins[muxDef.ports[2]!]!); // in1: BC-1 != 0
-      else wire(parent, gnd4, ldBlockFMux.pins[muxDef.ports[2]!]!); // in1: N/H reset to 0
+      else tiePowerRail(parent, 'GND', ldBlockFMux.pins[muxDef.ports[2]!]!); // in1: N/H reset to 0
       cLayerIn = ldBlockFMux.pins[muxDef.ports[3]!]!;
     }
     // CPI/CPD/CPIR/CPDR (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above) is a
@@ -10506,13 +10513,13 @@ export function buildZ80Cpu(
     if (i === 0) {
       tieToLabel('CBROT_C', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
     } else if (i === 1) {
-      wire(parent, gnd4, cbRotFMux.pins[muxDef.ports[2]!]!);
+      tiePowerRail(parent, 'GND', cbRotFMux.pins[muxDef.ports[2]!]!);
     } else if (i === 2) {
       tieToLabel('CBROT_P', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
     } else if (i === 3) {
       tieToLabel('CBROT_X', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
     } else if (i === 4) {
-      wire(parent, gnd4, cbRotFMux.pins[muxDef.ports[2]!]!);
+      tiePowerRail(parent, 'GND', cbRotFMux.pins[muxDef.ports[2]!]!);
     } else if (i === 5) {
       tieToLabel('CBROT_Y', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
     } else if (i === 6) {
@@ -10708,7 +10715,9 @@ export function buildZ80Cpu(
     const mux = makeChipInstance(parent, muxDef, { x: pos.x + 8900, y: pos.y + 3700 + i * 100 });
     tieToLabel('LDSPHL_NOW', mux.pins[muxDef.ports[0]!]!, { x: pos.x + 8800, y: pos.y + 3700 + i * 100 });
     spExtD3.push(mux.pins[muxDef.ports[1]!]!); // in0: the layer below (spExternal2's own sink)
-    wire(parent, i < 8 ? rL.q[i]! : (rH.q[i - 8] ?? gnd), mux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
+    if (i < 8) wire(parent, rL.q[i]!, mux.pins[muxDef.ports[2]!]!);
+    else if (rH.q[i - 8]) wire(parent, rH.q[i - 8]!, mux.pins[muxDef.ports[2]!]!);
+    else tiePowerRail(parent, 'GND', mux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
     wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal2.d[i]!);
   });
   const spWeOr3 = buildOr(parent, vcc4, gnd4, { x: pos.x + 8900, y: pos.y + 3900 });
@@ -10752,7 +10761,9 @@ export function buildZ80Cpu(
     const mux = makeChipInstance(parent, muxDef, { x: pos.x + 9600, y: pos.y + 4400 + i * 100 });
     tieToLabel('LDSPIX_NOW', mux.pins[muxDef.ports[0]!]!, { x: pos.x + 9500, y: pos.y + 4400 + i * 100 });
     spExtD5.push(mux.pins[muxDef.ports[1]!]!);
-    wire(parent, i < 8 ? rIXL.q[i]! : (rIXH.q[i - 8] ?? gnd), mux.pins[muxDef.ports[2]!]!);
+    if (i < 8) wire(parent, rIXL.q[i]!, mux.pins[muxDef.ports[2]!]!);
+    else if (rIXH.q[i - 8]) wire(parent, rIXH.q[i - 8]!, mux.pins[muxDef.ports[2]!]!);
+    else tiePowerRail(parent, 'GND', mux.pins[muxDef.ports[2]!]!);
     wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal4.d[i]!);
   });
   const spWeOr5 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9600, y: pos.y + 4600 });
@@ -10765,7 +10776,9 @@ export function buildZ80Cpu(
     const mux = makeChipInstance(parent, muxDef, { x: pos.x + 9800, y: pos.y + 4700 + i * 100 });
     tieToLabel('LDSPIY_NOW', mux.pins[muxDef.ports[0]!]!, { x: pos.x + 9700, y: pos.y + 4700 + i * 100 });
     spExtD6.push(mux.pins[muxDef.ports[1]!]!);
-    wire(parent, i < 8 ? rIYL.q[i]! : (rIYH.q[i - 8] ?? gnd), mux.pins[muxDef.ports[2]!]!);
+    if (i < 8) wire(parent, rIYL.q[i]!, mux.pins[muxDef.ports[2]!]!);
+    else if (rIYH.q[i - 8]) wire(parent, rIYH.q[i - 8]!, mux.pins[muxDef.ports[2]!]!);
+    else tiePowerRail(parent, 'GND', mux.pins[muxDef.ports[2]!]!);
     wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal5.d[i]!);
   });
   const spWeOr6 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9800, y: pos.y + 4900 });
@@ -10845,12 +10858,12 @@ export function buildZ80Cpu(
   // no shared-decode collision to fight" shape `cpBlockAdder` above and
   // `pcMinus2Adder` elsewhere in this file already use.
   const ioBAdder = buildAlu(parent, library, 8, { x: pos.x + 12800, y: pos.y - 800 });
-  wire(parent, gnd, ioBAdder.op0);
-  wire(parent, gnd, ioBAdder.op1);
-  wire(parent, gnd, ioBAdder.cin);
+  tiePowerRail(parent, 'GND', ioBAdder.op0);
+  tiePowerRail(parent, 'GND', ioBAdder.op1);
+  tiePowerRail(parent, 'GND', ioBAdder.cin);
   for (let i = 0; i < 8; i++) {
     wire(parent, rB.q[i]!, ioBAdder.a[i]!);
-    wire(parent, vcc, ioBAdder.b[i]!); // fanned to 1: +0xFF with no carry-in, i.e. -1
+    tiePowerRail(parent, 'VCC', ioBAdder.b[i]!); // fanned to 1: +0xFF with no carry-in, i.e. -1
     tieToLabel(`IOBRESULT${i}`, ioBAdder.out[i]!, { x: pos.x + 12900, y: pos.y - 800 + i * 20 });
   }
   // `Z`, read directly off this adder: `B` reaching `0` is exactly "none

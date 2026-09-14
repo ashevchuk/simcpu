@@ -105,6 +105,22 @@ export function makeLabel(circuit: Circuit, name: string, pos: Point = { x: 0, y
   return c;
 }
 
+/**
+ * Attach a pin to the global VCC or GND rail via a local Label — same
+ * computeNets() join that Source(1)/Source(0) and Label("VCC"|"GND") share.
+ * Short stub wire only; no cross-canvas power spaghetti. The circuit still
+ * needs at least one Source(1) and Source(0) somewhere to *drive* the rail.
+ */
+export function tiePowerRail(circuit: Circuit, rail: 'VCC' | 'GND', p: Pin): void {
+  const lbl = makeLabel(circuit, rail, { x: p.pos.x, y: p.pos.y });
+  wire(circuit, p, lbl.pins.net);
+}
+
+/** A local Label pin already on the VCC/GND rail — use when you need a Pin value (e.g. mux in1 = 0) without reaching for a distant Source. */
+export function railPin(circuit: Circuit, rail: 'VCC' | 'GND', pos: Point): Pin {
+  return makeLabel(circuit, rail, pos).pins.net;
+}
+
 export function makeProbe(circuit: Circuit, pos: Point = { x: 0, y: 0 }, label?: string): ProbeComponent {
   const id = nextId('probe');
   const c: ProbeComponent = {
@@ -231,11 +247,17 @@ export interface NotGate {
 }
 
 /** Standard 2-transistor CMOS inverter: PMOS pulls up, NMOS pulls down. */
-export function buildNot(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): NotGate {
+export function buildNot(
+  circuit: Circuit,
+  _vcc: Pin,
+  _gnd: Pin,
+  pos: Point = { x: 0, y: 0 },
+): NotGate {
   const pmos = makeTransistor(circuit, 'P', pos);
   const nmos = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
-  wire(circuit, pmos.pins.source, vcc);
-  wire(circuit, nmos.pins.source, gnd);
+  // Power via rail labels (not the passed pins) — see tiePowerRail.
+  tiePowerRail(circuit, 'VCC', pmos.pins.source);
+  tiePowerRail(circuit, 'GND', nmos.pins.source);
   wire(circuit, pmos.pins.drain, nmos.pins.drain);
   wire(circuit, pmos.pins.gate, nmos.pins.gate);
   return { in: pmos.pins.gate, out: pmos.pins.drain };
@@ -248,18 +270,23 @@ export interface TwoInputGate {
 }
 
 /** Standard CMOS NAND: two PMOS in parallel (pull-up), two NMOS in series (pull-down). */
-export function buildNand(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+export function buildNand(
+  circuit: Circuit,
+  _vcc: Pin,
+  _gnd: Pin,
+  pos: Point = { x: 0, y: 0 },
+): TwoInputGate {
   const p1 = makeTransistor(circuit, 'P', pos);
   const p2 = makeTransistor(circuit, 'P', { x: pos.x + 50, y: pos.y });
   const n1 = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
   const n2 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y + 60 });
 
-  wire(circuit, p1.pins.source, vcc);
-  wire(circuit, p2.pins.source, vcc);
+  tiePowerRail(circuit, 'VCC', p1.pins.source);
+  tiePowerRail(circuit, 'VCC', p2.pins.source);
   wire(circuit, p1.pins.drain, p2.pins.drain);
   wire(circuit, p1.pins.drain, n1.pins.drain);
   wire(circuit, n1.pins.source, n2.pins.drain);
-  wire(circuit, n2.pins.source, gnd);
+  tiePowerRail(circuit, 'GND', n2.pins.source);
 
   wire(circuit, p1.pins.gate, n1.pins.gate); // input A
   wire(circuit, p2.pins.gate, n2.pins.gate); // input B
@@ -276,18 +303,23 @@ export function buildAnd(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x:
 }
 
 /** Standard CMOS NOR: two PMOS in series (pull-up), two NMOS in parallel (pull-down) — the dual of NAND. */
-export function buildNor(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+export function buildNor(
+  circuit: Circuit,
+  _vcc: Pin,
+  _gnd: Pin,
+  pos: Point = { x: 0, y: 0 },
+): TwoInputGate {
   const p1 = makeTransistor(circuit, 'P', pos);
   const p2 = makeTransistor(circuit, 'P', { x: pos.x, y: pos.y + 60 });
   const n1 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y });
   const n2 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y + 60 });
 
-  wire(circuit, p1.pins.source, vcc);
+  tiePowerRail(circuit, 'VCC', p1.pins.source);
   wire(circuit, p1.pins.drain, p2.pins.source);
   wire(circuit, p2.pins.drain, n1.pins.drain);
   wire(circuit, n1.pins.drain, n2.pins.drain);
-  wire(circuit, n1.pins.source, gnd);
-  wire(circuit, n2.pins.source, gnd);
+  tiePowerRail(circuit, 'GND', n1.pins.source);
+  tiePowerRail(circuit, 'GND', n2.pins.source);
 
   wire(circuit, p1.pins.gate, n1.pins.gate); // input A
   wire(circuit, p2.pins.gate, n2.pins.gate); // input B
@@ -445,16 +477,21 @@ export interface TriStateBuffer {
  * condition, using nothing but ordinary switch-level transistors already
  * modeled by the solver.
  */
-export function buildTriStateBuffer(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): TriStateBuffer {
-  const inv = buildNot(circuit, vcc, gnd, pos); // inv.out = NOT(a)
-  const enInv = buildNot(circuit, vcc, gnd, { x: pos.x + 200, y: pos.y }); // enInv.out = NOT(en)
+export function buildTriStateBuffer(
+  circuit: Circuit,
+  _vcc: Pin,
+  _gnd: Pin,
+  pos: Point = { x: 0, y: 0 },
+): TriStateBuffer {
+  const inv = buildNot(circuit, _vcc, _gnd, pos); // inv.out = NOT(a)
+  const enInv = buildNot(circuit, _vcc, _gnd, { x: pos.x + 200, y: pos.y }); // enInv.out = NOT(en)
 
   const p1 = makeTransistor(circuit, 'P', { x: pos.x + 100, y: pos.y + 150 });
   const p2 = makeTransistor(circuit, 'P', { x: pos.x + 100, y: pos.y + 210 });
   const n2 = makeTransistor(circuit, 'N', { x: pos.x + 100, y: pos.y + 270 });
   const n1 = makeTransistor(circuit, 'N', { x: pos.x + 100, y: pos.y + 330 });
 
-  wire(circuit, p1.pins.source, vcc);
+  tiePowerRail(circuit, 'VCC', p1.pins.source);
   wire(circuit, p1.pins.gate, enInv.out); // pull-up path open when en=1
   wire(circuit, p1.pins.drain, p2.pins.source);
   wire(circuit, p2.pins.gate, inv.out); // pulls up when a=1
@@ -463,7 +500,7 @@ export function buildTriStateBuffer(circuit: Circuit, vcc: Pin, gnd: Pin, pos: P
   wire(circuit, n2.pins.gate, inv.out); // pulls down when a=0
   wire(circuit, n2.pins.source, n1.pins.drain);
   wire(circuit, n1.pins.gate, enInv.in); // pull-down path open when en=1
-  wire(circuit, n1.pins.source, gnd);
+  tiePowerRail(circuit, 'GND', n1.pins.source);
 
   return { a: inv.in, en: enInv.in, out: p2.pins.drain };
 }
