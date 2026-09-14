@@ -76,6 +76,10 @@ describe('buildZ80Cpu — x=11, z=3, y=2/y=3: OUT (n),A / IN A,(n)', () => {
     wire(parent, fsmD6.pins.out, cpu.fsmD[6]!);
     const fsmD7 = makeInput(parent, 0);
     wire(parent, fsmD7.pins.out, cpu.fsmD[7]!);
+    const fsmD8 = makeInput(parent, 0);
+    wire(parent, fsmD8.pins.out, cpu.fsmD[8]!);
+    const fsmD9 = makeInput(parent, 0);
+    wire(parent, fsmD9.pins.out, cpu.fsmD[9]!);
 
     // This test's own fake I/O device: a fixed 0x99 reply, wired straight
     // into ioPortDataIn — a real external driver, exactly the contract
@@ -142,15 +146,15 @@ describe('buildZ80Cpu — x=11, z=3, y=2/y=3: OUT (n),A / IN A,(n)', () => {
     expect(readPin(cpu.ioRead)).toBe(1);
     expect(readPin(cpu.ioWrite)).toBe(0);
     expect(readReg(cpu.ioPortAddr)).toBe(0x42);
-    for (let phase = 0; phase < 6; phase++) {
-      pulse(phaseClk); // EXEC2 .. FETCH
+    for (let phase = 0; phase < 8; phase++) {
+      pulse(phaseClk); // EXEC2 .. EXEC8, FETCH
       pulse(dataClk);
     }
     expect(readReg(cpu.a)).toBe(0x99); // A took the fake device's own reply
     expect(readReg(cpu.pc)).toBe(2);
 
     // --- LD A,0x77 ---
-    for (let phase = 0; phase < 8; phase++) {
+    for (let phase = 0; phase < 10; phase++) {
       pulse(phaseClk);
       pulse(dataClk);
     }
@@ -166,8 +170,8 @@ describe('buildZ80Cpu — x=11, z=3, y=2/y=3: OUT (n),A / IN A,(n)', () => {
     expect(readPin(cpu.ioRead)).toBe(0);
     expect(readReg(cpu.ioPortAddr)).toBe(0x55);
     expect(readReg(cpu.ioPortDataOut)).toBe(0x77);
-    for (let phase = 0; phase < 6; phase++) {
-      pulse(phaseClk); // EXEC2 .. FETCH
+    for (let phase = 0; phase < 8; phase++) {
+      pulse(phaseClk); // EXEC2 .. EXEC8, FETCH
       pulse(dataClk);
     }
     expect(readReg(cpu.a)).toBe(0x77); // OUT never touches A

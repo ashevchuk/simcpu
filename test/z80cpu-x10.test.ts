@@ -84,6 +84,10 @@ describe('buildZ80Cpu — decodes and executes real Z80 x=10 opcodes', () => {
     wire(parent, fsmD6.pins.out, cpu.fsmD[6]!);
     const fsmD7 = makeInput(parent, 0);
     wire(parent, fsmD7.pins.out, cpu.fsmD[7]!);
+    const fsmD8 = makeInput(parent, 0);
+    wire(parent, fsmD8.pins.out, cpu.fsmD[8]!);
+    const fsmD9 = makeInput(parent, 0);
+    wire(parent, fsmD9.pins.out, cpu.fsmD[9]!);
 
     // Seed B, C, H, L directly — nothing this slice executes could ever
     // write them from the program itself. Their `clk` is already wired to
@@ -159,6 +163,10 @@ describe('buildZ80Cpu — decodes and executes real Z80 x=10 opcodes', () => {
       pulse(phaseClk); // -> EXEC5 (a genuine no-op for this group too — see "x=11: CALL nn")
       pulse(dataClk);
       pulse(phaseClk); // -> EXEC6 (ditto)
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC7 (no-op — ring widen for DD/FD CB SET/RES/rot)
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC8 (ditto)
       pulse(dataClk);
       pulse(phaseClk); // -> FETCH
       pulse(dataClk); // IR <- next opcode

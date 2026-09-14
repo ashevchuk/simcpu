@@ -3032,16 +3032,23 @@ isDdMemAlu     = isDdActive ∧ x[2] ∧ z[6]            // ALU A,(IX+d)
   prefix) so A/F commit like unprefixed ALU. Operand already comes from
   `BUS` when `ram.oe` drives it; `IXDISP_ADDR_NOW` + `ram.oe` OR PHASE6.
 
-`DD CB` BIT is below; H→IXH remap remains later. Verified by
+`DD CB` / `FD CB` BIT / SET/RES / rot on `(IX+d)`/`(IY+d)` are below;
+H→IXH remap remains later. Verified by
 `z80cpu-dd-ix.test.ts` (load/push/pop, HL-clone, `(IX+d)` LD, INC/DEC +
-ALU, and DD CB BIT programs; asserts HL and IY unchanged).
+ALU, and DD CB BIT / SET/RES/rot programs; asserts HL and IY unchanged).
 
-### DD CB / FD CB (BIT y,(IX+d)/(IY+d) only)
+### DD CB / FD CB (BIT / SET/RES / rot on (IX+d)/(IY+d))
 
 `activePrefix` is one-hot — after `DD`, PHASE2 recaptures `CB` into IR and
 latches `isDdActive`; `isCbActive` stays 0, so a bare CB-table decode
 never sees the nested op. Fix: separate mode latches + a second IR-only
 recapture that does **not** rewrite `activePrefix`.
+
+The ring is **10** phases (`buildRingCounter(..., 10, ...)`): BIT still
+fits in the old 8 (op @ PHASE6, read+flags @ PHASE7), but SET/RES/rot need
+a read then a write after the op — that needs `PHASE8`, and op-advance
+moved off `PHASE7` (it conflicted with the SET/RES/rot read) onto
+`PHASE9`. Extra PHASE8/9 are inert for every pre-existing op.
 
 **Mode latch** (`ddCbMode` / `fdCbMode`, 1-bit, CLK wired):
 
@@ -3067,11 +3074,11 @@ recapture that does **not** rewrite `activePrefix`.
 
 - `DDCB_OP_READ_NOW = ddCbMode ∧ PHASE6` (excludes PHASE5 d-advance).
 - Widens `ir.we` and `ram.oe`. No PC advance on the op fetch — PC stays
-  on the op through PHASE6.
-- `DDCB_OP_ADVANCE_NOW` @ PHASE7 advances past the op (same edge as BIT
-  commit; addr is IX+d, not PC).
+  on the op through PHASE6–8.
+- `DDCB_OP_ADVANCE_NOW` @ **PHASE9** advances past the op (excludes
+  adjacent PHASE8 write). Same for FD.
 
-**BIT body @ PHASE7:**
+**BIT body @ PHASE7** (unchanged timing; advance now later):
 
 - `BIT_IX_NOW = ddCbMode ∧ isCbX1 ∧ z[6] ∧ PHASE7` (op already in IR from
   the PHASE6 edge). Read @ `(IX+d)`: `ram.oe` + `IXDISP_ADDR_NOW`.
@@ -3079,16 +3086,31 @@ recapture that does **not** rewrite `activePrefix`.
   mirror ALU `A,(IX+d)` @ PHASE6. F we/mux layer `BIT_IXIY_NOW`.
 - FD mirror with `BIT_IY_NOW` / `IYDISP_ADDR_NOW`.
 
+**SET/RES / rot @ PHASE7 read + PHASE8 write** (z=6 only; undocumented
+z≠6 register write-back still skipped):
+
+- `isDdCbSetRes = ddCbMode ∧ isCbSetRes ∧ z[6]`;
+  `isDdCbRot = ddCbMode ∧ isCbX0 ∧ z[6]`.
+- PHASE7: `SETRES_IX_READ_NOW` / `CBROT_IX_READ_NOW` — `ram.oe`,
+  `IXDISP_ADDR`, `hlMemTemp.we` / `cbRotHold.we` (reuse CB (HL) datapath;
+  addr is IX+d, never HL).
+- PHASE8: `SETRES_IX_WRITE_NOW` / `CBROT_IX_WRITE_NOW` — `ram.we`,
+  `IXDISP_ADDR`, `SETRESRESULT` / `CBROTRESULT` bus drive; rot ORs into
+  `CBROT_NOW` for F. Commit unions: `SETRES_MEM_WRITE_ANY`,
+  `CBROT_MEM_WRITE_ANY`.
+- FD mirrors (`*_IY_*`). H→IXH remap still later.
+
 | Phase | Action |
 |-------|--------|
 | 0–1 | FETCH DD / PC++ |
 | 2–3 | IR←CB, latch DD; PREFIX_ADVANCE; latch ddCbMode |
 | 4–5 | d→ixDisp; advance |
 | 6 | IR←op (2nd recapture; `activePrefix` untouched) |
-| 7 | Read (IX+d); commit BIT flags; advance past op |
+| 7 | BIT: read+flags. SET/RES/rot: read into hold @ (IX+d) |
+| 8 | SET/RES: write result. Rot: write+flags |
+| 9 | Advance past op |
 
-SET/RES/rot under DD CB / FD CB (and undocumented z≠6 write-back) remain
-later — may need ring widen. Verified by DD/FD BIT describes in
+Verified by DD/FD BIT + SET/RES/rot describes in
 `z80cpu-dd-ix.test.ts` / `z80cpu-fd-iy.test.ts`.
 
 ### FD: IY (first slice + HL-clone + (IY+d) mem)
@@ -3107,9 +3129,9 @@ PHASE4–7 / PHASE4–5 / PHASE4 bodies, plus the `(IY+d)` mem mirror
   **`INC`/`DEC (IY+d)`** / **ALU `A,(IY+d)`** — FD mirror of the DD
   displacement mem slice.
 
-`FD CB` BIT is above (shared "DD CB / FD CB" section); H→IXH remap
-remains later. Verified by `z80cpu-fd-iy.test.ts` (mirror programs;
-asserts HL and IX unchanged under FD).
+`FD CB` BIT / SET/RES / rot are above (shared "DD CB / FD CB" section);
+H→IXH remap remains later. Verified by `z80cpu-fd-iy.test.ts` (mirror
+programs; asserts HL and IX unchanged under FD).
 
 ### x=10, z=0: LDI/LDD/LDIR/LDDR
 

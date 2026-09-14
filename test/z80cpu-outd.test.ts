@@ -68,6 +68,10 @@ describe('buildZ80Cpu — x=10, y=5, z=3: OUTD (real 0xED 0xAB)', () => {
     wire(parent, fsmD6.pins.out, cpu.fsmD[6]!);
     const fsmD7 = makeInput(parent, 0);
     wire(parent, fsmD7.pins.out, cpu.fsmD[7]!);
+    const fsmD8 = makeInput(parent, 0);
+    wire(parent, fsmD8.pins.out, cpu.fsmD[8]!);
+    const fsmD9 = makeInput(parent, 0);
+    wire(parent, fsmD9.pins.out, cpu.fsmD[9]!);
 
     const seedIns: { we: ReturnType<typeof makeInput>; d: ReturnType<typeof makeInput>[] }[] = [];
     const seedReg = (reg: (typeof cpu)['rB'], value: number, width = 8) => {
@@ -134,7 +138,7 @@ describe('buildZ80Cpu — x=10, y=5, z=3: OUTD (real 0xED 0xAB)', () => {
     };
 
     // --- LD BC,0x0237 / LD HL,0x0011 ---
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 20; i++) {
       pulse(phaseClk);
       pulse(dataClk);
     }

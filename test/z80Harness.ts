@@ -26,7 +26,7 @@ export interface Z80Harness {
   tick: () => void;
   /** Rising then falling edge on an Input's `.value`. */
   pulse: (sig: { value: 0 | 1 }) => void;
-  /** Drive one full 8-phase ring cycle (phaseClk + dataClk each phase). */
+  /** Drive one full 10-phase ring cycle (phaseClk + dataClk each phase). */
   runInstruction: () => void;
   /** Advance `n` phases from the current position (phaseClk + dataClk each). */
   runPhases: (n: number) => void;
@@ -66,7 +66,7 @@ export function makeZ80Harness(
   wire(parent, phaseClk.pins.out, cpu.phaseClk);
   const fsmLoad = makeInput(parent, 1);
   wire(parent, fsmLoad.pins.out, cpu.fsmLoad);
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < cpu.fsmD.length; i++) {
     const d = makeInput(parent, i === 0 ? 1 : 0);
     wire(parent, d.pins.out, cpu.fsmD[i]!);
   }
@@ -150,7 +150,7 @@ export function makeZ80Harness(
     cpu,
     tick,
     pulse,
-    runInstruction: () => runPhases(8),
+    runInstruction: () => runPhases(10),
     runPhases,
     readReg: (pins) => fromBits(pins.map((p) => levelAt(state, netMap, p.id))),
     readPin: (pin) => levelAt(state, netMap, pin.id),
