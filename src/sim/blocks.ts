@@ -2266,11 +2266,10 @@ export function buildZ80Cpu(
   wire(parent, isCbActive, isCbX1Active.a);
   wire(parent, dec.x[1]!, isCbX1Active.b);
 
-  // x=01 (CB): BIT y,r — register form only (z≠6). First CB-table body
-  // in this project: flags-only, single PHASE4 after the prefix, no RAM
-  // and no register write. `BIT y,(HL)` and the rotate/SET/RES columns
-  // come later. Collides with unprefixed `LD r,r'` the same way every
-  // other prefixed `x=01` body does — `NOT_PREFIX_ACTIVE` keeps that quiet.
+  // x=01 (CB): BIT y,r — register form (z≠6) and (HL) form (z=6).
+  // Register: flags-only, single PHASE4 after the prefix. (HL): PHASE4
+  // reads into shared `hlMemTemp`, PHASE5 commits flags — no write-back.
+  // Collides with unprefixed `LD r,r'` — `NOT_PREFIX_ACTIVE` keeps that quiet.
   const notCbBitHl = buildNot(parent, vcc3, gnd3, { x: pos.x + 9200, y: pos.y - 7400 });
   wire(parent, dec.z[6]!, notCbBitHl.in);
   const isBitRegNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7400 });
@@ -2281,6 +2280,19 @@ export function buildZ80Cpu(
   wire(parent, isBitRegNow.out, bitRegNow.a);
   tieToLabel('PHASE4', bitRegNow.b, { x: pos.x + 9250, y: pos.y - 7420 });
   tieToLabel('BIT_REG_NOW', bitRegNow.out, { x: pos.x + 9450, y: pos.y - 7420 }); // anchor — F we/layer
+
+  const isBitHl = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9250, y: pos.y - 7440 });
+  wire(parent, isCbX1Active.out, isBitHl.a);
+  wire(parent, dec.z[6]!, isBitHl.b);
+  tieToLabel('IS_BIT_HL', isBitHl.out, { x: pos.x + 9300, y: pos.y - 7440 });
+  const bitHlReadNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7460 });
+  wire(parent, isBitHl.out, bitHlReadNow.a);
+  tieToLabel('PHASE4', bitHlReadNow.b, { x: pos.x + 9250, y: pos.y - 7460 });
+  tieToLabel('BIT_HL_READ_NOW', bitHlReadNow.out, { x: pos.x + 9450, y: pos.y - 7460 }); // anchor — hlMemTemp.we, ram.oe, addr=HL
+  const bitHlNow = buildAnd(parent, vcc3, gnd3, { x: pos.x + 9350, y: pos.y - 7480 });
+  wire(parent, isBitHl.out, bitHlNow.a);
+  tieToLabel('PHASE5', bitHlNow.b, { x: pos.x + 9250, y: pos.y - 7480 });
+  tieToLabel('BIT_HL_NOW', bitHlNow.out, { x: pos.x + 9450, y: pos.y - 7480 }); // anchor — F we/layer
 
   // One-hot z picks B/C/D/E/H/L/A (no (HL)); y picks which bit to test.
   const bitRegSelect: { reg: Pin[]; z: Pin }[] = [
@@ -3573,10 +3585,41 @@ export function buildZ80Cpu(
   wire(parent, isIncDecHlMem.out, hlMemReadNow.a);
   tieToLabel('PHASE2', hlMemReadNow.b, { x: pos.x + 9300, y: pos.y - 1620 });
   const hlMemTemp = buildRegister(parent, library, 8, { x: pos.x - 700, y: pos.y - 6200 });
-  wire(parent, hlMemReadNow.out, hlMemTemp.we);
+  // INC/DEC (HL) read OR CB BIT (HL) read — mutually exclusive by
+  // NOT_PREFIX_ACTIVE vs isCbActive; share one holding register.
+  const hlMemTempWe = buildOr(parent, vcc3, gnd3, { x: pos.x - 750, y: pos.y - 6220 });
+  wire(parent, hlMemReadNow.out, hlMemTempWe.a);
+  tieToLabel('BIT_HL_READ_NOW', hlMemTempWe.b, { x: pos.x - 850, y: pos.y - 6220 });
+  wire(parent, hlMemTempWe.out, hlMemTemp.we);
   hlMemTemp.d.forEach((d, i) => tieToLabel(`BUS${i}`, d, { x: pos.x - 800, y: pos.y - 6200 + i * 20 }));
-  hlMemTemp.q.forEach((q, i) => tieToLabel(`HLMEM${i}`, q, { x: pos.x - 800, y: pos.y - 6180 + i * 20 })); // anchor — r8Select's own read (far) reads this
-  tieToLabel('CLK', hlMemTemp.clk, { x: pos.x - 700, y: pos.y - 6220 }); // learned from jpTarget's own missing-CLK bug, several features back — checked off explicitly, every time, no exceptions
+  hlMemTemp.q.forEach((q, i) => tieToLabel(`HLMEM${i}`, q, { x: pos.x - 800, y: pos.y - 6180 + i * 20 })); // anchor — r8Select + BIT (HL) flags
+  tieToLabel('CLK', hlMemTemp.clk, { x: pos.x - 700, y: pos.y - 6240 }); // learned from jpTarget's own missing-CLK bug, several features back — checked off explicitly, every time, no exceptions
+
+  // BIT y,(HL) flags — same recipe as register BIT, off `HLMEM` after the
+  // PHASE4 capture. X/Y mirror the memory byte's bits 3/5 (real Z80 uses
+  // internal WZ here; documented simplification).
+  let bitHlTest: Pin | null = null;
+  for (let yi = 0; yi < 8; yi++) {
+    const andGate = buildAnd(parent, vcc3, gnd3, { x: pos.x - 600, y: pos.y - 6400 + yi * 20 });
+    tieToLabel(`HLMEM${yi}`, andGate.a, { x: pos.x - 700, y: pos.y - 6400 + yi * 20 });
+    wire(parent, dec.y[yi]!, andGate.b);
+    if (bitHlTest === null) {
+      bitHlTest = andGate.out;
+    } else {
+      const orGate = buildOr(parent, vcc3, gnd3, { x: pos.x - 550, y: pos.y - 6400 + yi * 20 });
+      wire(parent, bitHlTest, orGate.a);
+      wire(parent, andGate.out, orGate.b);
+      bitHlTest = orGate.out;
+    }
+  }
+  const bitHlZBit = buildNot(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 6420 });
+  wire(parent, bitHlTest!, bitHlZBit.in);
+  const bitHlSBit = buildAnd(parent, vcc3, gnd3, { x: pos.x - 500, y: pos.y - 6400 });
+  wire(parent, bitHlTest!, bitHlSBit.a);
+  wire(parent, dec.y[7]!, bitHlSBit.b);
+  const bitHlPBit = bitHlZBit.out;
+  const bitHlXBit = hlMemTemp.q[3]!;
+  const bitHlYBit = hlMemTemp.q[5]!;
 
   // `(HL)`'s own commit: `PHASE3`, one phase after its own read — by now
   // `hlMemTemp` already holds the fresh value (the same one-phase-later
@@ -5137,13 +5180,15 @@ export function buildZ80Cpu(
   const ramOeStage20 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1150 });
   wire(parent, ramOeStage19.out, ramOeStage20.a);
   tieToLabel('LDANN_NOW', ramOeStage20.b, { x: pos.x + 9500, y: pos.y - 1150 });
-  // INC (HL)/DEC (HL)'s own read (see "x=00: INC (HL)/DEC (HL)/LD (HL),n"
-  // above) gets the identical treatment. `LD (HL),n`'s own read needs
-  // none here — it's z=6, already covered by `LDIMM8_READ_NOW` above,
-  // same as every other `LD r,n`.
+  // INC (HL)/DEC (HL)'s own read and CB BIT (HL)'s own read — side-fold
+  // so this OE stage does not grow two sequential ORs (same lesson as
+  // EDNN vs RRD on the final OE chain).
+  const hlMemReads = buildOr(parent, vcc3, gnd3, { x: pos.x + 9550, y: pos.y - 1200 });
+  tieToLabel('HLMEM_READ_NOW', hlMemReads.a, { x: pos.x + 9450, y: pos.y - 1200 });
+  tieToLabel('BIT_HL_READ_NOW', hlMemReads.b, { x: pos.x + 9450, y: pos.y - 1220 });
   const ramOeStage21 = buildOr(parent, vcc3, gnd3, { x: pos.x + 9600, y: pos.y - 1200 });
   wire(parent, ramOeStage20.out, ramOeStage21.a);
-  tieToLabel('HLMEM_READ_NOW', ramOeStage21.b, { x: pos.x + 9500, y: pos.y - 1200 });
+  wire(parent, hlMemReads.out, ramOeStage21.b);
   const ramOe = buildOr(parent, vcc3, gnd3, { x: pos.x + 9650, y: pos.y - 150 });
   wire(parent, ramOeStage21.out, ramOe.a);
   wire(parent, readNow.out, ramOe.b);
@@ -5309,7 +5354,12 @@ export function buildZ80Cpu(
   // touch RAM, not for the instruction's entire lifetime.
   const addrIsHlStage2 = buildOr(parent, vcc, gnd, { x: pos.x + 600, y: pos.y - 420 });
   wire(parent, addrIsHlStage.out, addrIsHlStage2.a);
-  tieToLabel('HLMEM_READ_NOW', addrIsHlStage2.b, { x: pos.x + 500, y: pos.y - 420 });
+  // Side-fold INC/DEC (HL) read with CB BIT (HL) read — both need addr=HL
+  // for exactly one phase, never overlapping.
+  const addrHlReads = buildOr(parent, vcc, gnd, { x: pos.x + 580, y: pos.y - 440 });
+  tieToLabel('HLMEM_READ_NOW', addrHlReads.a, { x: pos.x + 480, y: pos.y - 420 });
+  tieToLabel('BIT_HL_READ_NOW', addrHlReads.b, { x: pos.x + 480, y: pos.y - 440 });
+  wire(parent, addrHlReads.out, addrIsHlStage2.b);
   const addrIsHlStage3 = buildOr(parent, vcc, gnd, { x: pos.x + 620, y: pos.y - 430 });
   wire(parent, addrIsHlStage2.out, addrIsHlStage3.a);
   tieToLabel('INCDEC_HLMEM_NOW', addrIsHlStage3.b, { x: pos.x + 520, y: pos.y - 430 });
@@ -7711,6 +7761,23 @@ export function buildZ80Cpu(
       wire(parent, bitFreshBit[i]!, bitFMux.pins[muxDef.ports[2]!]!);
       cLayerIn = bitFMux.pins[muxDef.ports[3]!]!;
     }
+    // BIT y,(HL) (CB x=01, z=6) — same flag recipe, off HLMEM after PHASE4.
+    if (i !== 0) {
+      const bitHlFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8385, y: pos.y + 2229 + i * 100 });
+      tieToLabel('BIT_HL_NOW', bitHlFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8285, y: pos.y + 2229 + i * 100 });
+      wire(parent, cLayerIn, bitHlFMux.pins[muxDef.ports[1]!]!);
+      const bitHlFreshBit: Record<number, Pin> = {
+        1: gnd4,
+        2: bitHlPBit,
+        3: bitHlXBit,
+        4: vcc4,
+        5: bitHlYBit,
+        6: bitHlZBit.out,
+        7: bitHlSBit.out,
+      };
+      wire(parent, bitHlFreshBit[i]!, bitHlFMux.pins[muxDef.ports[2]!]!);
+      cLayerIn = bitHlFMux.pins[muxDef.ports[3]!]!;
+    }
     // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) swaps the
     // *whole* byte, not just one or two bits — this layer runs for every
     // `i` that reaches this point (all eight, now that H and the two
@@ -7799,7 +7866,10 @@ export function buildZ80Cpu(
   const fWeFinal10 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9770, y: pos.y + 2350 });
   wire(parent, fWeFinal9.out, fWeFinal10.a);
   tieToLabel('BIT_REG_NOW', fWeFinal10.b, { x: pos.x + 9670, y: pos.y + 2350 });
-  wire(parent, fWeFinal10.out, f.we);
+  const fWeFinal11 = buildOr(parent, vcc4, gnd4, { x: pos.x + 9870, y: pos.y + 2360 });
+  wire(parent, fWeFinal10.out, fWeFinal11.a);
+  tieToLabel('BIT_HL_NOW', fWeFinal11.b, { x: pos.x + 9770, y: pos.y + 2360 });
+  wire(parent, fWeFinal11.out, f.we);
 
   // SP: same external-seed contract as B..L above — `sp.d`/`sp.we` here
   // are the caller's own sink pins, muxed ahead of the raw register the
