@@ -105,6 +105,22 @@ export function makeLabel(circuit: Circuit, name: string, pos: Point = { x: 0, y
   return c;
 }
 
+/**
+ * Attach a pin to the global VCC or GND rail via a local Label — same
+ * computeNets() join that Source(1)/Source(0) and Label("VCC"|"GND") share.
+ * Short stub wire only; no cross-canvas power spaghetti. The circuit still
+ * needs at least one Source(1) and Source(0) somewhere to *drive* the rail.
+ */
+export function tiePowerRail(circuit: Circuit, rail: 'VCC' | 'GND', p: Pin): void {
+  const lbl = makeLabel(circuit, rail, { x: p.pos.x, y: p.pos.y });
+  wire(circuit, p, lbl.pins.net);
+}
+
+/** A local Label pin already on the VCC/GND rail — use when you need a Pin value (e.g. mux in1 = 0) without reaching for a distant Source. */
+export function railPin(circuit: Circuit, rail: 'VCC' | 'GND', pos: Point): Pin {
+  return makeLabel(circuit, rail, pos).pins.net;
+}
+
 export function makeProbe(circuit: Circuit, pos: Point = { x: 0, y: 0 }, label?: string): ProbeComponent {
   const id = nextId('probe');
   const c: ProbeComponent = {
@@ -231,11 +247,15 @@ export interface NotGate {
 }
 
 /** Standard 2-transistor CMOS inverter: PMOS pulls up, NMOS pulls down. */
-export function buildNot(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): NotGate {
+export function buildNot(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+): NotGate {
   const pmos = makeTransistor(circuit, 'P', pos);
   const nmos = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
-  wire(circuit, pmos.pins.source, vcc);
-  wire(circuit, nmos.pins.source, gnd);
+  // Power via rail labels — see tiePowerRail. Circuit still needs Source(1)/Source(0) rail drivers.
+  tiePowerRail(circuit, 'VCC', pmos.pins.source);
+  tiePowerRail(circuit, 'GND', nmos.pins.source);
   wire(circuit, pmos.pins.drain, nmos.pins.drain);
   wire(circuit, pmos.pins.gate, nmos.pins.gate);
   return { in: pmos.pins.gate, out: pmos.pins.drain };
@@ -248,18 +268,21 @@ export interface TwoInputGate {
 }
 
 /** Standard CMOS NAND: two PMOS in parallel (pull-up), two NMOS in series (pull-down). */
-export function buildNand(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+export function buildNand(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+): TwoInputGate {
   const p1 = makeTransistor(circuit, 'P', pos);
   const p2 = makeTransistor(circuit, 'P', { x: pos.x + 50, y: pos.y });
   const n1 = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
   const n2 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y + 60 });
 
-  wire(circuit, p1.pins.source, vcc);
-  wire(circuit, p2.pins.source, vcc);
+  tiePowerRail(circuit, 'VCC', p1.pins.source);
+  tiePowerRail(circuit, 'VCC', p2.pins.source);
   wire(circuit, p1.pins.drain, p2.pins.drain);
   wire(circuit, p1.pins.drain, n1.pins.drain);
   wire(circuit, n1.pins.source, n2.pins.drain);
-  wire(circuit, n2.pins.source, gnd);
+  tiePowerRail(circuit, 'GND', n2.pins.source);
 
   wire(circuit, p1.pins.gate, n1.pins.gate); // input A
   wire(circuit, p2.pins.gate, n2.pins.gate); // input B
@@ -268,26 +291,29 @@ export function buildNand(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x
 }
 
 /** NAND followed by an inverter. */
-export function buildAnd(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): TwoInputGate {
-  const nand = buildNand(circuit, vcc, gnd, pos);
-  const inv = buildNot(circuit, vcc, gnd, { x: pos.x + 120, y: pos.y });
+export function buildAnd(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+  const nand = buildNand(circuit, pos);
+  const inv = buildNot(circuit, { x: pos.x + 120, y: pos.y });
   wire(circuit, nand.out, inv.in);
   return { a: nand.a, b: nand.b, out: inv.out };
 }
 
 /** Standard CMOS NOR: two PMOS in series (pull-up), two NMOS in parallel (pull-down) — the dual of NAND. */
-export function buildNor(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+export function buildNor(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+): TwoInputGate {
   const p1 = makeTransistor(circuit, 'P', pos);
   const p2 = makeTransistor(circuit, 'P', { x: pos.x, y: pos.y + 60 });
   const n1 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y });
   const n2 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y + 60 });
 
-  wire(circuit, p1.pins.source, vcc);
+  tiePowerRail(circuit, 'VCC', p1.pins.source);
   wire(circuit, p1.pins.drain, p2.pins.source);
   wire(circuit, p2.pins.drain, n1.pins.drain);
   wire(circuit, n1.pins.drain, n2.pins.drain);
-  wire(circuit, n1.pins.source, gnd);
-  wire(circuit, n2.pins.source, gnd);
+  tiePowerRail(circuit, 'GND', n1.pins.source);
+  tiePowerRail(circuit, 'GND', n2.pins.source);
 
   wire(circuit, p1.pins.gate, n1.pins.gate); // input A
   wire(circuit, p2.pins.gate, n2.pins.gate); // input B
@@ -296,9 +322,9 @@ export function buildNor(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x:
 }
 
 /** NOR followed by an inverter. */
-export function buildOr(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): TwoInputGate {
-  const nor = buildNor(circuit, vcc, gnd, pos);
-  const inv = buildNot(circuit, vcc, gnd, { x: pos.x + 120, y: pos.y });
+export function buildOr(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+  const nor = buildNor(circuit, pos);
+  const inv = buildNot(circuit, { x: pos.x + 120, y: pos.y });
   wire(circuit, nor.out, inv.in);
   return { a: nor.a, b: nor.b, out: inv.out };
 }
@@ -308,11 +334,11 @@ export function buildOr(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 
  * Cheaper (16 transistors) than composing it out of AND/OR/NOT (22+), and it
  * keeps XOR built from the same NAND primitive as everything else here.
  */
-export function buildXor(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): TwoInputGate {
-  const g1 = buildNand(circuit, vcc, gnd, pos); // n1 = NAND(a, b)
-  const g2 = buildNand(circuit, vcc, gnd, { x: pos.x, y: pos.y + 150 }); // NAND(a, n1)
-  const g3 = buildNand(circuit, vcc, gnd, { x: pos.x + 150, y: pos.y + 150 }); // NAND(b, n1)
-  const g4 = buildNand(circuit, vcc, gnd, { x: pos.x + 150, y: pos.y + 300 }); // out
+export function buildXor(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+  const g1 = buildNand(circuit, pos); // n1 = NAND(a, b)
+  const g2 = buildNand(circuit, { x: pos.x, y: pos.y + 150 }); // NAND(a, n1)
+  const g3 = buildNand(circuit, { x: pos.x + 150, y: pos.y + 150 }); // NAND(b, n1)
+  const g4 = buildNand(circuit, { x: pos.x + 150, y: pos.y + 300 }); // out
 
   wire(circuit, g1.a, g2.a); // both driven by external input a
   wire(circuit, g1.b, g3.a); // both driven by external input b
@@ -332,11 +358,11 @@ export interface Mux2 {
 }
 
 /** 2:1 multiplexer: out = sel ? in1 : in0, built from NOT/AND/OR (the standard sum-of-products form). */
-export function buildMux2(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): Mux2 {
-  const notSel = buildNot(circuit, vcc, gnd, pos);
-  const and0 = buildAnd(circuit, vcc, gnd, { x: pos.x + 150, y: pos.y }); // NOT(sel) AND in0
-  const and1 = buildAnd(circuit, vcc, gnd, { x: pos.x + 150, y: pos.y + 150 }); // sel AND in1
-  const or = buildOr(circuit, vcc, gnd, { x: pos.x + 350, y: pos.y + 75 });
+export function buildMux2(circuit: Circuit, pos: Point = { x: 0, y: 0 }): Mux2 {
+  const notSel = buildNot(circuit, pos);
+  const and0 = buildAnd(circuit, { x: pos.x + 150, y: pos.y }); // NOT(sel) AND in0
+  const and1 = buildAnd(circuit, { x: pos.x + 150, y: pos.y + 150 }); // sel AND in1
+  const or = buildOr(circuit, { x: pos.x + 350, y: pos.y + 75 });
 
   wire(circuit, notSel.out, and0.a);
   wire(circuit, notSel.in, and1.a); // shares the raw `sel` signal
@@ -360,9 +386,9 @@ export interface HalfAdder {
  * i-1's `cout`, with the very first `b` tied to a constant 1 (that's the
  * "+1"). See buildProgramCounter in blocks.ts.
  */
-export function buildHalfAdder(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): HalfAdder {
-  const xor = buildXor(circuit, vcc, gnd, pos);
-  const and = buildAnd(circuit, vcc, gnd, { x: pos.x, y: pos.y + 500 });
+export function buildHalfAdder(circuit: Circuit, pos: Point = { x: 0, y: 0 }): HalfAdder {
+  const xor = buildXor(circuit, pos);
+  const and = buildAnd(circuit, { x: pos.x, y: pos.y + 500 });
   wire(circuit, xor.a, and.a);
   wire(circuit, xor.b, and.b);
   return { a: xor.a, b: xor.b, sum: xor.out, cout: and.out };
@@ -380,12 +406,12 @@ export interface FullAdder {
  * 1-bit full adder: sum = a ^ b ^ cin, cout = (a & b) | (cin & (a ^ b)) — the
  * standard two-XOR/two-AND/one-OR form, built entirely from the gates above.
  */
-export function buildFullAdder(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): FullAdder {
-  const xor1 = buildXor(circuit, vcc, gnd, pos); // a ^ b
-  const xor2 = buildXor(circuit, vcc, gnd, { x: pos.x + 500, y: pos.y }); // (a ^ b) ^ cin = sum
-  const and1 = buildAnd(circuit, vcc, gnd, { x: pos.x, y: pos.y + 500 }); // a & b
-  const and2 = buildAnd(circuit, vcc, gnd, { x: pos.x + 500, y: pos.y + 500 }); // (a ^ b) & cin
-  const or1 = buildOr(circuit, vcc, gnd, { x: pos.x + 900, y: pos.y + 250 }); // cout
+export function buildFullAdder(circuit: Circuit, pos: Point = { x: 0, y: 0 }): FullAdder {
+  const xor1 = buildXor(circuit, pos); // a ^ b
+  const xor2 = buildXor(circuit, { x: pos.x + 500, y: pos.y }); // (a ^ b) ^ cin = sum
+  const and1 = buildAnd(circuit, { x: pos.x, y: pos.y + 500 }); // a & b
+  const and2 = buildAnd(circuit, { x: pos.x + 500, y: pos.y + 500 }); // (a ^ b) & cin
+  const or1 = buildOr(circuit, { x: pos.x + 900, y: pos.y + 250 }); // cout
 
   wire(circuit, xor1.a, and1.a); // shared `a`
   wire(circuit, xor1.b, and1.b); // shared `b`
@@ -409,10 +435,10 @@ export interface Mux4 {
 }
 
 /** 4:1 multiplexer, a tree of three buildMux2()s: sel1 picks a half, sel0 picks within it. */
-export function buildMux4(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): Mux4 {
-  const low = buildMux2(circuit, vcc, gnd, pos); // in0/in1 via sel0
-  const high = buildMux2(circuit, vcc, gnd, { x: pos.x, y: pos.y + 400 }); // in2/in3 via sel0
-  const out = buildMux2(circuit, vcc, gnd, { x: pos.x + 600, y: pos.y + 200 }); // low/high via sel1
+export function buildMux4(circuit: Circuit, pos: Point = { x: 0, y: 0 }): Mux4 {
+  const low = buildMux2(circuit, pos); // in0/in1 via sel0
+  const high = buildMux2(circuit, { x: pos.x, y: pos.y + 400 }); // in2/in3 via sel0
+  const out = buildMux2(circuit, { x: pos.x + 600, y: pos.y + 200 }); // low/high via sel1
 
   wire(circuit, low.sel, high.sel); // shared sel0
   wire(circuit, low.out, out.in0);
@@ -445,16 +471,19 @@ export interface TriStateBuffer {
  * condition, using nothing but ordinary switch-level transistors already
  * modeled by the solver.
  */
-export function buildTriStateBuffer(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): TriStateBuffer {
-  const inv = buildNot(circuit, vcc, gnd, pos); // inv.out = NOT(a)
-  const enInv = buildNot(circuit, vcc, gnd, { x: pos.x + 200, y: pos.y }); // enInv.out = NOT(en)
+export function buildTriStateBuffer(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+): TriStateBuffer {
+  const inv = buildNot(circuit, pos); // inv.out = NOT(a)
+  const enInv = buildNot(circuit, { x: pos.x + 200, y: pos.y }); // enInv.out = NOT(en)
 
   const p1 = makeTransistor(circuit, 'P', { x: pos.x + 100, y: pos.y + 150 });
   const p2 = makeTransistor(circuit, 'P', { x: pos.x + 100, y: pos.y + 210 });
   const n2 = makeTransistor(circuit, 'N', { x: pos.x + 100, y: pos.y + 270 });
   const n1 = makeTransistor(circuit, 'N', { x: pos.x + 100, y: pos.y + 330 });
 
-  wire(circuit, p1.pins.source, vcc);
+  tiePowerRail(circuit, 'VCC', p1.pins.source);
   wire(circuit, p1.pins.gate, enInv.out); // pull-up path open when en=1
   wire(circuit, p1.pins.drain, p2.pins.source);
   wire(circuit, p2.pins.gate, inv.out); // pulls up when a=1
@@ -463,7 +492,7 @@ export function buildTriStateBuffer(circuit: Circuit, vcc: Pin, gnd: Pin, pos: P
   wire(circuit, n2.pins.gate, inv.out); // pulls down when a=0
   wire(circuit, n2.pins.source, n1.pins.drain);
   wire(circuit, n1.pins.gate, enInv.in); // pull-down path open when en=1
-  wire(circuit, n1.pins.source, gnd);
+  tiePowerRail(circuit, 'GND', n1.pins.source);
 
   return { a: inv.in, en: enInv.in, out: p2.pins.drain };
 }
@@ -487,10 +516,10 @@ export interface Decoder {
  * `NOT(addr[k])` for every bit `k`, chosen by `i`'s own binary pattern) — a
  * two-level AND-of-(true-or-complemented)-inputs decoder, no shortcuts.
  */
-export function buildDecoder(circuit: Circuit, vcc: Pin, gnd: Pin, bits: number, pos: Point = { x: 0, y: 0 }): Decoder {
+export function buildDecoder(circuit: Circuit, bits: number, pos: Point = { x: 0, y: 0 }): Decoder {
   if (bits < 1) throw new Error('buildDecoder needs at least one address bit');
 
-  const inv: NotGate[] = Array.from({ length: bits }, (_, i) => buildNot(circuit, vcc, gnd, { x: pos.x, y: pos.y + i * 100 }));
+  const inv: NotGate[] = Array.from({ length: bits }, (_, i) => buildNot(circuit, { x: pos.x, y: pos.y + i * 100 }));
   const addr = inv.map((g) => g.in); // the raw bit, used directly as a "1" term below
   const notAddr = inv.map((g) => g.out); // its complement, used as a "0" term below
 
@@ -500,7 +529,7 @@ export function buildDecoder(circuit: Circuit, vcc: Pin, gnd: Pin, bits: number,
     let term: Pin = (i & 1) === 1 ? addr[0]! : notAddr[0]!;
     for (let k = 1; k < bits; k++) {
       const next = (i & (1 << k)) !== 0 ? addr[k]! : notAddr[k]!;
-      const and = buildAnd(circuit, vcc, gnd, { x: pos.x + 200 + k * 250, y: pos.y + i * 150 });
+      const and = buildAnd(circuit, { x: pos.x + 200 + k * 250, y: pos.y + i * 150 });
       wire(circuit, and.a, term);
       wire(circuit, and.b, next);
       term = and.out;
@@ -523,9 +552,9 @@ export interface SrLatch {
  * which is exactly the feedback loop the solver's relaxation loop exists
  * to resolve.
  */
-export function buildSrLatch(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): SrLatch {
-  const g1 = buildNand(circuit, vcc, gnd, pos); // Q  = NAND(setPin_n, qn)
-  const g2 = buildNand(circuit, vcc, gnd, { x: pos.x, y: pos.y + 150 }); // Qn = NAND(resetPin_n, q)
+export function buildSrLatch(circuit: Circuit, pos: Point = { x: 0, y: 0 }): SrLatch {
+  const g1 = buildNand(circuit, pos); // Q  = NAND(setPin_n, qn)
+  const g2 = buildNand(circuit, { x: pos.x, y: pos.y + 150 }); // Qn = NAND(resetPin_n, q)
   wire(circuit, g1.out, g2.b);
   wire(circuit, g2.out, g1.b);
   return { setPin: g1.a, resetPin: g2.a, q: g1.out, qn: g2.out };

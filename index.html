@@ -80,13 +80,154 @@
       #chip-palette { font: 12px ui-monospace, monospace; flex-wrap: wrap; }
       #chip-palette .hint { color: var(--text-dim); }
 
-      #stage {
-        position: relative;
+      #workspace {
+        display: flex;
         flex: 1 1 auto;
         min-height: 0;
         overflow: hidden;
       }
-      canvas { display: block; width: 100%; height: 100%; }
+      #stage {
+        position: relative;
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+      }
+      #stage > canvas { display: block; width: 100%; height: 100%; }
+
+      #machine-panel {
+        flex: 0 0 auto;
+        width: 400px;
+        max-width: 42vw;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 12px;
+        background: var(--panel);
+        border-left: 1px solid var(--border);
+        overflow: auto;
+      }
+      #machine-panel[hidden] { display: none !important; }
+      .machine-panel-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .machine-panel-title {
+        font: 600 12px ui-monospace, monospace;
+        color: var(--accent);
+        letter-spacing: 0.04em;
+      }
+      .machine-panel-meta {
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+      }
+      .machine-panel-canvas {
+        display: block;
+        background: #0a0c10;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: text;
+        outline: none;
+      }
+      .machine-panel-canvas:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px rgba(245, 197, 24, 0.35);
+      }
+      .machine-panel-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .machine-panel-controls button.active {
+        background: var(--accent);
+        color: var(--accent-ink);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      .machine-panel-speed {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--text-dim);
+        font: 11px ui-monospace, monospace;
+      }
+      .machine-panel-speed select {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        font: 11px ui-monospace, monospace;
+        padding: 2px 4px;
+      }
+      .machine-panel-status {
+        margin-left: auto;
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+      }
+      .machine-panel-cmd, .machine-panel-load {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: flex-start;
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+      }
+      .machine-panel-cmd input, .machine-panel-load input, .machine-panel-load textarea {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        font: 11px ui-monospace, monospace;
+        padding: 4px 6px;
+      }
+      .machine-panel-cmd input { width: 220px; }
+      .machine-panel-load textarea {
+        width: 100%;
+        min-height: 2.4em;
+        resize: vertical;
+      }
+      .machine-panel-asm {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .machine-panel-asm textarea {
+        width: 100%;
+        min-height: 5.5em;
+        resize: vertical;
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        font: 11px ui-monospace, monospace;
+        padding: 4px 6px;
+      }
+      .machine-panel-asm-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .machine-panel-out {
+        margin: 0;
+        max-height: 9em;
+        overflow: auto;
+        padding: 6px 8px;
+        background: #0a0c10;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font: 11px/1.35 ui-monospace, monospace;
+        color: var(--text-dim);
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .machine-panel-hint {
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+        line-height: 1.35;
+      }
 
       #zoom-controls {
         position: absolute;
@@ -154,7 +295,7 @@
         <button id="add-rom" title="Insert a fixed-content memory stub, addressed and read through real tri-state bus drivers — no storage, no write port (asks for hex bytes)">+ ROM</button>
         <button id="add-ram" title="Insert real read/write memory — reads bytes[addr] while OE=1, writes the data bus into bytes[addr] on a WE&CLK rising edge (asks for address bits)">+ RAM</button>
         <button id="add-cpu" title="Insert a complete tiny CPU — PC+RAM+IR+ACC+ALU sequenced by a FETCH/INCREMENT/DECODE_EXECUTE FSM, running a 2-instruction LDI/ADI program (asks for RAM address bits, then program bytes)">+ CPU</button>
-        <button id="add-z80cpu" title="Insert a CPU decoding and executing REAL Z80 opcodes — x=10 (ADD/ADC/SUB/SBC/AND/XOR/OR/CP A,r — P/V is signed overflow for the first five, parity for the last three; INC r/DEC r always overflow, no parity variant), x=11's ALU op A,n (same eight ops against an immediate byte), x=01 (LD r,r'), x=11's PUSH/POP/RET/RST n/JP nn/CALL nn/JP cc,nn/CALL cc,nn/RET cc/EXX/JP (HL)/LD SP,HL/EX DE,HL/EX (SP),HL/IN A,(n)/OUT (n),A (every non-prefix x=11 opcode real Z80 defines that isn't DI/EI — permanently inert, no interrupt line exists to gate), x=00's NOP/EX AF,AF'/INC/DEC rr (BC/DE/HL/SP), INC/DEC r, LD r,n, LD dd,nn (B/C/D/E/H/L/A, not (HL), for the 8-bit ones; BC/DE/HL/SP for the 16-bit one), ADD HL,rr (BC/DE/HL/SP into HL, carry flag only), JR e/DJNZ e/JR cc,e (JR cc,e tests NZ/Z/NC/C only — real Z80's own limit for this opcode), indirect loads through (BC)/(DE)/(nn) — LD (BC),A/LD A,(BC)/LD (DE),A/LD A,(DE) (single-byte) and LD (nn),HL/LD HL,(nn)/LD (nn),A/LD A,(nn) (3-byte, through a freshly-read absolute address), INC (HL)/DEC (HL)/LD (HL),n (the y=6 slot every other x=00 register group leaves inert, a real RAM read-modify-write through a dedicated holding register), and RLCA/RRCA/RLA/RRA/CPL/SCF/CCF/DAA (single-byte accumulator/flag ops, z=7 — DAA corrects A back into valid packed BCD after an 8-bit add or subtract, reading the real H/C/N flags this simulator now models for the x=10/x=11 ALU group and INC r/DEC r; the other six still leave H and the two undocumented flag bits stale, same as always). JP cc,nn, CALL cc,nn, and RET cc all test NZ/Z/NC/C/PO/PE/P/M off the identical one-hot tree — JP cc,nn either jumps or falls through, CALL cc,nn either pushes-and-calls or falls through, RET cc either pops-and-jumps or falls through, with no extra FSM phases needed on top of JP nn's/CALL nn's/RET's own. The JR family needs real PC-relative arithmetic instead — a signed 8-bit displacement added to PC (needs addrBits >= 8 for correct sign-extension), not a fixed target written into it; DJNZ additionally decrements B and jumps only while it's still nonzero. CALL nn, a taken CALL cc,nn, and a taken RET cc all share the same single stack byte — pushed by the first two, popped by the last (and by plain RET). EX (SP),HL swaps HL with that same top-of-stack pair, a real read-modify-write, not just a register swap. IN A,(n)/OUT (n),A move a byte through this simulator's own invented I/O port — ioPortAddr/ioPortDataOut/ioPortDataIn/ioRead/ioWrite, wired to nothing else on this canvas by default. The FSM has 8 phases, not 4 — its seed pattern (fsmD) is 8 bits wide, e.g. [1,0,0,0,0,0,0,0]. B/C/D/E/H/L/SP, the shadow register set (A'/F'/B'/C'/D'/E'/H'/L'), CLK, PHASE_CLK, RESET, A_RESET and the FSM seed all need wiring by hand afterwards, same as every other bare-pin composite (asks for RAM address bits, then program bytes)">+ Z80CPU</button>
+        <button id="add-z80cpu" title="Insert a CPU decoding and executing REAL Z80 opcodes — x=10 (ADD/ADC/SUB/SBC/AND/XOR/OR/CP A,r — P/V is signed overflow for the first five, parity for the last three; INC r/DEC r always overflow, no parity variant), x=11's ALU op A,n (same eight ops against an immediate byte), x=01 (LD r,r'), x=11's PUSH/POP/RET/RST n/JP nn/CALL nn/JP cc,nn/CALL cc,nn/RET cc/EXX/JP (HL)/LD SP,HL/EX DE,HL/EX (SP),HL/IN A,(n)/OUT (n),A (every non-prefix x=11 opcode real Z80 defines that isn't DI/EI — permanently inert, no interrupt line exists to gate), x=00's NOP/EX AF,AF'/INC/DEC rr (BC/DE/HL/SP), INC/DEC r, LD r,n, LD dd,nn (B/C/D/E/H/L/A, not (HL), for the 8-bit ones; BC/DE/HL/SP for the 16-bit one), ADD HL,rr (BC/DE/HL/SP into HL, carry flag only), JR e/DJNZ e/JR cc,e (JR cc,e tests NZ/Z/NC/C only — real Z80's own limit for this opcode), indirect loads through (BC)/(DE)/(nn) — LD (BC),A/LD A,(BC)/LD (DE),A/LD A,(DE) (single-byte) and LD (nn),HL/LD HL,(nn)/LD (nn),A/LD A,(nn) (3-byte, through a freshly-read absolute address), INC (HL)/DEC (HL)/LD (HL),n (the y=6 slot every other x=00 register group leaves inert, a real RAM read-modify-write through a dedicated holding register), and RLCA/RRCA/RLA/RRA/CPL/SCF/CCF/DAA (single-byte accumulator/flag ops, z=7 — DAA corrects A back into valid packed BCD after an 8-bit add or subtract, reading the real H/C/N flags this simulator now models for the x=10/x=11 ALU group and INC r/DEC r; the other six still leave H and the two undocumented flag bits stale, same as always). JP cc,nn, CALL cc,nn, and RET cc all test NZ/Z/NC/C/PO/PE/P/M off the identical one-hot tree — JP cc,nn either jumps or falls through, CALL cc,nn either pushes-and-calls or falls through, RET cc either pops-and-jumps or falls through, with no extra FSM phases needed on top of JP nn's/CALL nn's/RET's own. The JR family needs real PC-relative arithmetic instead — a signed 8-bit displacement added to PC (needs addrBits >= 8 for correct sign-extension), not a fixed target written into it; DJNZ additionally decrements B and jumps only while it's still nonzero. CALL nn, a taken CALL cc,nn, and a taken RET cc all share the same single stack byte — pushed by the first two, popped by the last (and by plain RET). EX (SP),HL swaps HL with that same top-of-stack pair, a real read-modify-write, not just a register swap. IN A,(n)/OUT (n),A move a byte through this simulator's own invented I/O port — ioPortAddr/ioPortDataOut/ioPortDataIn/ioRead/ioWrite, wired to nothing else on this canvas by default. ED-prefixed LDI/LDD/LDIR/LDDR (0xED 0xA0/0xA8/0xB0/0xB8), CPI/CPD/CPIR/CPDR (0xED 0xA1/0xA9/0xB1/0xB9), INI/IND/INIR/INDR (0xED 0xA2/0xAA/0xB2/0xBA), OUTI/OUTD/OTIR/OTDR (0xED 0xA3/0xAB/0xB3/0xBB), and NEG (0xED 0x44) are this project's first five real CB/ED/DD/FD-table instructions, the first four closing out ED's own block-instruction half (z=0 through z=3) entirely: LDI/LDD/LDIR/LDDR move (DE)&lt;-(HL), then HL/DE both ++ for LDI/LDIR or -- for LDD/LDDR, BC--, N/H reset, P/V&lt;-(BC-1 != 0), S/Z/C untouched; CPI/CPD/CPIR/CPDR compare A-(HL) for flags only (A itself untouched), HL++ for CPI/CPIR or -- for CPD/CPDR, BC--, N set, H a real half-borrow, P/V&lt;-(BC-1 != 0), S/Z off the comparison, C untouched — a genuinely separate, dedicated subtractor, not routed through the x=10 ALU group; INI/IND/INIR/INDR move (HL)&lt;-IN(C) — a byte read from this simulator's own invented I/O port, addressed by C rather than an immediate byte — then HL++ for INI/INIR or -- for IND/INDR, B-- alone (never the BC pair), N&lt;-the transferred byte's own bit 7, Z&lt;-(B==0), the only two flag bits real Z80 documents for this family; OUTI/OUTD/OTIR/OTDR are the exact mirror image, OUT(C)&lt;-(HL) instead, the identical B--/N/Z machinery genuinely shared (decrementing B is the same operation regardless of direction). LDIR/LDDR repeat by landing PC back on their own opcode for as long as BC stays nonzero; CPIR/CPDR repeat the same way but also stop the moment a match is found; INIR/INDR and OTIR/OTDR repeat the same way watching B alone, the simplest of the three conditions and genuinely shared between the two families — no real micro-cycle involved in any of them. NEG is this project's first non-block ED-table opcode: A&lt;-0-A, real two's-complement negation through its own dedicated adder (never routed through the x=10 ALU group, whose own A input can't be forced to a constant 0), every flag bit real and fresh — S/Z off the result, H a real half-borrow, P/V set only when A was 0x80 (the one byte whose negation overflows), N always 1, C set whenever A was nonzero. ADC HL,rr/SBC HL,rr (0xED 0x4A/0x5A/0x6A/0x7A and 0x42/0x52/0x62/0x72) reuse ADD HL,rr's own shared 16-bit adder, widened for a real carry-in and operand invert (the identical x=10 ADC/SBC recipe, just 16 bits wide) — every flag bit real here too, unlike ADD HL,rr's own C-only treatment: S/Z off the 16-bit result, H at the 16-bit nibble boundary, P/V the classic overflow formula at the sign bit, N picks ADC/SBC, C borrow-inverted for SBC, X/Y mirroring the high byte's own bits 3/5. The other three prefix bytes and the rest of ED's own table (RRD/RLD, RETN/RETI, IM, and friends) execute nothing yet, these six instructions close out the block-instruction half of ED's table, add its first two non-block ones, and prove the prefix mechanism itself works end to end for a single-shot instruction, three differently-gated repeats, and two real decode collisions outside the block-instruction shape. The FSM has 8 phases, not 4 — its seed pattern (fsmD) is 8 bits wide, e.g. [1,0,0,0,0,0,0,0]. B/C/D/E/H/L/SP, the shadow register set (A'/F'/B'/C'/D'/E'/H'/L'), CLK, PHASE_CLK, RESET, A_RESET and the FSM seed all need wiring by hand afterwards, same as every other bare-pin composite (asks for RAM address bits, then program bytes)">+ Z80CPU</button>
       </div>
       <span class="sep"></span>
       <div class="group">
@@ -171,16 +312,19 @@
     <input type="file" id="import-chip-file" accept="application/json" hidden />
     <div id="breadcrumb"></div>
     <div id="chip-palette"><span class="hint">chips:</span></div>
-    <div id="stage">
-      <canvas id="canvas"></canvas>
-      <div id="zoom-controls">
-        <button id="zoom-out" title="Zoom out">−</button>
-        <span id="zoom-pct">100%</span>
-        <button id="zoom-in" title="Zoom in">+</button>
-        <button id="zoom-100" title="Reset to 100%">1:1</button>
-        <button id="zoom-fit" title="Fit everything in view">fit</button>
+    <div id="workspace">
+      <div id="stage">
+        <canvas id="canvas"></canvas>
+        <div id="zoom-controls">
+          <button id="zoom-out" title="Zoom out">−</button>
+          <span id="zoom-pct">100%</span>
+          <button id="zoom-in" title="Zoom in">+</button>
+          <button id="zoom-100" title="Reset to 100%">1:1</button>
+          <button id="zoom-fit" title="Fit everything in view">fit</button>
+        </div>
+        <div id="hint">1-9/L for tools · drag to move · arrows to nudge · scroll to zoom · space/middle-drag to pan · dblclick a chip to dive in</div>
       </div>
-      <div id="hint">1-9/L for tools · drag to move · arrows to nudge · scroll to zoom · space/middle-drag to pan · dblclick a chip to dive in</div>
+      <aside id="machine-panel" hidden></aside>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

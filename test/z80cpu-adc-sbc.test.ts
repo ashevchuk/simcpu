@@ -107,6 +107,10 @@ describe('buildZ80Cpu — x=10: ADC/SBC (real carry-in, plus a plain NOP proof)'
     wire(parent, fsmD6.pins.out, cpu.fsmD[6]!);
     const fsmD7 = makeInput(parent, 0);
     wire(parent, fsmD7.pins.out, cpu.fsmD[7]!);
+    const fsmD8 = makeInput(parent, 0);
+    wire(parent, fsmD8.pins.out, cpu.fsmD[8]!);
+    const fsmD9 = makeInput(parent, 0);
+    wire(parent, fsmD9.pins.out, cpu.fsmD[9]!);
 
     // B=1, C=0 are the two operands every ADC/SBC in this program reads —
     // everything else gets the usual "seeded but otherwise irrelevant"
@@ -175,6 +179,10 @@ describe('buildZ80Cpu — x=10: ADC/SBC (real carry-in, plus a plain NOP proof)'
       pulse(phaseClk); // -> EXEC5
       pulse(dataClk);
       pulse(phaseClk); // -> EXEC6
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC7 (no-op — ring widen for DD/FD CB SET/RES/rot)
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC8 (ditto)
       pulse(dataClk);
       pulse(phaseClk); // -> FETCH (next opcode)
       pulse(dataClk);

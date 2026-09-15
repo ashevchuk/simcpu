@@ -5,10 +5,20 @@ A transistor-level digital circuit simulator, in the spirit of
 gates from wires, and eventually a Z80-flavored 8-bit computer from gates —
 all running in the browser, no accounts, no install.
 
-This document covers what exists today (Phase 0/1 of the project plan: the
-simulation engine, hierarchy/chip-folding, and a minimal editor UI). CPU,
-memory map, monitor, BASIC and the assembler are later phases, not yet
-started.
+This document covers what exists today: the simulation engine, hierarchy/
+chip-folding, a canvas editor, and a transistor-level Z80-like CPU
+(`buildZ80Cpu`) that executes the unprefixed opcode table, the `CB`
+prefix table, the `ED` prefix table including a thin IM1 IRQ layer
+(`EI`/`DI`/`IM 1`/`RETI`/maskable INT→`RST 38h`), and first `DD`/`FD`
+slices (`IX`/`IY` registers, `LD IX/IY,nn`, `PUSH`/`POP IX/IY`, HL-clone
+`ADD`/`INC`/`DEC`/`JP`/`LD SP`/`EX (SP)`, `(IX+d)`/`(IY+d)` LD /
+`INC`/`DEC` / ALU `A,(IX+d)`, nested `DD CB`/`FD CB` BIT / SET/RES / rot
+on `(IX+d)`/`(IY+d)`, and H→IXH / L→IXL (IYH/IYL) 8-bit register remap
+for LD / LD n / INC/DEC / ALU `A,IXH/IXL`). A soft memory-mapped text TTY
+(framebuffer + keyboard over `RamComponent.bytes`, canvas side panel), a
+Z80-native command ROM in RAM (TTY `H`/`M`/`W`/`G`), and a throttled
+MachineRunner auto-clock are the first machine-facing I/O layer — see
+"Memory-mapped TTY (behavioral)". BASIC remains a later phase.
 
 ## Layout
 
@@ -52,11 +62,15 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
   hierarchy.ts    fold() (Ctrl+G: cut a selection out into a reusable chip
                    — refuses a selection containing RAM, see "Real RAM"),
                    foldExposing() (fold()'s stub-wiring trick promoted to a
-                   reusable helper — see blocks.ts), and flatten()
-                   (recursively expand every chip instance back into
-                   transistors for the solver — see below; also where RAM's
-                   `bytes` reference gets preserved across clones, again see
-                   "Real RAM").
+                   reusable helper — see blocks.ts), foldZ80CpuLeavingRam()
+                   (see foldZ80.ts / "Folded Z80CPU placement"), and
+                   flatten() (recursively expand every chip instance back
+                   into transistors for the solver — see below; also where
+                   RAM's `bytes` reference gets preserved across clones,
+                   again see "Real RAM").
+  foldZ80.ts      After + Z80CPU: fold the flat composite into one chip,
+                   leaving RamComponent (and already-wired Inputs) on the
+                   parent so Canvas redraw cost collapses.
   blocks.ts       Structures assembled *using the hierarchy system itself*
                    (fold a bit, place N instances of it) rather than more
                    raw transistors: buildRegister (N register-bit chip
@@ -80,10 +94,19 @@ src/sim/        Simulation core — no DOM, no rendering, fully unit-testable.
                    STORE/LOAD — see "Decode and execute" below),
                    buildZ80Decoder (real `xxyyyzzz` opcode-field extraction
                    — x/y/z as one-hot line groups, no meaning assigned), and
-                   buildZ80Cpu (a second, separate tiny CPU executing real
-                   Z80 opcodes for three groups — `x=10` ALU-on-register,
-                   `x=01` `LD r,r'`, and a real subset of `x=11` (flags,
-                   SP, PUSH/POP, RET, RST n) — see "A real Z80 decoder"
+                   buildZ80Cpu (a second, separate CPU executing real Z80
+                   opcodes across `x=00`/`x=01`/`x=10`/`x=11`, plus the
+                   `ED`-prefix table (block transfers, `NEG`, `ADC`/`SBC
+                   HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN r,(C)`/`OUT (C),r`,
+                   `LD I/R`, and thin IM1 IRQ — `IM 1`/`RETI`/`EI`/`DI`)
+                   and the `CB` table (`BIT`, `SET`/`RES`, rotates/shifts).
+                   First `DD`/`FD` slices: `IX`/`IY` + `LD IX/IY,nn` /
+                   `PUSH`/`POP IX/IY` plus HL-clone ADD/INC/DEC/JP/LD SP/EX
+                   plus `(IX+d)`/`(IY+d)` LD (`r,(IX+d)`, `(IX+d),r`,
+                   `(IX+d),n`), `INC`/`DEC (IX+d)`, ALU `A,(IX+d)`, nested
+                   `DD CB`/`FD CB` BIT / SET/RES / rot on `(IX+d)`/`(IY+d)`,
+                   and H→IXH / L→IXL remap — see "DD: IX" / "FD: IY" /
+                   "DD CB / FD CB" and the CB/ED/DD/FD prefix sections
                    below).
   stdcells.ts     seedStandardCells(): folds NOT/NAND/AND/NOR/OR/XOR/MUX2/
                    MUX4/HALF_ADDER/FULL_ADDER/D_LATCH/D_FF/TRI_BUF into
@@ -125,6 +148,25 @@ src/ui/         Canvas editor — thin layer on top of src/sim, swappable.
                    labels beside each pin — the color-coded border and the
                    N/P letter are still there too, so type is legible at a
                    glance from any one of three independent visual cues.
+  MachinePanel.ts Soft text TTY: samples `ram.bytes[FB_BASE..]`, injects
+                   keys, Run/Pause/Step/Reboot/speed, host Cmd + Load hex
+                   + mini assembler — see "Memory-mapped TTY (behavioral)".
+
+src/machine/    Soft machine map over RamComponent (not transistor devices).
+  memoryMap.ts    Locked 12-bit demo layout: FB @ 0xE00 (32×8), keys @
+                   0xF00/0xF01.
+  tty.ts          paintCell / injectKey helpers for tests and the panel.
+  monitor.ts      Legacy soft echo monitor opcode image (poll keys, CR/BS).
+  commandRom.ts   Default Z80 command ROM (TTY H/M/W/G), assembled from
+                   source via assembler.ts; line buf @ 0xD00, stack @ 0xDFF.
+  softConsole.ts  Host panel Cmd: M/W/G/R/H + loadHexAt (JS helper; R
+                   reloads command ROM).
+  assembler.ts    Mini two-pass Z80 subset assembler (labels, DB/DW,
+                   IX/IY/(IX+d), CB, common ED).
+  MachineRunner.ts Soft Run (default): softZ80 interpreter on ram.bytes.
+                   Gate speeds: time-budgeted transistor phases.
+  softZ80.ts      Behavioral Z80 subset for interactive TTY (not timing-
+                   accurate; gate Step still uses the real circuit).
 
 src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 demo, owns the hierarchy navigation stack (dive in/out,
@@ -134,8 +176,13 @@ src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 (built from each toolbar button's own `data-key` in
                 index.html, so the key and its on-screen hint can't drift
                 apart), arrow-key nudge for the current selection, and runs
-                the requestAnimationFrame loop: flatten the *top* circuit ->
-                step solver -> draw the *currently viewed* level -> repeat.
+                the requestAnimationFrame loop: optional MachineRunner
+                phase budget -> flatten the *top* circuit -> step solver ->
+                draw the *currently viewed* level -> sample the soft TTY
+                panel when a 12-bit Z80 RAM is attached -> repeat.
+                `+ Z80CPU` defaults to 12-bit address space, the Z80
+                command ROM, auto-run after boot, then folds the
+                transistor guts into one `Z80CPU` chip (RAM stays outside).
 
 test/solver.test.ts      Engine correctness: NOT/NAND/AND truth tables, an
                           SR latch's feedback-held state, and short detection
@@ -182,6 +229,21 @@ test/ram.test.ts         RAM read/write correctness (see "Real RAM"): reads
                           to prove a write survives the next flatten() call
                           — the actual bug this component's design guards
                           against, not just "the logic works once".
+test/memoryMap.test.ts   Soft machine-map constants + paintCell / keyboard
+                          helpers (see "Memory-mapped TTY (behavioral)").
+test/machine-tty.test.ts Z80 program with addrBits=12 writes FB via
+                          LD (nn),A; KEY_DATA read clears KEY_STATUS
+                          (gate clear-on-read).
+test/monitor.test.ts     Soft echo-monitor opcode image + loadMonitor.
+test/machine-monitor.test.ts Echo monitor on addrBits=12: prompt + key
+                          echo into FB, KEY_STATUS cleared.
+test/command-rom.test.ts Z80 command ROM assemble + TTY H on addrBits=12.
+test/soft-z80.test.ts    Soft interpreter: command ROM H/help + tiny ALU.
+test/softConsole.test.ts Host M/W/G/R/H + loadHexAt (R → command ROM).
+test/assembler.test.ts   Mini assembler: LD/JR/labels/DB, IX/IY/CB/ED,
+                          + error cases.
+test/fold-z80.test.ts    foldZ80CpuLeavingRam: RAM outside, top-level
+                          component count collapses; clocks still tick.
 test/serialize.test.ts   Project round-trip through a real JSON.stringify/
                           parse cycle, including a folded chip instance
                           still simulating correctly after reload; the id
@@ -836,6 +898,158 @@ draws it as a chip-instance-shaped box (reusing `chipInstanceHeight` via a
 shape the way a chip instance's is) in a distinct dark green, labeled
 `RAM {size}x{width}`, so it doesn't read as just another folded chip at a
 glance. `geometry.ts`'s hit-testing sizes its clickable box the same way.
+
+## Memory-mapped TTY (behavioral)
+
+Same performance rationale as Real RAM: a display or keyboard built from
+gates would explode `flatten()` cost long before it was useful. The CPU
+already exposes addressable `cpu.ram.bytes` and a separate port bus
+(`ioPort*`); this slice uses **RAM windows**, not `IN`/`OUT`, so ordinary
+`LD (nn),A` / `LD A,(nn)` drive the devices. No new `ComponentKind` —
+display and keyboard are soft observers/writers of the same `Uint8Array`.
+
+### Map (locked for the interactive machine demo, `addrBits = 12`)
+
+| Region | Range | Size | Role |
+|--------|-------|------|------|
+| Program / general RAM | `0x000`–`0xDFF` | 3584 B | code + data |
+| Text framebuffer | `0xE00`–`0xEFF` | 256 B | 32×8 cells, one ASCII byte each (row-major) |
+| Keyboard status | `0xF00` | 1 B | `0` = empty, `1` = key waiting |
+| Keyboard data | `0xF01` | 1 B | last ASCII (or mapped) code |
+| Reserved | `0xF02`–`0xFFF` | rest | unused this slice |
+
+Constants and helpers live in `src/machine/memoryMap.ts` and
+`src/machine/tty.ts`. Unit tests keep their own smaller `addrBits`; only
+the interactive `+ Z80CPU` path defaults to 12. Supporting that width
+required wiring register-pair high bytes onto the RAM address mux when
+`addrBits > 8` (`H`/`B`/`D` for bits 8+, same split `JP (HL)` already
+used) — previously only the low register participated.
+
+### Soft panel
+
+`MachinePanel` (`src/ui/MachinePanel.ts`) owns a side-panel `<canvas>`
+(not the transistor editor). Each animation frame it samples
+`ram.bytes[FB_BASE .. FB_END)` and blits glyphs. When the panel is
+focused, printable keys plus Enter/Backspace/Tab write `KEY_DATA` and set
+`KEY_STATUS=1` (overwrite if unread — documented in the panel hint). Reading
+`KEY_DATA` clears `KEY_STATUS` (soft SoftMemHooks; gate solver
+`applyRamKeyClearOnRead` after a settled OE read). Explicit stores still work.
+
+### Soft echo monitor (legacy)
+
+`src/machine/monitor.ts` holds `MONITOR_BYTES` — a minimal poll/echo loop
+(prompt `>`, CR/BS, wrap). Kept for tests and as a tiny reference image;
+no longer the default `+ Z80CPU` program.
+
+### Z80 command ROM
+
+`src/machine/commandRom.ts` is the default boot image: real Z80 opcodes
+assembled from `COMMAND_ROM_SOURCE` (via `assembler.ts`) at module load.
+Layout: code @ `0000`, line buffer @ `0xD00` (32 B), stack @ `0xDFF`, FB
+@ `0xE00`, keys @ `0xF00`. Typed on the **TTY canvas**:
+
+- **H** — help string
+- **M aaaa [n]** — hex dump (default 8, max 16 bytes)
+- **W aaaa bb…** — poke bytes
+- **G aaaa** — `JP aaaa` (leaves the monitor)
+
+User programs should load at **≥ `0x200`** so they sit above the ROM.
+
+### Host soft command console (panel)
+
+The panel **Cmd** box remains a **JS helper** (`softConsole.ts`) for the
+same H/M/W/G vocabulary when the Z80 is paused, plus **R** (reload
+command ROM) and **Load hex @ addr** (`loadHexAt`, refuses `0xF00+`
+unless allowed). Output goes to a `<pre>` under the TTY. Canvas keystrokes
+always feed the Z80 ROM via `KEY_*`.
+
+### Mini assembler (panel)
+
+`assembler.ts` is a two-pass subset assembler (labels, `EQU`/`DEFL`,
+`DB`/`DW`, common unprefixed ops this CPU runs — `LD`/`JR`/`JP`/`CALL`/
+ALU/`INC`/`DEC`/stack/EX/… — plus `IX`/`IY`, `(IX+d)`/`(IY+d)`,
+`IXH`/`IXL` remap, `CB` BIT/SET/RES/rot, `DD`/`FD CB` on `(IX+d)`, and
+common `ED` blocks / `ADC`/`SBC HL` / `NEG` / `IM` / `RETI`). Listing lines
+are always built unless `assemble(..., { listing: false })`. The panel
+**Assemble → Load @** uses the Load-address box as origin, writes bytes
+into RAM, and fills the hex box; **Assemble + Go** also patches `JP` at
+`0000` and reboots. Still not a full commercial Z80ASM (macros, expressions,
+undocumented `DD CB` `z≠6`, every `ED`/`CB` corner, etc.).
+
+### MachineRunner auto-clock
+
+`MachineRunner` wires `Input` drivers for `clk` / `phaseClk` / `reset` /
+`aReset` / FSM seed / lean B–L+SP zero-seeds (parked far above the CPU;
+IX/IY/shadows omitted to cut clutter), boots like the test harness, then
+advances under UI control.
+
+**Default speed is Soft:** `softZ80.ts` interprets unprefixed opcodes
+against the shared `ram.bytes` (~8k ops/frame) so the TTY command ROM is
+usable. Same performance trade-off as Real RAM / the panel — not
+transistor timing. Soft Run desyncs gate-level PC/regs; **Reboot**
+re-seeds both. Prefixed CB/ED/DD/FD throw in soft mode (use **Gates** +
+Step).
+
+**Gates slow/normal/turbo/free:** real circuit edges with a wall-clock
+budget per animation frame (phase caps 2/10/40/400; free uses ~50ms).
+Folding does not shrink the ~57k-net `step()` cost — Soft exists because
+turbo-at-all-costs was unusable for interactive TTY. Soft at top level
+also **defers** `flatten()` (canvas draws chip boxes with Z levels) and
+defers gate FSM boot until a Gates speed is selected, so `+ Z80CPU` stays
+interactive. Dive-in or Gates still pays cold `flatten()` (~1.4s once, then
+cached).
+
+### Soft Z80 + TTY devices
+
+`softZ80.ts` covers unprefixed opcodes plus CB/ED/DD/FD (IX/IY, block
+moves, BIT/SET/RES/rot, …). Soft mem hooks: clear-on-read `KEY_DATA`,
+port I/O via `SoftDevices` (TTY OUT `0x01`, keys `0x02`/`0x03`, 128×64
+bitmap ports `0x20`–`0x22`). Mini BASIC (`basic.ts`) compiles LET/PRINT/
+GOTO/END plus IF/FOR/NEXT/REM/INPUT and multi-item PRINT. Panel status
+shows soft `PC=…`; leaving Soft while desynced auto-reboots. Soft bitmap
+also overlays a small screen-fixed HUD on the transistor canvas when any
+pixel is set (`main.ts` `drawSoftBitmapHud`).
+
+### Folded Z80CPU placement (Canvas)
+
+`buildZ80Cpu` still builds a flat composite (tests keep that path). The
+interactive `+ Z80CPU` path then calls `foldZ80CpuLeavingRam`
+(`src/sim/foldZ80.ts`): every placed component **except** the
+`RamComponent` is folded into one `Z80CPU` chip. MachineRunner Inputs are
+wired first so they become ports rather than disappearing into the chip.
+Top-level `draw()` then paints one chip box + RAM + a handful of Inputs
+instead of thousands of MUX/REG primitives — the Canvas 2D idle cost that
+previously dominated after place.
+
+`flatten()` namespaces non-`VCC`/`GND` label names with the chip-instance
+prefix, so multiple folded chips no longer short `CLK`/`BUS*` nets. Dive-in
+still shows the full transistor guts. Unit tests continue to use the
+unfolded `buildZ80Cpu`.
+
+Cold `flatten()` of a folded 12-bit Z80 (~222k components) is ~1.4s after
+fast component clone + ChipDef expand cache (`hierarchy.ts`); previously
+~4s via `structuredClone`. Soft still defers flatten entirely.
+
+**Place/fold latency (addrBits=12, `scripts/bench-flatten.mts`):** build
+~210ms (still dominated by `makeChipInstance` / gate-builder loops — no
+easy win without changing how the flat composite is constructed), fold
+~300ms after fixing `Circuit.computeNets` net-name assignment from
+O(groups×labels) (~1.5s fold) to O(groups+labels), plus fold batching
+(`addRawComponent`/`addRawWire`, no wire-array copy, nets before bump).
+Flatten unchanged ~1.4s.
+
+Gate-path keyboard clear-on-read: when RAM OE samples `KEY_DATA` (0xF01),
+the solver clears `KEY_STATUS` (0xF00) — same contract as soft
+`SoftMemHooks`.
+
+Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
+pos?)`, etc.); power is always `tiePowerRail`.
+
+### Explicitly later
+
+Nested macros; `*` `/` in asm expressions; PHASE/reloc objects; still-faster
+Gates place if buildZ80 construction is rewritten. Soft↔gate parity covers a
+tiny shared suite (`test/soft-gate-parity.test.ts`); widen as needed.
 
 ## Decode and execute: a tiny working CPU
 
@@ -2391,9 +2605,15 @@ Nine opcodes/opcode-groups landed in one push, closing out every
 real, buildable gap the project's own instruction set had left: `ADC`/
 `SBC` (`x=10`), `NOP` (already correct, just never had its own test),
 `EX AF,AF'`, `EXX`, `JP (HL)`, `LD SP,HL`, `EX DE,HL`, `EX (SP),HL`, `ALU
-op A,n` (`x=11, z=6`), and `IN A,(n)`/`OUT (n),A`. `DI`/`EI` and the
-`CB`/`DD`/`ED`/`FD` prefix bytes are the two genuinely permanent
-exceptions — see Known Simplifications below for why each.
+op A,n` (`x=11, z=6`), and `IN A,(n)`/`OUT (n),A`. `DI`/`EI` were a
+permanent exception then (no interrupt line); a thin IM1 IRQ layer later
+closed them (see "Thin IM1 IRQ" below). The `CB`/`DD`/`ED`/`FD` prefix
+bytes were called permanent exceptions in this same push; that was true
+*then* — the prefix *mechanism*, the `ED` table, and the `CB` table landed
+in later passes (see "The CB/ED/DD/FD prefix mechanism" and the `ED`/`CB`
+sections below). `DD` now has an IX slice (`LD IX,nn` / `PUSH IX` /
+`POP IX`, HL-clone, `(IX+d)` LD / INC/DEC / ALU `A,(IX+d)`); `FD` has
+the matching IY slice; `DD`/`FD CB` and H→IXH remap remain later.
 
 **`ADC`/`SBC`** turned out to be exactly the "smaller lift" the very first
 `x=10` doc comment predicted, back when this file had no flags register at
@@ -2805,6 +3025,1202 @@ UI-only change, confirmed by every pre-existing `buildZ80Cpu` test still
 passing unchanged, plus the new `Renderer.test.ts` (13 tests, `17ms`)
 covering the culling geometry itself.
 
+### The CB/ED/DD/FD prefix mechanism: detect, recapture, exclude
+
+Every opcode this project decodes and executes, `x=00` through `x=11`,
+has been a single, unprefixed byte. Real Z80 has four more opcode tables
+behind four prefix bytes — `CB` (bit-level `RLC`/`BIT`/`SET`/`RES`), `ED`
+(block transfer/search, `IX`/`IY`-less extended instructions), `DD`/`FD`
+(`IX`/`IY` index-register variants of most of the unprefixed table). This
+pass builds the *mechanism* every one of those four tables needs before a
+single new instruction can run on top of it — detect a prefix byte,
+recapture `ir` with the real opcode that follows it, advance `pc` an
+extra time, and — the genuinely hard, invasive part — keep the four
+already-built opcode tables from misinterpreting that recaptured byte as
+if it had arrived unprefixed. At the moment this mechanism landed, no
+prefixed instruction body executed yet — the foundation the next several
+passes built on. The non-interrupt half of `ED` is now wired (block
+column, `NEG`, `ADC`/`SBC HL,rr`, `RRD`/`RLD`, `LD (nn),dd`, `IN`/`OUT
+(C)`, `LD I/R`); CB has `BIT`, `SET`/`RES`, and rotates/shifts
+(register + `(HL)`); `DD` has a first IX slice (see "DD: IX" below);
+`FD` has the matching IY slice (see "FD: IY" below).
+
+**Finding the four prefix bytes needed no new decode table at all.** Real
+Z80 puts all four in `x=11`'s own `z=3`/`z=5` columns — `CB`=0xCB sits at
+`z=3,y=1`, the one `z=3` slot `JP nn`/`OUT (n),A`/`IN A,(n)`/
+`EX (SP),HL`/`EX DE,HL` never claimed; `DD`/`ED`/`FD`=0xDD/0xED/0xFD sit
+at `z=5,y=3/5/7`, the three `z=5` slots `PUSH rp`'s own `y=0,2,4,6` and
+`CALL nn`'s `y=1` never claimed. `dec.x[3]`/`dec.z[3]`/`dec.z[5]`/
+`dec.y[1,3,5,7]` are exactly the same lines every other `x=11` feature
+already reads — `isCbPrefixRaw`/`isDdPrefixRaw`/`isEdPrefixRaw`/
+`isFdPrefixRaw` are four `AND` chains off them, nothing new.
+
+**Recapturing `ir` reuses `LD r,n`'s own shape wholesale.** The hard part
+was never *finding* a prefix byte — it's what happens once one's
+consumed. This project already had the exact mechanism a second-byte
+read needs: `LD r,n`'s PHASE2-read/PHASE3-advance pattern (see "x=00,
+z=6: LD r,n" above) — reused here unchanged, except the destination this
+second read lands in is `ir` itself (recapturing it with the *real*
+opcode byte, not a data operand), and `pc`'s own address is already
+right (PHASE1's own increment already moved it past the prefix byte
+before PHASE2 reads again — the identical "PC already the default read
+address, no new address-mux term needed" fact every immediate-reading
+feature already relies on). `ir.we`, previously a bare `PHASE0` label
+anchor, widens to `OR(PHASE0, PREFIX_READ_NOW)`; `ram.oe` and `pc`'s own
+advance-hold chain (`ramOeFinal`/`pcHold`) each pick up one more term,
+the twenty-sixth and sixteenth respectively, the same shape every
+multi-byte instruction already added one of.
+
+**The invasive part: keeping the old tables blind to a recaptured byte.**
+Once `ir` is recaptured, `dec.x`/`dec.y`/`dec.z` combinationally reflect
+the *real* opcode's own fields from PHASE3 onward — colliding head-on
+with every table this file already built. Real Z80 `0xA0` (`LDI`, once
+ED-prefixed) decomposes to `x=10,y=4,z=0` — exactly `AND B` in the plain
+unprefixed table this project already executes. Nothing about the
+existing `x=10`/`x=01`/`x=00`/`x=11` group gates knew to stay quiet just
+because the byte they were looking at arrived via a prefix — because
+until this pass, a prefix byte couldn't arrive at all.
+
+Fixing this touched far less code than it sounds like it should have,
+for one reason: every downstream gate in this ~5400-line file reads one
+of exactly four base signals — `isX0Group`/`isLdGroup`/`isAluGroup`/
+`isStackGroup` — never `dec.x[N]` directly (verified with `grep -n
+"dec\.x\["`: precisely those four call sites, no bypasses). `activePrefix`
+is a real 4-bit one-hot register — CB/DD/ED/FD, whichever fired, latched
+the instant `ir` is recaptured, `we=OR(PHASE0, PREFIX_READ_NOW)` (reset
+to all-zero on every FETCH, the default; overridden with the real one-hot
+value only when a genuine prefix was just detected — the identical
+"reset by default, override on the one condition that matters"
+mux-ahead-of-`d` shape `aReset` already established for `A`). Its own
+inverted OR, `notPrefixActive`, becomes a fifth term `AND`ed into each of
+those four base gates in place of the bare `dec.x[N]` each used to be —
+every one of the hundreds of gates already built *on top of* those four
+inherits the exclusion for free, without touching one of them
+individually. Read at PHASE2 itself (this same tick's own recapture),
+`activePrefix.q` is still whatever the *previous* instruction's FETCH
+reset it to — 0, always, since FETCH unconditionally resets it every
+single instruction (a real register's `.q` only moves on the next edge —
+the master-slave guarantee this whole file already leans on everywhere
+else) — so the exclusion is correctly *inactive* for a prefix byte's own
+first-byte detection, and correctly *active* starting PHASE3 of the very
+same instruction, once the real opcode byte has actually landed in `ir`.
+`PREFIX_ADVANCE_NOW` (feeding `pc`'s own advance-hold chain) needed the
+identical latched-not-live distinction for a different reason: gating it
+by the *live* `isAnyPrefixRaw` instead would read `dec.x/y/z` fresh at
+PHASE3, by which point they already reflect the real opcode byte, not
+"was this instruction prefixed" — `AND(activePrefix's own OR, PHASE3)` is
+the one-tick-pulsed, correctly-latched version every other multi-byte
+instruction's own `*_ADVANCE_NOW` already is.
+
+One circular-dependency trap, caught before it became actual code: the
+four prefix-detection gates themselves can't be built from the *excluded*
+`isStackGroup` (they'd need `notPrefixActive` before `notPrefixActive`
+itself exists, which needs the very prefix bits those detection gates
+compute) — they're built from `rawStackGroup` (bare `dec.x[3]`) instead,
+with `isStackGroup` itself (the excluded version everything else reads)
+defined afterward, once `notPrefixActive` is real. No actual circularity
+ever reached the file, just a naming discipline (`raw*` for the four
+unexcluded signals prefix-detection needs, the familiar name for the
+excluded signal everything downstream keeps using unchanged).
+
+**Deliberately not modeled**: a prefix immediately following another
+(real hardware treats that as a restart) — this project's one-shot
+"prefix, then real opcode" shape does not restart. Nested `DD CB d op` /
+`FD CB d op` *are* partially modeled (BIT only — see "DD CB / FD CB"
+below). `isEdActive` was the first of the four prefix bits to get a
+label (LDI); `isCbActive` followed for `BIT`; `isDdActive` is labeled
+for the IX slice below. `isFdActive` is labeled for the IY slice below.
+
+Verified against the two existing test files most likely to catch a
+retrofit mistake in the four base group gates (`blocks.test.ts`,
+exercising `buildMinimalCpu`'s own unrelated encoding, and
+`z80cpu-x10.test.ts`, exercising the real unprefixed `x=10` table this
+retrofit's exclusion sits directly in front of) before running the full
+suite — both passed unchanged. The full suite itself: `39/39` files,
+`178/178` tests, `2665.44s` wall-clock (`time`'s own real, seven
+parallel workers) — indistinguishable from this project's pre-retrofit
+baseline despite the much heavier per-test cost documented below, purely
+because the slowdown lands on CPU time, not wall-clock, and there's
+enough parallel headroom to absorb it.
+
+Committed to git for the first time immediately before this retrofit
+began (`git init`, an initial commit of the 178-passing-test state), on
+a dedicated branch — a real rollback point for a change this invasive to
+code that had never needed one before, this project having had no git
+history at all until this pass.
+
+### DD: IX (first slice + HL-clone + (IX+d) mem + H→IXH)
+
+Real Z80's `DD` prefix remaps many `HL` ops onto the `IX` index register.
+This project's DD body covers the `IX` register itself (`IXH`/`IXL`), the
+HL-pair shapes that need no `(IX+d)`, and the displacement mem slice
+(LD / INC/DEC / ALU `A,(IX+d)`).
+
+**First slice** — load / stack:
+
+- **`LD IX,nn`** (`DD 21 nn nn`) — decode `isDdActive ∧ dec.x[0] ∧
+  dec.z[1] ∧ dec.y[4]`. PHASE4 reads the low immediate into `IXL`,
+  PHASE5 advances PC, PHASE6 reads the high into `IXH`, PHASE7 advances
+  PC. Adjacent-phase exclusions mirror EDNN. `ram.oe` and `pcHold` each
+  widen with the two read / two advance strobes; write-back is
+  `wrapWithPairCommit` with `BUS` as the value label.
+- **`PUSH IX`** (`DD E5`) / **`POP IX`** (`DD E1`) — decode
+  `isDdActive ∧ dec.x[3]` with PUSH `z[5]∧y[4]` and POP `z[1]∧y[4]`.
+  PUSH: PHASE4 high (`IXH→bus`), PHASE5 low (`IXL→bus`, excludes high).
+  POP: PHASE4 low into `IXL`, PHASE5 high into `IXH`. `stackWriteNow` /
+  `readNow` widen for the DD phases; tri-buf banks drive `REGIXH`/
+  `REGIXL` onto `BUS` for PUSH; another `wrapWithPairCommit` layer
+  commits POP from `BUS`.
+
+**HL-clone slice** (no displacement) — parallel decode on raw
+`dec.x/y/z` ∧ `isDdActive`, bodies at **PHASE4** (prefix burns
+PHASE2–3). Never reopen `isX0Group` / `isStackGroup`
+(`NOT_PREFIX_ACTIVE` kills those under DD):
+
+- **`ADD IX,rr`** (`DD 09/19/29/39`) — widens the shared `addHlAdder`
+  (`a` muxes HL/IX/IY; HL-pair `b` slot uses IX under DD so `ADD IX,IX`
+  works). `ADDIX_NOW` @ PHASE4; `wrapWithPairCommit` on IX from
+  `ADDHLHI`/`ADDHLLO`; F C-bit mux / `we` OR with `ADDIX_NOW` (same
+  `ADDHL_C`). Unprefixed `ADDHL_NOW` stays quiet under prefix.
+- **`INC/DEC IX`** (`DD 23`/`2B`) — `buildPairAdder` → `IXADD`;
+  `INCDEC_IX_NOW` @ PHASE4; no flags.
+- **`JP (IX)`** (`DD E9`) — `JPIX_NOW` @ PHASE4; PC mux layer after
+  `jpHlMux` from `IXL`/`IXH`.
+- **`LD SP,IX`** (`DD F9`) — `LDSPIX_NOW` @ PHASE4; SP mux from IX;
+  widen SP `we`.
+- **`EX (SP),IX`** (`DD E3`) — PHASE4–7 with adjacent exclusions;
+  shares `spLoTemp`/`spHiTemp`/`oldLTemp`/`oldHTemp`/`exSpHlPlusOne`
+  and the EXSPHL addr mux (strobes OR'd). Old IX captured into the
+  holding temps at first read (never drive bus from live `REGIX*`
+  while committing IX). IX write-back from `SPLOTEMP`/`SPHITEMP`.
+
+**(IX+d) mem slice** — parallel decode, never reopen `isLdGroup` /
+`isX0Group` / `isAluGroup`:
+
+```
+isDdMemLdRead  = isDdActive ∧ x[1] ∧ z[6] ∧ ¬y[6]   // LD r,(IX+d)
+isDdMemLdWrite = isDdActive ∧ x[1] ∧ y[6] ∧ ¬z[6]   // LD (IX+d),r
+isDdMemLdN     = isDdActive ∧ x[0] ∧ z[6] ∧ y[6]    // LD (IX+d),n
+isDdMemIncDec  = isDdActive ∧ x[0] ∧ (z[4]∨z[5]) ∧ y[6]  // INC/DEC (IX+d)
+isDdMemAlu     = isDdActive ∧ x[2] ∧ z[6]            // ALU A,(IX+d)
+```
+
+- Shared `isDdMemAny` widens d-fetch / advance for LD + INC/DEC + ALU:
+  `ixDisp` capture @ PHASE4 (`DDDISP_READ_NOW`); PHASE5 advances PC past
+  `d` (`DDDISP_ADVANCE_NOW`, excludes PHASE4).
+- Dedicated `ixDispAdder` (`a` = IX truncated to `addrBits`, `b` =
+  sign-extend `d`) — not `jrOffsetAdder` (hardwired to PC).
+- `IXDISP_ADDR_NOW` gates the RAM addr mux **only** during mem R/W
+  phases (PHASE6 for r↔mem / INCDEC read / ALU read, PHASE7 for
+  `(IX+d),n` write and INCDEC write) — never during d/n fetches @ PC
+  (same phase-scope discipline as the `IS_INCDEC_HLMEM` live bug).
+- `LD r,(IX+d)` / `LD (IX+d),r`: PHASE6 mem R or W; register WE /
+  bus sources use DD strobes ∧ `y`/`z` (cannot reuse dead `ldGroupNow`).
+- `LD (IX+d),n`: PHASE6 fetch `n` → `ldIxDNImm`; PHASE7 write @ IX+d
+  and advance past `n` (excludes PHASE6).
+- **`INC`/`DEC (IX+d)`** (`DD 34 d` / `DD 35 d`): PHASE6 read @ IX+d
+  into shared `hlMemTemp`; PHASE7 write `R8RESULT` @ IX+d and commit F
+  (unprefixed `HLMEM_READ_NOW` @ PHASE2 / `INCDEC_HLMEM_NOW` @ PHASE3,
+  shifted +4). Shared `r8Adder` selects `HLMEM` via `y[6]`; DEC
+  direction ORs `DDMEM_IS_DEC` (`isDdMemIncDec ∧ z[5]`) into the dead
+  `isDecR8` path for `cin`/`b`/`R8_N`/`R8_H`. Far ORs: `hlMemTemp.we`,
+  `ram.oe`/`ram.we`, `R8RESULT` bus enable, `INCDEC_R8_NOW`.
+- **ALU `A,(IX+d)`** (`DD 86/8E/96/9E/A6/AE/B6/BE d`): PHASE6 read @
+  IX+d onto `BUS`; widen `aluAnyGroupNow` (dead `aluGroupNow` under
+  prefix) so A/F commit like unprefixed ALU. Operand already comes from
+  `BUS` when `ram.oe` drives it; `IXDISP_ADDR_NOW` + `ram.oe` OR PHASE6.
+
+`DD CB` / `FD CB` BIT / SET/RES / rot on `(IX+d)`/`(IY+d)` are below;
+H→IXH remap is in the next subsection. Verified by
+`z80cpu-dd-ix.test.ts` (load/push/pop, HL-clone, `(IX+d)` LD, INC/DEC +
+ALU, and DD CB BIT / SET/RES/rot programs; asserts HL and IY unchanged).
+
+### DD: H→IXH / L→IXL 8-bit remap
+
+Real Z80 remaps the 8-bit `H`/`L` slots (not `(HL)` / `y=6` / `z=6`) onto
+`IXH`/`IXL` under `DD` (and `IYH`/`IYL` under `FD`). `NOT_PREFIX_ACTIVE`
+kills `isLdGroup` / `isX0Group` / `isAluGroup` under DD, so this is
+parallel decode only — never reopen those gates:
+
+```
+isDdHl8Ld  = isDdActive ∧ ¬ddCbMode ∧ x[1] ∧ ¬y[6] ∧ ¬z[6] ∧ (y[4]∨y[5]∨z[4]∨z[5])
+isDdHl8Imm = isDdActive ∧ ¬ddCbMode ∧ x[0] ∧ z[6] ∧ (y[4]∨y[5])
+isDdHl8Inc = isDdActive ∧ ¬ddCbMode ∧ x[0] ∧ (z[4]∨z[5]) ∧ (y[4]∨y[5])
+isDdHl8Alu = isDdActive ∧ ¬ddCbMode ∧ x[2] ∧ (z[4]∨z[5])
+```
+
+Bodies @ **PHASE4** (prefix burns 2–3). Imm: PHASE4 read `n`, PHASE5
+advance (adjacent exclude). Skip under `ddCbMode` / `fdCbMode`
+(undocumented DD CB `z≠6` stays out of scope).
+
+**Wiring:**
+
+- Source→BUS: B/C/D/E/A use the existing tri-buf banks with
+  `DDIX_HL8_LD_NOW` widening `srcActive`; H/L under HL8 use dedicated
+  `REGIXH`/`REGIXL` banks (`DDIX_HL8_SRC_IXH/IXL_NOW`, also OR'd for ALU).
+  Never enable `REGH`/`REGL` for remapped sources.
+- Dest WE: B/C/D/E/A via `DDIX_HL8_WE_*`; IXH/IXL via
+  `wrapWithPairCommit` (`DDIXH_BUS_NOW` / `DDIXL_BUS_NOW` from BUS for
+  LD+imm; `DDIXH_INC_NOW` / `DDIXL_INC_NOW` from `R8RESULT`). Never
+  assert remapped dest onto `rH`/`rL` WE — `DDMEMLD_WE_H` still writes
+  real H for `LD H,(IX+d)`.
+- INC/DEC: feed `r8Adder` from `REGIXH`/`REGIXL` (`DDIXH_INC_NOW` select);
+  suppress `REGH`/`REGL` select while HL8 INC active; DEC direction OR
+  `DDIX_HL8_IS_DEC` into `isDecR8Any`; F via `INCDEC_R8_NOW` widen.
+- ALU `A,IXH/IXL`: same PHASE4 bus drive + `aluAnyGroupNow` widen.
+
+FD mirrors (`FDIY_*` / `IYH`/`IYL`). Verified by HL8 describes in
+`z80cpu-dd-ix.test.ts` / `z80cpu-fd-iy.test.ts` (including negative
+`LD H,(IX+2)` still writing H).
+
+### DD CB / FD CB (BIT / SET/RES / rot on (IX+d)/(IY+d))
+
+`activePrefix` is one-hot — after `DD`, PHASE2 recaptures `CB` into IR and
+latches `isDdActive`; `isCbActive` stays 0, so a bare CB-table decode
+never sees the nested op. Fix: separate mode latches + a second IR-only
+recapture that does **not** rewrite `activePrefix`.
+
+The ring is **10** phases (`buildRingCounter(..., 10, ...)`): BIT still
+fits in the old 8 (op @ PHASE6, read+flags @ PHASE7), but SET/RES/rot need
+a read then a write after the op — that needs `PHASE8`, and op-advance
+moved off `PHASE7` (it conflicted with the SET/RES/rot read) onto
+`PHASE9`. Extra PHASE8/9 are inert for every pre-existing op.
+
+**Mode latch** (`ddCbMode` / `fdCbMode`, 1-bit, CLK wired):
+
+- `we = OR(PHASE0, setNow)`; d-mux resets to 0 on PHASE0 (same shape as
+  `activePrefix`).
+- `setNow = PHASE3 ∧ isDdActive ∧ isCbPrefixRaw` (IR already holds CB after
+  the PHASE2 edge). FD twin with `isFdActive`.
+- Labels: `IS_DDCB_MODE`, `IS_FDCB_MODE`.
+
+**CB table under mode:**
+
+- `cbTableActive = OR(isCbActive, ddCbMode, fdCbMode)` feeds `isCbX0..X3`
+  instead of bare `isCbActive`.
+- Register-form CB (`isBitRegNow` / `isSetResReg` / `isCbRotReg`) and
+  SET/RES/rot (HL) paths AND `NOT(ddCbMode∨fdCbMode)` — CB itself in IR at
+  PHASE4 looks like SET z=3; under mode those paths must stay quiet.
+  Plain BIT (HL) is also gated off under mode so it never forces addr=HL.
+- `ddCbMode` ORs into `isDdMemAny` (FD twin) so existing
+  `DDDISP_READ_NOW` / `DDDISP_ADVANCE_NOW` / `ixDisp` fetch `d` at
+  PHASE4–5.
+
+**Second IR recapture** (prefix latch untouched):
+
+- `DDCB_OP_READ_NOW = ddCbMode ∧ PHASE6` (excludes PHASE5 d-advance).
+- Widens `ir.we` and `ram.oe`. No PC advance on the op fetch — PC stays
+  on the op through PHASE6–8.
+- `DDCB_OP_ADVANCE_NOW` @ **PHASE9** advances past the op (excludes
+  adjacent PHASE8 write). Same for FD.
+
+**BIT body @ PHASE7** (unchanged timing; advance now later):
+
+- `BIT_IX_NOW = ddCbMode ∧ isCbX1 ∧ z[6] ∧ PHASE7` (op already in IR from
+  the PHASE6 edge). Read @ `(IX+d)`: `ram.oe` + `IXDISP_ADDR_NOW`.
+- Flags same phase from **BUS** (not BIT_HL's two-phase `hlMemTemp`) —
+  mirror ALU `A,(IX+d)` @ PHASE6. F we/mux layer `BIT_IXIY_NOW`.
+- FD mirror with `BIT_IY_NOW` / `IYDISP_ADDR_NOW`.
+
+**SET/RES / rot @ PHASE7 read + PHASE8 write** (z=6 only; undocumented
+z≠6 register write-back still skipped):
+
+- `isDdCbSetRes = ddCbMode ∧ isCbSetRes ∧ z[6]`;
+  `isDdCbRot = ddCbMode ∧ isCbX0 ∧ z[6]`.
+- PHASE7: `SETRES_IX_READ_NOW` / `CBROT_IX_READ_NOW` — `ram.oe`,
+  `IXDISP_ADDR`, `hlMemTemp.we` / `cbRotHold.we` (reuse CB (HL) datapath;
+  addr is IX+d, never HL).
+- PHASE8: `SETRES_IX_WRITE_NOW` / `CBROT_IX_WRITE_NOW` — `ram.we`,
+  `IXDISP_ADDR`, `SETRESRESULT` / `CBROTRESULT` bus drive; rot ORs into
+  `CBROT_NOW` for F. Commit unions: `SETRES_MEM_WRITE_ANY`,
+  `CBROT_MEM_WRITE_ANY`.
+- FD mirrors (`*_IY_*`). H→IXH remap is a separate subsection above.
+
+| Phase | Action |
+|-------|--------|
+| 0–1 | FETCH DD / PC++ |
+| 2–3 | IR←CB, latch DD; PREFIX_ADVANCE; latch ddCbMode |
+| 4–5 | d→ixDisp; advance |
+| 6 | IR←op (2nd recapture; `activePrefix` untouched) |
+| 7 | BIT: read+flags. SET/RES/rot: read into hold @ (IX+d) |
+| 8 | SET/RES: write result. Rot: write+flags |
+| 9 | Advance past op |
+
+Verified by DD/FD BIT + SET/RES/rot describes in
+`z80cpu-dd-ix.test.ts` / `z80cpu-fd-iy.test.ts`.
+
+### FD: IY (first slice + HL-clone + (IY+d) mem + H→IYH)
+
+Mechanical mirror of "DD: IX" above, gated on `isFdActive` (`0xFD`)
+instead of `isDdActive`. Same register shape (`IYH`/`IYL`), same
+PHASE4–7 / PHASE4–5 / PHASE4 bodies, plus the `(IY+d)` mem mirror
+(`iyDisp` / `iyDispAdder` / `ldIyDNImm` / `IYDISP_ADDR_NOW`):
+
+- **`LD IY,nn`** / **`PUSH IY`** / **`POP IY`** — as in the first
+  slice (mirror of IX).
+- **`ADD IY,rr`** / **`INC/DEC IY`** / **`JP (IY)`** / **`LD SP,IY`** /
+  **`EX (SP),IY`** — same HL-clone wiring with `ADDIY_NOW`,
+  `IYADD`, `JPIY_NOW`, `LDSPIY_NOW`, `EXSPIY_*`.
+- **`LD r,(IY+d)`** / **`LD (IY+d),r`** / **`LD (IY+d),n`** /
+  **`INC`/`DEC (IY+d)`** / **ALU `A,(IY+d)`** — FD mirror of the DD
+  displacement mem slice.
+
+- `FD CB` BIT / SET/RES / rot are above (shared "DD CB / FD CB" section);
+- H→IYH / L→IYL 8-bit remap mirrors "DD: H→IXH / L→IXL" above.
+
+Verified by `z80cpu-fd-iy.test.ts` (mirror programs; asserts HL and IX
+unchanged under FD).
+
+### x=10, z=0: LDI/LDD/LDIR/LDDR
+
+Real Z80's own simplest ED-table instruction, and this project's first —
+the natural first target the prefix mechanism's own doc comment above
+already named. `(DE)<-(HL)`, then `HL++`/`DE++`/`BC--`, `N`/`H` reset,
+`P/V<-(BC-1 != 0)`, `S`/`Z`/`C` left alone (the two undocumented `X`/`Y`
+bits *do* change on real hardware too, from `A` plus the transferred
+byte — deliberately not modeled here, the same category of documented
+simplification `INC r`/`DEC r`'s own unmodeled `H` used to be, before
+"Closing the half-carry gap" made that one real).
+
+**The collision the prefix mechanism's own doc comment predicted, now
+actually hit.** Real `0xED 0xA0` decomposes to `x=10,y=4,z=0` — bit for
+bit the same fields as the plain unprefixed table's own `AND B`. `isLdiNow`
+(`AND(isEdActive, dec.y[4], dec.z[0])`) is gated on `isEdActive` for
+exactly this reason — `AND B` itself already reads `notPrefixActive`
+through `isAluGroup` (see the prefix mechanism's own doc comment above),
+so the two conditions can never both be `1` at once, the identical
+one-hot-`x`-decode guarantee this file has relied on since `INC rr`/`DEC
+rr`'s own three-source write-back.
+
+**Three phases, not two.** `PHASE2`/`PHASE3` are already spent recapturing
+`ir` and giving `pc` its own extra advance (see the prefix mechanism's own
+doc comment above) — every prefixed instruction's real work starts one
+phase later than an unprefixed instruction's equivalent would. `LDI`'s own
+work: `PHASE4` reads `(HL)` into `ldiTemp` (an 8-bit holding register, the
+identical "a value must outlive its own bus's next user" reasoning
+`spLoTemp`/`spHiTemp` and `hlMemTemp` above already establish), `PHASE5`
+writes it to `(DE)`, `PHASE6` commits `HL++`/`DE++`/`BC--` and the three F
+bits. The register commit deliberately lands on its *own*, third phase
+rather than sharing `PHASE5` with the write: `HL`/`DE` still hold their
+*old* values through both RAM phases this way (their own pair adders
+compute `+1` fresh from those old values the whole time, simply because
+nothing has told them to commit yet), so the address mux never needs an
+`EX (SP),HL`-style "old value" holding register of its own for either
+one — the commit genuinely hasn't happened yet when either address is
+read, not a value frozen on purpose to look that way.
+
+**`BC`'s pair adder gets a second way to reach `-1`.** `DE`/`HL` need no
+change at all: each pair adder (see "x=00, z=3: INC rr/DEC rr" above)
+already computes `+1` whenever its own `DEC`-line (`dec.y[3]`/`dec.y[5]`)
+reads `0` — which it always does while `ir` holds `LDI`'s own recaptured
+`y=4` — so `DEADD`/`HLADD` are already computing the exact values this
+instruction wants, for free, before it does anything at all. `BC` is the
+one exception: `LDI` always wants `-1`, but `BCADD`'s own direction line
+was `dec.y[1]` alone (real `DEC BC`'s own `y`-value, which `LDI`'s `y=4`
+never matches) — widened to `OR(dec.y[1], isLdiNow)`, an addition, not a
+replacement, since the two conditions are mutually exclusive by
+construction and never need to be told apart, only recognized together.
+
+**`P/V` is a 16-way `OR` tree over `BCADD`'s own bits.** `BC-1 != 0`
+means "at least one of its 16 bits is 1", read directly off the same
+`BCADDLO`/`BCADDHI` labels `BC`'s own write-back layer reads — 4 levels
+of 2-input `OR` (this library has no wide-fan-in primitive), not a
+dedicated zero-detector built from scratch.
+
+**The write-back and F layers are one more of each, appended to the
+longest existing chain.** `wrapWithPairCommit(rBExt5, 'LDI_COMMIT_NOW',
+'BCADDHI', ...)` and its five siblings (`C`/`D`/`E`/`H`/`L`) sit on top of
+`EXX`/`EX DE,HL`/`EX (SP),HL`'s own final layers — the identical "layer
+another mux-ahead-of-`d` stage, don't touch the ones below" shape every
+earlier feature in this file already established, safe here for the same
+reason it always is: `dec.x` one-hot guarantees `LDI` and any of those
+three swap instructions never fire in the same cycle. `F`'s own per-bit
+chain gets an eighth layer, three bits only (`N`=1, `P/V`=2, `H`=4 — `gnd4`
+directly for `N`/`H`, since there's no "fresh value" to publish for a
+constant `0`, just `ldiPvBit` for `P/V`), the same "skip the bits this op
+doesn't touch" shape DAA's own bit 1 and the six-op rotate/flag group's
+own bits 2/6/7 already use.
+
+Verified with a dedicated test (`z80cpu-ldi.test.ts`) exercising two
+back-to-back `LDI`s specifically so `BC` genuinely reaches `0` on the
+second one — `P/V` correctly dropping to `0` exactly then, not just
+staying `1` from the first — before the full suite: `40/40` files,
+`179/179` tests, still green.
+
+**`LDD`, `LDIR`, `LDDR` — the rest of the column, on the same wiring.**
+Real `0xED 0xA8`/`0xB0`/`0xB8` decode to `y=5`/`y=6`/`y=7` at the same
+`x=10,z=0` — `isLddNow`, `isLdirNow`, `isLddrNow` are the obvious
+`AND(isEdActive, dec.y[n], dec.z[0])` siblings of `isLdiNow`, and
+`isLdBlockNow` is their four-way `OR` — the single gate every piece of
+shared wiring below actually reads, so `LDI`'s own decode stays exactly
+`isLdiNow` (it never needed to know its cousins exist) while everything
+generic upgrades to the family gate. Getting there honestly meant
+renaming every `LDI_*`/`ldi*` label and variable that had quietly
+outgrown "means only `LDI`" to `LDBLOCK_*`/`ldBlock*` — this project has
+never kept a label that stopped describing what it actually gates (see
+the `JR`/`DJNZ` doc comment above), and `LDI_COMMIT_NOW` gating an `LDD`'s
+commit would have been exactly that lie.
+
+*Direction.* `LDD`/`LDDR` walk `HL`/`DE` down instead of up — one more
+`OR` line, `directionIsDecNow = OR(isLddNow, isLddrNow)`, feeding
+`DEADD`/`HLADD`'s own direction inputs (`OR(dec.y[3], directionIsDecNow)`,
+`OR(dec.y[5], directionIsDecNow)`) the identical way `isLdBlockNow`
+already widens `BCADD`'s. `BC` never needs a direction line at all —
+every member of this family decrements it, always.
+
+*The repeat.* Real silicon spends `LDIR`/`LDDR` on extra clock cycles,
+looping the same micro-instruction until `BC` hits `0`. This project has
+no micro-cycles to loop, so it fakes the identical *effect* the way
+`DJNZ` already does: land `PC` back on its own opcode instead of letting
+it advance, for as long as there's more to do. `isRepeatVariantNow =
+OR(isLdirNow, isLddrNow)` and `ldBlockPvBit` (already computed for `P/V`
+— "at least one bit of `BC-1` is set", i.e. "not yet zero") gate a new
+`pcMinus2Adder` (a `buildAlu` computing `pc + (-2)` in two's complement,
+sitting right next to `jrOffsetAdder`) through one more mux layer at the
+very end of `pc.d`'s chain, downstream of `jpHlMux`: `LDBLOCK_REPEAT_NOW
+= AND(isRepeatVariantNow, ldBlockPvBit, LDBLOCK_COMMIT_NOW)` selects
+`pc-2` instead of the incremented `pc` the rest of the fetch/increment
+logic already computed. The opcode's own two bytes get re-fetched
+next cycle exactly as if the CPU had simply not moved — `IR` reloads the
+same `0xED`, `BC`/`HL`/`DE` are already past their commit, so the second
+pass transfers the next byte and, once `BC` reaches `0`, the same mux
+selects the ordinary advanced `PC` instead and the loop ends on its own.
+No dedicated "repeat" flip-flop, no extra state at all — the same
+"correct next `PC` value is just one more mux input" trick this file has
+used since its very first conditional jump.
+
+Verified with two more dedicated tests: `z80cpu-ldd.test.ts` (two
+back-to-back `LDD`s, proving the pointers retreat instead of advance —
+everything else already proven identical to `LDI` by shared wiring) and
+`z80cpu-ldir-lddr.test.ts` (`BC` seeded to `2` so each of `LDIR`/`LDDR`
+genuinely repeats once and then falls through — the first
+`runInstruction()` pass must show `PC` landed back on the `ED` opcode's
+own address, the second must show it advanced two bytes past it) —
+before the full suite: `42/42` files, `182/182` tests, still green.
+
+### x=10, z=1: CPI/CPD/CPIR/CPDR
+
+Real `0xED 0xA1`/`0xA9`/`0xB1`/`0xB9` — `LDI`'s own family's compare-and-
+advance twin, `A - (HL)` computed for flags only (`A` itself is never
+written), then `HL++`/`HL--`/`BC--`, `N` set, `H` a real half-borrow,
+`P/V<-(BC-1 != 0)`, `S`/`Z` off the comparison, `C` left exactly where it
+was — a real, documented Z80 quirk: a plain `CP` updates `C`, this family
+never does. `isCpiNow`/`isCpdNow`/`isCpirNow`/`isCpdrNow`
+(`AND(isEdActive, dec.y[4..7], dec.z[1])`) are the obvious siblings of
+`isLdiNow`'s own shape, colliding this time with real `AND C`/`XOR C`/
+`OR C`/`CP C` (`z=1`'s own register, `C`, instead of `z=0`'s `B`) —
+`isCpBlockNow` their four-way `OR`.
+
+**A dedicated subtractor, deliberately kept off the shared `x=10` ALU.**
+`LDI`'s own family never touched that ALU at all, so its `y=4..7`
+collision was harmless by construction — `groupActive` (hence
+`aluGroupNow`, hence that ALU's own write-enables) already reads `0`
+throughout, gated off by `isEdActive` the same way every prefixed
+opcode already is. This family genuinely needs a subtract, though, and
+each of its four variants collides with a *different* real op (`AND`/
+`XOR`/`OR`/`CP`) — masking four different wrong op-selects, a wrong
+`A`-write-enable, and `AND`'s own real "forces `H=1`" hardware quirk,
+all read straight off the very `y` bits this family recaptures, would
+cost more gates and more risk than the alternative actually taken: a
+permanently-wired subtractor of its own (`op0=op1=0`, `cin=1`, `b`
+inverted per bit — the identical two's-complement recipe the shared
+ALU's own `SUB` path uses), the same "isolated adder, no shared-decode
+collision to fight" shape `pcMinus2Adder` and `daaAdder`/`gt99Cmp`
+elsewhere in this file already use for their own single-purpose
+arithmetic. `A` is never written by this family at all, so the shared
+ALU's own `aWe` never needs touching either — there simply is no
+write-back path for this adder's result, only flags.
+
+**Two phases, not three.** `PHASE4` reads `(HL)` into a holding register
+(`cpBlockTemp`, feeding the dedicated adder directly — no bus-publish
+step, unlike `ldBlockTemp`, since there's no second RAM phase for a
+published value to survive into); `PHASE5` both computes and commits —
+`HL+-1`/`BC--`/flags, all landing on the same edge real Z80's own
+two-machine-cycle timing for this family already matches, one shorter
+than `LDI`'s three. With nothing driving the bus back out from this
+family's own commit phase, the adjacent-phase bus-fight guard
+`LDBLOCK_WRITE_NOW` needs has nothing to guard here.
+
+**Flags, five bits fresh, one held, two skipped.** `S`(`cpBlockAdder.out[7]`),
+`Z` (an OR-tree over the adder's own 8 output bits, `NOT`ed — the
+identical shape the shared ALU's own `zChain`/`zBit` already establish,
+just a private copy off a private adder), and `H` (`NOT` of the adder's
+own `carries[3]`, half-borrow at the nibble boundary, the same idiom the
+shared ALU's `hRaw` uses collapsed to a plain `NOT` since this adder
+never computes anything but a subtract) are all fresh every time; `N` is
+a hardwired `1`; `P/V` reads `blockPvBit` (renamed from `ldBlockPvBit` —
+see below) — the identical `BC-1 != 0` bit the LD-block family already
+publishes, since both families decrement `BC` the same way. `C` gets no
+layer at all — real Z80 leaves it alone for this whole family, so
+whatever the layer below already carries (ultimately `f.q[0]`, a genuine
+hold) falls straight through, unchanged. `X`/`Y` skip it too, the
+identical "not modeled" stance this project already takes for `CP`'s own
+real hardware quirk of sourcing them from the operand rather than the
+discarded result.
+
+**`blockPvBit`, not `ldBlockPvBit`.** The `BC-1 != 0` bit the LD-block
+family already built (a 16-way `OR` tree over `BCADD`'s own published
+bits) turns out to be exactly what this family's own `P/V` needs too —
+both widen `BCADD`'s own direction line to always decrement, so the same
+adder computes the same answer for either family, one-hot by
+construction (`z=0` vs `z=1`, never both at once). Reusing it under its
+old, `LD`-specific name would have been exactly the kind of label that
+quietly stopped describing what it actually gates this project has never
+tolerated (see the `JR`/`DJNZ` doc comment) — renamed to
+`blockPvBit`/`BLOCK_PV_NOW` the moment a second family started reading
+it.
+
+**The repeat condition genuinely differs from `LDIR`/`LDDR`'s own.** Real
+Z80 stops `CPIR`/`CPDR` the moment `BC` reaches `0` *or* a match is
+found — `LDIR`/`LDDR` only ever watches `BC`. `cpZChain` (the same
+OR-tree feeding `Z`, tapped *before* its own final `NOT`) is exactly
+"the result is nonzero," i.e. "not found" — tied to its own anchor label
+(`CPBLOCK_NOT_FOUND_NOW`) so the repeat gate, built earlier in the file
+alongside `LDIR`/`LDDR`'s own, can read it forward the same way it
+already reads `BLOCK_PV_NOW`. `CPBLOCK_REPEAT_NOW =
+AND(cpRepeatVariantNow, BLOCK_PV_NOW, CPBLOCK_NOT_FOUND_NOW,
+CPBLOCK_COMMIT_NOW)` — one more term than `LDBLOCK_REPEAT_NOW`, and a
+second, independent final layer on `pc.d`'s own mux chain, right after
+`LDIR`/`LDDR`'s own, reusing the identical `pcMinus2Adder`.
+
+Verified with three dedicated tests: `z80cpu-cpi.test.ts` and
+`z80cpu-cpd.test.ts` (each two back-to-back comparisons, deliberately
+unlike each other — a genuine nibble-boundary borrow against a *higher*
+byte first, proving `H` isn't just coincidentally `0` on the trivial
+case, then a match against an *equal* byte with `BC` also reaching `0`
+on that exact pass, proving `P/V` still tracks `BC` and not the
+comparison's own overflow) and `z80cpu-cpir-cpdr.test.ts` (three cases:
+`CPIR` finding its match on the second byte after one genuine repeat,
+`CPIR` exhausting `BC` with neither byte ever matching — the *other* way
+to stop — and `CPDR` walking downward to its own match) — before the
+full suite: `45/45` files, `187/187` tests, still green.
+
+### x=10, z=2: INI/IND/INIR/INDR
+
+Real `0xED 0xA2`/`0xAA`/`0xB2`/`0xBA` — a third `ED`-table column, real
+Z80's `(HL)<-IN(C)`: a byte read from this project's own invented I/O
+port (see "x=11: IN A,(n) / OUT (n),A" below), addressed by `C` this
+time (not the immediate byte `n` that opcode reads), written into
+`(HL)`, then `HL+-1`, `B--` — never the `BC` pair, `C` keeps addressing
+the same port every time `INIR`/`INDR` repeats. Collides with real
+unprefixed `AND D`/`XOR D`/`OR D`/`CP D` (`z=2` — `D`, not `B`/`C` this
+time), the identical "recaptured byte reads as a real opcode" shape the
+other two `ED`-table families already establish. Real Z80 documents
+exactly two flag bits for this whole family — `Z` (`B` reaching `0`) and
+`N` (the transferred byte's own bit 7) — everything else (`S`/`H`/`P/V`/
+`C`) is famously undocumented territory, only reverse-engineered decades
+after the official manual shipped; left unmodeled here, the same
+documented-simplification stance `LDI`'s own `X`/`Y` and `CPI`'s own
+`X`/`Y` already establish, not a fresh one.
+
+**A dedicated `B-1` adder, not the shared `BCADD` pair adder.** Real
+`INI` only ever decrements `B` itself — `C` never changes, so the
+16-bit `BCADD` pair adder this file already built for `DEC BC` (and
+widened for the LD-block and CP-block families) is the wrong tool: it
+computes a *pair's* `-1`, and `C`'s own half of that would need masking
+right back out again. A standalone, permanently-wired `-1` (`op0=op1=0`,
+`cin=0`, `b` fanned to all-`1`s — the identical "add `0xFF`, no carry-in"
+convention `INC r`/`DEC r`'s own shared adder already uses for `DEC`)
+sidesteps that entirely, the same "isolated adder, no shared-decode
+collision to fight" shape `cpBlockAdder` above and `pcMinus2Adder`
+elsewhere in this file already use.
+
+**Two phases plumb the port through the same bus RAM's write already
+needs, one phase apart.** `PHASE4` publishes `C` onto the bus — this
+composite's own `ioPortAddr` is a live tap of exactly that bus, so this
+*is* the port address becoming visible, the same moment `ioRead` widens
+to strobe (a second OR term on `IN A,(n)`'s own `ioRead`, not a
+replacement — a real device wired to that pin needs to know the CPU is
+reading its port regardless of which opcode triggered it). RAM's own
+`oe` is deliberately never widened for this phase — nothing needs RAM to
+drive the bus here, and letting it try would fight `C`'s own tri-buf
+bank for the same wire. `PHASE5` publishes `ioPortDataIn` (the external
+device's own raw response — already stable the instant `ioRead` strobed,
+no holding register needed at all, unlike `ldBlockTemp`'s own value:
+this one never has to survive a phase it isn't itself driven on) back
+onto the bus for RAM's own write, address forced to `HL` by one more
+address-mux layer, the identical shape every earlier family's own write
+address override already uses. `PHASE6` commits `HL+-1`/`B--`/flags.
+
+**The repeat condition is the simplest of this file's three.** Real Z80
+stops `INIR`/`INDR` purely when `B` reaches `0` — no "found it" concept
+`CPIR`/`CPDR` also has to watch for — so `IOBLOCK_REPEAT_NOW =
+AND(ioRepeatVariantNow, IOB_NONZERO_NOW, INBLOCK_COMMIT_NOW)`, two terms
+instead of `CPBLOCK_REPEAT_NOW`'s three, gating a third and final layer
+on `pc.d`'s own mux chain, right after `LDIR`/`LDDR`'s and `CPIR`/
+`CPDR`'s own, reusing the identical `pcMinus2Adder` a third time.
+
+Verified with three dedicated tests: `z80cpu-ini.test.ts` and
+`z80cpu-ind.test.ts` (each two back-to-back transfers against a fixed
+external device — `0xAB`, bit 7 deliberately set so `N` reading `1` is a
+genuine assertion, not a coincidental default — so `B` genuinely reaches
+`0` on the second, `Z` correctly rising to `1` exactly then) and
+`z80cpu-inir-indr.test.ts` (`B` seeded to `2` so each
+of `INIR`/`INDR` genuinely repeats once and then falls through) — before
+the full suite: `48/48` files, `191/191` tests, still green.
+
+Found live writing that last test: a byte-order mixup in the test itself
+(`LD BC,0x0002` written as `[0x01, 0x02, 0x00]`, which is actually
+`LD BC,0x0200` — Z80's own `nn` operands are low byte first, so the
+*first* immediate byte becomes `C`, not `B`) produced `B` reading `0xFF`
+after a single decrement instead of `1` — a real bug, but in the test's
+own setup, not the wiring above; every register besides `B`/`C` had
+already been exercised by dozens of earlier tests using the identical
+convention correctly.
+
+### x=10, z=3: OUTI/OUTD/OTIR/OTDR
+
+Real `0xED 0xA3`/`0xAB`/`0xB3`/`0xBB` — the fourth and final `ED`-table
+column this retrofit fills in, the exact mirror image of `INI`'s own
+family: `OUT(C)<-(HL)`, a byte read from `(HL)` this time rather than
+written to it, sent to this project's own invented I/O port addressed
+by `C`, then `HL+-1`, `B--` (never `BC`, the identical reasoning `INI`'s
+own family already established). Collides with real unprefixed `AND E`/
+`XOR E`/`OR E`/`CP E` (`z=3` — `E`, not `D`/`B`/`C` this time). The same
+two documented flag bits (`N` from the transferred byte's own bit 7,
+`Z` from `B` reaching `0`) apply here too — `Z` off the identical shared
+`IOB_NONZERO_NOW`/`IOB_Z_NOW` bits `INI`'s own family already built
+(decrementing `B` is the same operation regardless of transfer
+direction, so nothing new needed there), `N` off `outBlockTemp`'s own
+held byte instead of `ioPortDataIn` (this family never reads that pin
+at all).
+
+**Two shared resources, each widened by exactly one term.** `C`'s own
+bus-driver bank — previously enabled by `INI`'s own `INBLOCK_READ_NOW`
+alone — widens to `OR(INBLOCK_READ_NOW, OUTBLOCK_WRITE_NOW)`: the same
+port-address role, reached one phase later by this family (`PHASE5`
+instead of `PHASE4`, since `PHASE4` here is spent reading `(HL)`
+instead), mutually exclusive by `dec.z` the same way every other shared
+resource in this file already relies on. `ioPortDataOut` — previously a
+bare tap of `AOLD` (`OUT (n),A`'s own source, see "x=11: IN A,(n) / OUT
+(n),A" below) — gets a mux layer ahead of it, picking `outBlockTemp`'s
+own held byte instead whenever `OUTBLOCK_WRITE_NOW` fires: the same
+"mux ahead of the existing source" shape every other competing writer
+in this file already uses, `OUT (n),A` itself never asserting that
+select line so its own behavior is untouched. `ioWrite` widens by the
+identical single OR term `ioRead` already needed for `INI`'s own family.
+
+**The read/write phase order is the true mirror of `INI`'s.** `INI`
+reads its port address (`C`) at `PHASE4` and writes RAM at `PHASE5`;
+`OUTI` reads RAM (`PHASE4`, into `outBlockTemp` — a holding register
+`INI`'s own family never needed, since nothing here has to survive past
+the phase it's read on the way `INI`'s port response does) and writes
+its port address plus the held byte at `PHASE5`. RAM's own `oe` widens
+for `OUTI`'s own `PHASE4` (the mirror image of `INI`'s family never
+needing that widening at all, since `INI` never reads RAM), and RAM's
+own address mux gets one more override layer for that same phase.
+
+**The repeat condition is, once again, shared.** `OTIR`/`OTDR` stop
+purely when `B` reaches `0`, the identical single-condition shape
+`INIR`/`INDR` already establish — a fresh `outRepeatVariantNow`/
+`OUTBLOCK_REPEAT_NOW` pair, gated by this family's own `y`/`z` decode,
+but reading the exact same shared `IOB_NONZERO_NOW` bit, and landing on
+a fourth and final layer of `pc.d`'s own mux chain, reusing
+`pcMinus2Adder` a fourth time.
+
+A small, honest correction made along the way: the two labels this
+family's own repeat gate needed to read (`B`'s own nonzero bit aside)
+had been named `IOBLOCK_REPEAT_VARIANT_NOW`/`IOBLOCK_REPEAT_NOW`/
+`IOBLOCK_DEC_DIR_NOW` — generic-sounding, but actually built
+specifically for `INI`'s own family alone, the identical trap
+`LDBLOCK_PV_NOW` fell into before `CPI`'s own family needed the same
+bit (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above). Renamed to
+`INBLOCK_REPEAT_VARIANT_NOW`/`INBLOCK_REPEAT_NOW`/`INBLOCK_DEC_DIR_NOW`
+— matching the already-correctly-`IN`-prefixed phase labels right next
+to them — before this family's own genuinely distinct
+`OUTBLOCK_REPEAT_VARIANT_NOW`/`OUTBLOCK_REPEAT_NOW`/
+`OUTBLOCK_DEC_DIR_NOW` were added alongside them, rather than let a
+second misnomer accumulate on top of the first.
+
+Verified with three dedicated tests: `z80cpu-outi.test.ts` and
+`z80cpu-outd.test.ts` (each two back-to-back transfers, mirroring
+`z80cpu-in-out.test.ts`'s own mid-instruction-checkpoint technique for
+`ioWrite`/`ioPortAddr`/`ioPortDataOut` — genuinely necessary here too,
+since none of the three persist past the phase they're valid on — with
+two *different* transferred bytes, `0xAB` then `0x11`, so `N` reading
+correctly on both proves it tracks *this* transfer, not a stale leftover
+from the first) and `z80cpu-otir-otdr.test.ts` (`B` seeded to `2`,
+the identical repeat-then-fall-through shape `z80cpu-inir-indr.test.ts`
+already established) — before the full suite: `51/51` files, `195/195`
+tests, still green.
+
+This closes out the block I/O half of `ED`'s own table (`z=0` through
+`z=3`, all four now real) — the same milestone the CB/ED/DD/FD prefix
+mechanism's own doc comment named as the natural stopping point for
+this retrofit's own block-instruction work.
+
+### A decode gap found across all sixteen block-instruction gates — and fixed
+
+Found live while designing `NEG`'s own decode (see "x=01, z=4: NEG"
+below): every one of the sixteen block-instruction gates above
+(`LDI`/`LDD`/`LDIR`/`LDDR`/`CPI`/`CPD`/`CPIR`/`CPDR`/`INI`/`IND`/
+`INIR`/`INDR`/`OUTI`/`OUTD`/`OTIR`/`OTDR`) read only `isEdActive` plus
+their own `y`/`z` bits — never `dec.x`. `isEdActive` alone says just
+"the recaptured byte follows a real `0xED`"; it says nothing about that
+byte's own `x` field, and `y`/`z` are independent of `x` by
+construction (three separate bit groups of the same byte). Real `LDI`
+is `x=10,y=4,z=0` — but `isLdiNow`'s own gate, reading only `y=4`/`z=0`,
+would have *also* fired for a genuinely invalid `ED`-prefixed byte like
+`0xED 0x20` (`x=00,y=4,z=0` — the unprefixed `JR NZ,e` encoding,
+reinterpreted), executing `LDI` instead of correctly staying inert.
+Real Z80 hardware documents this precisely: any `ED`-prefixed byte
+outside the real, documented rows acts as two `NOP`s — this simulator
+was silently violating that contract for the entire `0x00`-`0x3F` and
+`0xC0`-`0xFF` ranges of the recaptured byte, undetected because no
+existing test ever fed an invalid byte after `0xED`.
+
+Fixed by building two shared qualifier gates right where `isEdActive`
+itself is defined — `isEdX2Active = AND(isEdActive, dec.x[2])` (`x=10`,
+what the sixteen block gates actually needed all along) and
+`isEdX1Active = AND(isEdActive, dec.x[1])` (`x=01`, `NEG`'s own
+family's requirement, designed correctly from the start this time) —
+and repointing all sixteen gates from bare `isEdActive` to
+`isEdX2Active`. `dec.x[2]` reads `1` for every real block-instruction
+byte (`0xA0`-`0xBB`), so this changes nothing observable for any opcode
+this project actually implements — confirmed by re-running all twelve
+block-family test files (all sixteen instructions) plus `NEG`'s own
+test together right after the fix, all still green, before the next
+full-suite run below. This corrects behavior only for bytes no test
+exercises, by definition — invalid opcodes this project never claimed
+to execute correctly, now genuinely inert instead of accidentally
+decoding as a real one.
+
+### x=01, z=4: NEG
+
+Real `0xED 0x44` — this retrofit's first non-block `ED`-table opcode:
+`A<-0-A`, real two's-complement negation. Unlike every block family
+above, nothing here is left stale or unmodeled — real Z80 documents
+every flag bit for this instruction completely, so all eight get a
+fresh value. Collides with real unprefixed `LD B,H` (`x=01` is the
+entire `LD r,r'` table; `y=0` picks `B` as the destination, `z=4` picks
+`H` as the source) — but unlike every earlier collision in this file,
+`y` is deliberately *not* read at all: real hardware executes `NEG` for
+*every* value of `y` in this column (`0xED 0x44`, `0x4C`, `0x54`, ...
+all the way to `0x7C`), a real, well-documented "undocumented
+duplicate" quirk, not a gap. `isNegNow` reads `isEdX1Active`/`dec.z[4]`
+only, deliberately widening past `dec.y[0]` alone.
+
+**A dedicated `0-A` adder**, the identical "isolated adder, no
+shared-decode collision to fight" shape `cpBlockAdder`/`ioBAdder` above
+already use — needed here because the shared `x=10` ALU's own `a` input
+is hardwired to `A` itself (see "x=10: ADC/SBC" above) and can never be
+forced to a constant `0`. `0-A` in two's complement is `~A+1`: `a`
+fanned to `gnd`, `b` inverted per bit, `cin` forced to `1`, the
+identical recipe the shared ALU's own `SUB` path already uses, just
+with a genuine `0` for the left operand instead of a register. `S`/`Z`
+read straight off this adder's own output the usual way; `H` is the
+identical `NOT(carries[3])` half-borrow idiom `cpBlockAdder`'s own
+`cpHBit` already establishes; `P/V` is the identical `XOR(carries[6],
+carries[7])` overflow idiom the shared ALU's own `pvOverflow` already
+establishes — real Z80 sets it for `NEG` on exactly one input, `0x80`,
+the one byte whose negation doesn't fit back into a signed byte; `N` is
+a hardwired `1`; `C` is a fresh 8-way OR-tree over `A`'s own *current*
+bits (nonzero `A` always borrows on negation, `A=0` never does) — the
+same "any bit set" idiom this file's own nonzero checks already use
+elsewhere, just over `A` instead of `BC` or `B`. `X`/`Y` mirror the
+result's own bits 3/5, the same documented, not-unmodeled treatment the
+`x=10` ALU group's own `X`/`Y` already get.
+
+`A`'s own write mux and `F`'s own per-bit chain each get one more
+layer, gated by `NEG_NOW` — a single `PHASE4` commit (the first
+available phase for any `ED`-prefixed opcode, `PHASE2`/`PHASE3` already
+spent recapturing `ir` and advancing `pc`), no holding register or
+multi-phase sequencing needed at all, since every part of this
+instruction is combinational off `A`'s own already-stable value.
+
+Verified with a dedicated test (`z80cpu-neg.test.ts`) exercising three
+deliberately different cases in sequence: `0x01` (the ordinary path — a
+real half-borrow, `S`/`C` set, `P/V` clear), `0x80` (the one value
+whose negation doesn't fit back into a signed byte — `A` unchanged,
+`P/V` set, proving overflow isn't just copied blindly from the
+arithmetic group's own formula), and `0x00` (no borrow at all — `Z`
+set, `C` clear) — before the full suite: `52/52` files, `196/196`
+tests, still green.
+
+### x=01, z=2: ADC HL,rr/SBC HL,rr
+
+Real `0xED 0x4A`/`0x5A`/`0x6A`/`0x7A` (`ADC HL,BC`/`DE`/`HL`/`SP`) and
+`0xED 0x42`/`0x52`/`0x62`/`0x72` (the same four pairs, `SBC`) — `y`'s
+own parity picks the op (odd `ADC`, even `SBC`), `y>>1` picks the pair.
+Collides with real unprefixed `LD y,D` for every destination `y` picks
+(`x=01` is the entire `LD r,r'` table, `z=2` picks `D` as the source).
+
+**Reuses `ADD HL,rr`'s own shared 16-bit adder rather than building a
+second one.** `isAddHlYValid` (built for plain `ADD HL,rr`, "is `y`
+odd") turns out to be exactly `SBC`'s own complement, so `isAdcHlNow`/
+`isSbcHlNow` are built from it directly, no fresh parity check needed.
+The pair-select is genuinely different, though: `ADD HL,rr`'s own `y`
+is always odd, one exact value per pair; `ADC`/`SBC HL,rr`'s own pair
+comes from `y>>1`, two `y` values per pair — so each of the four gets
+its own fresh 2-way `y`-fold (`isAdcSbcHlBcNow`, etc.), OR'd into
+`addHlPairs`'s own per-pair `y` line rather than replacing it, the
+identical "widen, don't replace" shape every earlier register-select
+widening in this file already uses.
+
+**`cin` and the operand invert are the identical `ADC`/`SBC` recipe
+"x=10: ADC/SBC" above already establishes**, just applied to this
+16-bit adder instead of the 8-bit one: `0` for plain `ADD HL,rr`, the
+old `C` for `ADC HL,rr`, the old `C` inverted for `SBC HL,rr`; `b`
+inverted per bit only for `SBC`. Real `ADD HL,rr` itself is untouched —
+its own `cin`/`b` paths simply see both `isAdcHlNow` and `isSbcHlNow`
+read `0` and behave exactly as before.
+
+**Every flag bit is real here, unlike plain `ADD HL,rr`'s own C-only
+treatment.** `S`/`Z` read straight off the same 16-bit result; `H` is
+the identical half-carry/half-borrow idiom this file's 8-bit groups
+already use, just at the 16-bit nibble boundary (`carries[11]`, not
+`carries[3]`); `P/V` is the identical `XOR(carries[14], carries[15])`
+overflow idiom, at the 16-bit sign bit instead of the 8-bit one; `N` is
+`isSbcHlNow` directly; `C` is `XOR(cout, isSbcHlNow)`, the same
+borrow-inverted convention `cBit` already establishes. `X`/`Y` mirror
+the high byte's own bits 3/5 (bits 11/13 of the full 16-bit result) —
+real, documented behavior for this instruction, not unmodeled, the same
+stance `NEG`'s own `X`/`Y` just above already take.
+
+Verified with five dedicated tests: an ordinary `ADC HL,BC` with no
+flags set at all, a real signed overflow on `ADC` (`0x7FFF+1`), the
+identical overflow the other way on `SBC` (`0x8000-1`), a real borrow
+with a real starting carry (`0-0-1`, via a genuine `SCF` first — `F` has
+no external seed hook), and `ADC HL,HL` with a starting carry — the one
+pair whose own low/high halves are the identical registers being read
+twice at once, genuinely wrapping past `0xFFFF` back to `1` with a real
+carry out — before the full suite: `53/53` files, `201/201` tests,
+still green.
+
+### x=01, z=7, y=4/y=5: RRD/RLD
+
+Real `0xED 0x67`/`0x6F` — a 12-bit BCD nibble rotate spanning `A`'s own
+low nibble and both of `(HL)`'s, real Z80's own way to shift a packed-BCD
+digit string one position without touching every byte's own high nibble.
+Collides with real unprefixed `LD y,A` (`x=01`, `z=7` picks `A` as the
+source) for every destination `y` picks.
+
+**Three phases**, the identical shape `LDI`'s own family uses:
+`PHASE4` reads `(HL)` into a holding register, `PHASE5` writes the
+freshly rotated byte back to that *same* address (unlike `LDI`'s own
+family, read and write share one address here, so both phases reuse a
+single address-mux layer rather than needing two), `PHASE6` commits
+`A`'s own low nibble and every flag bit but `C`. The rotate itself is a
+per-nibble-position mux with `isRldNow` as the select — the two are
+mutually exclusive by construction (`y=4` vs `y=5`), and `RRD`'s own
+wiring is exactly "not `RLD`'s."
+
+**`A`'s high nibble needs an explicit hold layer.** `A`'s own `we`
+commits the whole byte in one edge, so leaving no layer at all for
+`i>=4` doesn't hold anything by itself — it falls through to whatever
+the shared ALU's own live, unrelated computation is carrying at the
+bottom of the write-mux chain. Found live chasing this instruction's
+own repro; every earlier feature that touched a subset of `A`'s bits
+happened to touch *all eight*, so this exact gap never showed itself
+before. Flags: `S`/`Z`/`P` (parity, not overflow) off the *new* `A`,
+`H`/`N` forced to `0`, `C` untouched, `X`/`Y` mirroring the new result's
+own bits 3/5.
+
+Verified with three dedicated tests (`z80cpu-rrd-rld.test.ts`): `RRD`
+and `RLD` on `A=0x3A`/`(HL)=0x12` (three genuinely distinct nibbles, so
+a mixed-up rotate direction lands on a wrong digit in a specific place),
+plus `RRD` on all-zeros proving `Z`/`P` — before the full suite.
+
+### x=01, z=3: LD (nn),dd / LD dd,(nn)
+
+Real `0xED 0x43`/`0x53`/`0x63`/`0x73` (`LD (nn),BC`/`DE`/`HL`/`SP`) and
+`0x4B`/`0x5B`/`0x6B`/`0x7B` (the load direction). Collides with real
+unprefixed `LD y,E` (`z=3` picks `E` as the source). `y` even = store,
+`y` odd = load; `y>>1` picks the pair.
+
+**Phase budget after the ED prefix is tight.** Unprefixed `LD (nn),HL`
+needs six phases (read-low/adv/read-high/adv/write-low/write-high), and
+only `PHASE4`-`PHASE7` remain once the prefix has consumed `PHASE0`-`3`.
+Solved by collapsing the two immediate-byte advances into a `PC+1`
+address override on the high-byte read — no separate advance between the
+two reads:
+
+- `PHASE4`: read nn low at `PC` → `nnAddr`
+- `PHASE5`: read nn high at `PC+1` → `nnAddr`; advance `PC` once
+- `PHASE6`: advance `PC` past the instruction; data low (store or load)
+- `PHASE7`: data high
+
+`pcPlusOne` is a light `addrBits`-wide XOR/AND ripple (+1), published onto
+the address-mux chain as one more override layer after RRD/RLD's.
+`nnAddr`'s own hold-vs-fresh muxes widen to accept either the unprefixed
+or the ED immediate-read strobes. Register write-back reuses the existing
+bus-capture `ldWe` OR-chain (one more term per `B`/`C`/`D`/`E`/`H`/`L`);
+`SP` gets another hold-vs-fresh layer stacked on `LD SP,nn`/`LD SP,HL`.
+
+**`ramOe`/`ramWe` path depth matters.** The first wiring of EDNN's four
+read strobes (and two write strobes) as sequential `OR`s *after*
+`RRDRLD_*_NOW` delayed RRD's own OE/WE by two or more NOR+NOT pairs —
+enough that the PHASE4 bus fight on RRD's read window cascaded into
+VCC/GND contention and froze the ring counter at `PHASE4` forever.
+Fix: side-fold the EDNN terms into their own OR-tree, merge once *before*
+RRD, and keep RRD as the final term so its path depth matches the
+pre-EDNN shape. Same lesson as the existing `groupActive`-gated FETCH
+OE comment, applied to OR-chain length rather than phase-bit races.
+
+Verified with one dedicated round-trip test (`z80cpu-ld-nn-dd.test.ts`)
+covering all four pairs store-then-reload through distinct absolute
+addresses, plus the RRD/RLD suite still green after the OE/WE fold —
+before the full suite.
+
+### x=01, z=0/z=1: IN r,(C) / OUT (C),r
+
+Real `0xED 0x40`/`0x48`/…/`0x78` (`IN B,(C)` … `IN A,(C)`) and
+`0x41`/`0x49`/…/`0x79` (`OUT (C),B` … `OUT (C),A`). Collides with
+unprefixed `LD r,B`/`LD r,C` (`z=0`/`z=1`). `y` picks the register; `y=6`
+is real Z80's undocumented `IN 0,(C)` / `OUT 0,(C)` — flags + strobe
+still fire, but IN writes no register and OUT drives a literal `0`.
+
+**Single `PHASE4` after the ED prefix** (same budget `NEG` uses): `C`
+onto the bus for `ioPortAddr`, `ioRead`/`ioWrite`, and — for IN — commit
+the external `ioPortDataIn` byte into the destination (and `F`). Address
+and data ride different nets (`BUS` vs raw `ioPortDataIn` /
+`ioPortDataOut`), the identical dual-path shape `IN A,(n)` already
+established at `PHASE2`.
+
+IN flags: every bit but `C`, off the port byte — `S`/`Z`/`P`(parity)/
+`H=0`/`N=0`/`X`/`Y` mirroring bits 3/5 — same recipe RRD/RLD uses off
+the new `A`. Register write-back reuses the B–L bus-capture `ldWe` chain
+(one more term + a mux that picks `ioPortDataIn` over `BUS` when that
+term fires); `A` gets another layer on its write-mux stack. OUT extends
+`ioPortDataOut`'s existing OUTI mux with one more layer gated by
+`OUTRC_NOW`, fed by per-`y` tribufs (or GND for `y=6`). `C`-onto-bus
+side-folds `INRC_NOW|OUTRC_NOW` before merging with INI/OUTI, so the
+enable chain does not grow two sequential stages.
+
+Verified with one dedicated mid-PHASE4 test
+(`z80cpu-in-rc-out-rc.test.ts`): `IN A,(C)` / `OUT (C),B` / `OUT (C),0` /
+`IN 0,(C)` / `IN B,(C)` against a fixed `0x99` device reply — before the
+full suite.
+
+### x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R
+
+Real `0xED 0x47`/`0x4F`/`0x57`/`0x5F`. Collides with unprefixed `LD y,A`
+(`z=7`) the same way `RRD`/`RLD` (y=4/5) does. Two new seed-path
+registers (`I`, `R`) sit alongside `A'`/`F'`. Unlike the shadow
+registers they have **no external seed path** — their write-enable seed
+pin is tied to GND so pre-existing tests cannot leave it floating;
+software writes them only via `LD I,A` / `LD R,A`.
+
+**Single `PHASE4` after the ED prefix:** `LD I,A`/`LD R,A` commit `A`
+into `I`/`R` via `wrapWithPairCommit` (no flags). `LD A,I`/`LD A,R`
+commit into `A` and refresh every flag bit but `C` — `S`/`Z`/`X`/`Y` off
+the transferred byte, `H`/`N` forced 0, **`P/V` forced 0**. Real Z80
+copies `IFF2` into `P/V` here; this project still leaves that bit forced
+0 (Known Simplifications) even though `IFF2` now exists for thin IM1 IRQ.
+`R` is also not auto-incremented on FETCH/`M1` — plain software-visible
+storage until a refresh model exists.
+
+Verified with one dedicated round-trip test (`z80cpu-ld-i-r.test.ts`) —
+before the full suite.
+
+### Thin IM1 IRQ
+
+Maskable interrupt support, deliberately thin: only **IM 1**, no INTACK
+bus cycle, no IM0/IM2, no NMI/`RETN`.
+
+**State.** `IFF1`/`IFF2` and an `IM1` latch (q-only, like `I`/`R` — no
+external seed; `CPU_RESET` clears them to 0). External INT is an internal
+`Input` defaulting to 0 (`cpu.intDrive.value` raises it).
+
+**`EI`/`DI`** (`0xFB`/`0xF3`, `x=11 z=3 y=7/6`): `PHASE2` sets/clears both
+IFFs. No one-instruction EI delay (Known Simplifications).
+
+**`IM 1`** (`ED 0x56`): `PHASE4` sets the mode latch. Other `IM` encodings
+stay inert.
+
+**Accept.** At `PHASE0`, if `IFF1 ∧ IM1 ∧ INT`, force `IR←0xFF` (RST 38h)
+via a mux ahead of `ir.d` (the shared `BUS*` net stays on the RAM side),
+latch `intServing`, clear both IFFs, and suppress `PHASE1`'s PC advance so
+the existing RST push/jump path pushes the interrupted instruction's own
+PC and jumps to `0x38`.
+
+**`RETI`** (`ED 0x4D`): same stack-pop/PC-capture as `RET` (widened
+`readNow` / `retMux`), plus `IFF1←IFF2` on `PHASE4`.
+
+Verified with `z80cpu-irq-im1.test.ts`. `DD`/`FD` remain next.
+
+### CB x=01: BIT y,r / BIT y,(HL)
+
+CB-table `BIT` column. Real `0xCB 0x40`–`0xCB 0x7F`. Prefix mechanism
+already spent `PHASE2`/`PHASE3` recapturing `ir` and advancing `pc`.
+`isCbActive` is labeled (alongside `isEdActive`);
+`isCbX1Active = AND(isCbActive, dec.x[1])` gates this column.
+
+**Register form (`z≠6`):** flags-only on a single `PHASE4`.
+
+**(HL) form (`z=6`):** `PHASE4` reads `(HL)` into the shared `hlMemTemp`
+(OR'd with `INC`/`DEC (HL)`'s own read — mutually exclusive by prefix);
+`PHASE5` commits flags. `ram.oe` and `addr=HL` side-fold the read
+strobes so the OE chain does not grow sequential stages.
+
+**Flags (both forms):** `Z` ← tested bit is 0; `H=1`; `N=0`; `C` held;
+`P/V` mirrors `Z`; `S` only when testing bit 7 and it is set; `X`/`Y`
+mirror the source byte's bits 3/5. For `(HL)`, real Z80 takes `X`/`Y`
+from internal `WZ` — this project uses the memory byte instead
+(documented simplification). Neither form writes a register or RAM.
+
+Verified with `z80cpu-bit.test.ts` — before the full suite.
+
+### CB x=10/x=11: RES y,r / SET y,r
+
+Clear or set one bit. Real `0xCB 0x80`–`0xCB 0xFF`. No flags.
+`isCbX2Active`/`isCbX3Active` gate RES/SET; shared result byte
+`SETRESRESULT{i}` forces 1 (SET) or 0 (RES) on `y`'s bit and passes the
+other bits through from the z-selected register or `HLMEM`.
+
+**Register form (`z≠6`):** single `PHASE4` commit into B/C/D/E/H/L/A.
+
+**(HL) form (`z=6`):** `PHASE4` read into shared `hlMemTemp` (side-folded
+with `BIT`/`INC`/`DEC (HL)` reads); `PHASE5` writes `SETRESRESULT` back
+(side-folded with `INC`/`DEC (HL)` writes on `ram.we`/`addr=HL`).
+
+Side-fold discipline: when extending a two-input OR that already held two
+label terms, keep both on that first OR's `a`/`b` and add a *second* OR
+for the new term. Leaving an OR input dangling floats it high in this
+solver — found live while adding SET/RES: `addr` stuck on `HL` so every
+`LD r,n` captured `RAM[0]` (the opcode) instead of the immediate.
+
+Verified with `z80cpu-set-res.test.ts` — before the full suite.
+
+### CB x=00: RLC/RRC/RL/RR/SLA/SRA/SLL/SRL
+
+CB rotate/shift column. Real `0xCB 0x00`–`0xCB 0x3F`. Unlike unprefixed
+`RLCA`/`RRCA`/`RLA`/`RRA` (which hold `S`/`Z`/`P`), these refresh
+`S`/`Z`/`H=0`/`P/V`(parity)/`N=0`/`C`/`X`/`Y` from the **result**.
+`SLL`/`SL1` (`y=6`) is the undocumented shift that forces new bit0 to 1.
+
+**Register form (`z≠6`):** `PHASE4` commit into B/C/D/E/H/L/A.
+
+**(HL) form (`z=6`):** `PHASE4` read into dedicated `cbRotHold` (not
+shared `hlMemTemp` — see below); `PHASE5` write + flags. OE/addr/we
+side-folds with BIT/SET/RES/(HL) RMW.
+
+**Datapath:** two deep rotate trees (register vs HL), muxed by `z[6]`.
+The HL tree's source is `mux(WRITE, 0, AND(cbRotHold.q, WRITE))` — found
+live: feeding a live-`we` register (or even a WRITE-gated bit that still
+fans into the deep cone) during the READ phase freezes the phase ring;
+isolating the deep cone onto grounded constants until WRITE drops `we`
+keeps the ring moving. Register form never hits this (source is
+`bitRegByte`, not being written).
+
+Verified with `z80cpu-cb-rot.test.ts` — before the full suite.
+
+### Solver hot-path rewrite: indexed nets
+
+`step()` used to pay a `Map<string, …>` tax on every net, every
+transistor pin, every relaxation pass — on the live `buildZ80Cpu`
+composite (~67k transistors, ~34k nets) that was ~670ms per tick, which
+is why a single `buildZ80Cpu` test file routinely took minutes. The
+rewrite indexes nets once per `step()` into dense parallel arrays
+(levels, driver bitmasks, `Int32Array` union-find with intrusive group
+lists); transistor pin→net lookups happen once up front, not once per
+pass. Same semantics (majority-vote capacitive hold, unconditional `Z`
+on conflict, oscillation window on the fallback path only) — measured
+~6× faster on the same composite (~111ms/tick), which is what made
+adding `RRD`/`RLD` and continuing the suite tractable again. A follow-up
+WeakMap caches that index + scratch buffers across ticks when the
+structure version and `netMap` identity match (only Input values change),
+and — when the caller threads the previous `SimState` straight back in —
+seeds `cur[]` from a retained dense copy instead of ~34k `Map.get`s;
+together those cut another ~2× (~54ms/tick on `scripts/profile-z80.ts`).
+A shared `test/z80Harness.ts` also factors the repeated seed/clock/FSM
+boilerplate every `buildZ80Cpu` file had been copy-pasting.
+
+### A real solver bug this retrofit exposed — and the test that un-broke itself
+
+Adding the prefix mechanism above didn't just add inert wiring — it
+resized every other component's set of net IDs and pins ever so slightly
+(new gates, a new 4-bit register, all sharing the existing `Circuit`).
+That was enough to flip a decade-old, entirely latent bug in
+`solver.ts`'s own floating-group fallback (see its own doc comment) from
+never-observed to reliably reproducing on one specific test:
+`EX (SP),HL`'s *second* execution in `z80cpu-ex-sphl.test.ts` — same
+opcode, same decode, only the data on the bus (`H`/`L`/`RAM[0x60..61]`)
+different from the first execution — corrupted `ir` and the phase ring
+counter into simultaneous, un-recoverable `Z` (floating), never settling
+even after 300 relaxation iterations.
+
+**The actual bug**: `value = levelOf.get(members[0]) ?? 'Z'` — when a
+union-find group has no forced driver, this is supposed to model
+capacitive hold, but `members[0]` is whatever order `Set` iteration
+happens to yield, not necessarily a member with any real history. A
+transistor that starts conducting for the first time can merge a net
+that's always been its own floating, always-driven-nowhere island with a
+*different* net that has real remembered history from being driven every
+tick until now — an arbitrary pick can flood the live net's history with
+the island's stale `Z`. This had presumably been happening, harmlessly,
+on some genuinely-don't-care net somewhere in this file since long before
+this retrofit; the retrofit's own component-count shift just happened to
+make it land, for the first time, on a net that mattered.
+
+**The fix, after three wrong ones** (each one caught by running the
+*entire* suite, not just the one failing test, before trusting it):
+
+1. *Majority vote among every member's remembered non-`Z` value*, applied
+   uniformly to both "nothing forces this group" and "two drivers
+   conflict" — fixed `EX (SP),HL`, but a real, persistent electrical
+   conflict (this file's own stub-ROM decoder, one specific address)
+   turned into a genuine, never-settling oscillation, because a vote can
+   answer a conflict with a *concrete* value instead of `Z`, and that
+   concrete value re-drives the exact transistors that recreate the same
+   conflict next pass — nothing ever breaks the loop the way an immediate
+   `Z` naturally does.
+2. Added *oscillation detection* (a trailing-window transition count per
+   net; a net that changes value too many times in too few passes gets
+   excluded from every future vote) to let the vote rescue transient
+   conflicts while still cutting off a genuine, repeating short. Fixed
+   the decoder oscillation — but exposed a second, structurally different
+   failure: `ram.test.ts`'s own write-capture test deliberately drives a
+   *fixed*, never-changing `0xFF` onto the data bus from a test-harness
+   input, relying on the original solver's "any conflict is instantly
+   `Z`" behavior (`Z` reads as `0` through `fromBits`, and ANDing with
+   all-1s is the identity — a real short against an all-ones driver
+   reconstructs the *other* driver's own byte exactly, bit for bit). This
+   conflict never oscillates — the vote's answer is stable, just wrong,
+   because a long-held external value's *history* outvotes RAM's own
+   fresh, correct value the instant real contention starts. No amount of
+   oscillation-window tuning fixes a conflict that never repeats.
+3. *(Also a real, if smaller, lesson.)* The very first version of the
+   oscillation bookkeeping ran unconditionally for every net, every
+   relaxation pass, not just the ones actually landing in the fallback —
+   turning `178` tests that used to run in well under a minute into a
+   suite measured in *hours* (`z80cpu-x11-stack.test.ts` alone took
+   `17`+ minutes). Scoping the bookkeeping to the fallback branch only
+   brought individual heavy tests back down to `2`–`10` minutes each —
+   still real overhead from the vote itself, absorbed by running the
+   suite's 39 files across parallel workers rather than eliminated.
+
+**Where this landed**: `forced.size > 1` (a genuine conflict) goes back
+to the original, unconditional `Z` — no vote, no history, ever, the same
+one-line answer this fallback always gave, because three different tests
+across this suite (the decoder, `ram.test.ts`, and by extension anything
+else relying on that exact idiom) depend on it staying that way.
+`forced.size === 0` (nothing forces this group — true capacitive hold,
+no electrical conflict exists at all) keeps the majority vote and the
+oscillation guard, since neither of the regressions above ever involved
+a genuinely unforced group.
+
+**A postscript, found the same day**: `EX (SP),HL`'s second execution —
+diagnosed above as a genuine, transient forced-driver conflict on the RAM
+address bus, a real circuit-level race no vote-based solver fix alone
+could rescue — was marked `it.fails` on exactly that reasoning. Adding
+`LDI` right after (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above) shifted this same
+file's own component/net ordering again, the identical mechanism that
+made this race reproducible in the first place — and it stopped
+reproducing. `it.fails` did its actual job here: the next full-suite run
+failed *it*, with `Error: Expect test to fail`, exactly the signal
+built in for "the underlying bug is gone, flip this back." Confirmed
+stable across two independent isolated re-runs (not a one-off settle),
+so the test is a plain `it` again. This isn't a fix in any real sense —
+nothing about the actual race was diagnosed further or addressed on
+purpose, the same ordering-sensitivity that broke it unpredictably
+happened to un-break it just as unpredictably — which is exactly why the
+diagnosis above (a genuine, timing-sensitive circuit race, not a
+solver defect) is left in place rather than declared solved: the same
+race is presumably still there, just not currently landing on a net this
+test happens to read, and another unrelated future change could just as
+easily flip it back.
+
 ### Net labels, not wire spaghetti
 
 `buildZ80Cpu`'s own wiring is now dense enough (100+ internal `wire()`
@@ -2850,50 +4266,43 @@ real net instead of leaving it floating on its own.
 **A second pass fixed the actual majority case.** Counting the flattened
 circuit's wires found *773* of *883* long (>2000-unit) wires touched a
 `source` component — `VCC`/`GND` fan-out, not signal wiring. Every
-`buildAnd`/`buildOr`/`buildNot`/`buildXor` call in `library.ts` takes
-concrete `vcc`/`gnd` *pins* from whichever `Source` pair the caller hands
-it and wires straight to them, regardless of distance — and `buildZ80Cpu`
-hands every single one of its 100+ gate calls the *same* one global pair,
+`buildAnd`/`buildOr`/`buildNot`/`buildXor` call in `library.ts` used to take
+concrete `vcc`/`gnd` *pins* from whichever `Source` pair the caller handed
+it and wire straight to them, regardless of distance — and `buildZ80Cpu`
+handed every single one of its 100+ gate calls the *same* one global pair,
 declared once at `pos.x-200`, for a composite spanning `pos.x-400` to
 `pos.x+11300`.
 
-The fix doesn't touch `library.ts` at all — it doesn't need to, because
-`VCC`/`GND` are *already* named-tied nets (`Circuit.computeNets()`'s
-`GLOBAL_NET_NAMES`): every `source` component with `value=1` joins the
-`VCC` net and every `value=0` joins `GND`, purely by value, with no wire
-between them required — the identical mechanism a same-named `label`
-uses, just built into `source` itself instead of needing one. So a
-*second* `makeSource(parent, 1, ...)` dropped right next to a distant
-cluster of gates lands on the exact same `VCC` net as the original,
-automatically. `buildZ80Cpu` now declares four extra local pairs
-(`vcc2`/`gnd2` through `vcc5`/`gnd5`), one parked beside each of its four
-gate clusters that sit far from the original pair, and points each
-cluster's own `buildAnd`/`buildOr`/`buildNot`/`buildXor` calls at its
-local pair instead of the global one. Unlike the label mistake above, a
-mismatch here can't silently create a disconnected island — every
-`Source(1)` is `VCC` and every `Source(0)` is `GND` no matter which local
-variable holds it, so the only way to get this wrong is leaving some
-gate's power pin unwired outright, not misnaming a net. All 140 tests
-stayed green through this — a floated power pin would have shown up as a
-contended or unsettled net, not a silent wrong answer.
+An intermediate fix parked extra local `Source(1)`/`Source(0)` pairs beside
+distant gate clusters (`vcc2`/`gnd2` … `vcc5`/`gnd5`) so power wires stayed
+short within each cluster. That worked because `VCC`/`GND` are already
+named-tied nets (`Circuit.computeNets()`'s `GLOBAL_NET_NAMES`): every
+`source` with `value=1` joins `VCC` and every `value=0` joins `GND`, with
+no wire between Sources required — the same mechanism same-named `label`s
+use.
 
-Measured effect, same methodology as above (unflattened top-level wires,
-`buildZ80Cpu` alone): 883 long wires before, *319* after — the remaining
-`VCC`/`GND` distance is whatever's left between each local pair and its
-own cluster's farthest gate, not the full span back to `pos.x-200`. Average
-length of the wires still over threshold dropped from 7768 to 3488, better
-than half.
+**Current approach (rail labels).** Gate power no longer draws to those
+Source pins at all. `buildNot`/`buildNand`/`buildNor`/`buildTriStateBuffer`
+call `tiePowerRail(circuit, 'VCC'|'GND', pin)`, which drops a local
+`Label("VCC"|"GND")` next to the transistor and stubs a short wire —
+`computeNets()` joins that label to the global rail the same way Sources
+do. Constant signal ties (mux in1 = 0, ALU cin = 1, immediate high bits,
+etc.) use the same helper, or `railPin()` when a `Pin` value is needed
+before wiring. `buildZ80Cpu` keeps a single Source pair to *drive* the
+rails; the old cluster aliases remain only so existing `buildAnd(parent,
+vccN, gndN, …)` call sites still type-check (the pins are unused for
+power). Dive-in shows many tiny VCC/GND labels instead of long power
+spaghetti — intentional.
 
-This is `buildZ80Cpu`-local, not a `library.ts` signature change — every
-*other* composite in this file (`buildRegister`, `buildAlu`,
-`buildProgramCounter`, `buildMinimalCpu`, ...) still declares one `vcc`/
-`gnd` pair and hands it to every gate it builds. None of them come close to
-`buildZ80Cpu`'s own footprint, so none hit this problem at the same scale —
-but the fix generalizes trivially if one ever does: drop a local
-`makeSource` pair near the far cluster, point that cluster's gate calls at
-it. No `library.ts` change either way, since the mechanism it leans on
-(`source` values auto-tying to `VCC`/`GND`) already existed for every
-composite in this codebase, used or not.
+Measured effect of the cluster-Source pass (unflattened top-level wires,
+`buildZ80Cpu` alone): 883 long wires before, *319* after. Rail labels
+remove the remaining cross-canvas power legs that clusters could not
+reach.
+
+This is now inherited by every composite that goes through `library.ts`
+gate builders, not only `buildZ80Cpu`. Remaining `vcc`/`gnd` parameters on
+those builders are unused for power; cleaning the signatures is separate
+cosmetic work.
 
 Two real risks worth flagging about this mechanism generally, not specific
 to what actually went wrong above: label names are matched by their bare
@@ -2905,8 +4314,10 @@ def instantiated more than once (e.g. inside `REG_BIT`, folded and placed
 together, and two `buildZ80Cpu`s placed in the same project reusing these
 same names would collide with each other the same way. Neither applies
 here — `buildZ80Cpu` is called once per placement, not folded into a
-multiply-instantiated chip def — but both are real enough to write down
-rather than rediscover later.
+multiply-instantiated chip def — and `VCC`/`GND` are *deliberately* global
+rails, so colliding them across instances is the intended join. Other
+signal labels still need unique names per instance if two CPUs share a
+canvas.
 
 ### UI
 
@@ -3416,19 +4827,13 @@ section's own success story.
   out the CPU" above). `ADC`/`SBC` (`x=10`) and `ALU op A,n` (`x=11,
   z=6`) are real too, reusing `x=10`'s own op-select/`cin`/`bInv`
   machinery unchanged (`dec.y` alone selects the operation, never
-  `dec.x`). `DI`/`EI` (`x=11, z=3, y=6/7`) are the one *permanent* gap in
-  this column, for a reason distinct from every other simplification in
-  this file: implementing them honestly would mean building a real
-  interrupt-enable flip-flop feeding a real interrupt line — and this
-  simulator has no interrupt line, no interrupt-acknowledge cycle,
-  nothing an `IFF1`/`IFF2` flip-flop could meaningfully gate. A flip-flop
-  nobody ever reads would be decoration wearing the shape of a feature,
-  not the feature itself — decoded but deliberately inert, the same
-  honest treatment `HALT` (`0x76`, left inert since this slice has no
-  concept of "stop clocking" either — see "x=01: LD r,r'" above) already
-  gets. `buildZ80Decoder` would extract `DI`'s/`EI`'s own `x`/`y`/`z`
-  fields correctly if asked — nothing downstream just wires them to an
-  action. `H` (half-carry) and the two undocumented flag bits are real
+  `dec.x`). `DI`/`EI` (`x=11, z=3, y=6/7`) now drive real `IFF1`/`IFF2`
+  flip-flops as part of the thin IM1 IRQ layer (see "Thin IM1 IRQ" above) —
+  no longer the permanent gap this paragraph once described. Remaining IRQ
+  gaps are deliberate: no INTACK cycle, no IM0/IM2, no NMI/`RETN`, no
+  one-instruction EI delay, no `R` auto-increment on `M1`, and no
+  `P/V←IFF2` on `LD A,I`/`LD A,R`. `HALT` (`0x76`) stays inert (no "stop
+  clocking" concept — see "x=01: LD r,r'" above). `H` (half-carry) and the two undocumented flag bits are real
   now for the `x=10`/`x=11` ALU group, `INC r`/`DEC r`, and `DAA` itself
   (see "Closing the half-carry gap" above) — `ADD HL,rr` and the
   `RLCA`/`RRCA`/`RLA`/`RRA`/`CPL`/`SCF`/`CCF` group still leave them
@@ -3441,15 +4846,60 @@ section's own success story.
   "P/V is two flags, not one" above). `ADD HL,rr` and the six-op
   RLCA/RRCA/RLA/RRA/CPL/SCF/CCF group still leave `P/V` stale, the same
   simplification their own `H`/`X`/`Y` inherited above, not a fresh one.
-  `CB`/`ED`/`DD`/`FD` prefix handling is
-  the *other* permanent gap — a fundamentally different undertaking from
-  "one more opcode," each prefix byte opening an entirely separate decode
-  table (bit-level `RLC`/`BIT`/`SET`/`RES` ops, `IX`/`IY` index
-  registers, block transfer/search instructions) rather than one more
-  slot in the `xxyyyzzz` scheme this file already decodes; every opcode
-  this slice sees is still assumed to be a single, unprefixed byte, a
-  deliberate scope boundary from this project's very first line, not
-  something that crept in.
+  `CB`/`ED`/`DD`/`FD` prefix handling — a fundamentally different
+  undertaking from "one more opcode," each prefix byte opening an
+  entirely separate decode table (bit-level `RLC`/`BIT`/`SET`/`RES` ops,
+  `IX`/`IY` index registers, block transfer/search instructions) rather
+  than one more slot in the `xxyyyzzz` scheme this file already decodes —
+  now has its *mechanism* built (detect a prefix byte, recapture `ir`
+  with the real opcode that follows, advance `pc` an extra time, and
+  correctly exclude the existing unprefixed tables from misreading that
+  recaptured byte — see "The CB/ED/DD/FD prefix mechanism" above) and
+  all four `z=0..3` block-instruction columns of `ED`'s own table on top
+  of it — `LDI`/`LDD`/`LDIR`/`LDDR` (see "x=10, z=0: LDI/LDD/LDIR/LDDR"
+  above), real `0xED 0xA0`/`0xA8`/`0xB0`/`0xB8`; `CPI`/`CPD`/`CPIR`/
+  `CPDR` (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above), real `0xED 0xA1`/
+  `0xA9`/`0xB1`/`0xB9`; `INI`/`IND`/`INIR`/`INDR` (see "x=10, z=2:
+  INI/IND/INIR/INDR" above), real `0xED 0xA2`/`0xAA`/`0xB2`/`0xBA`; and
+  `OUTI`/`OUTD`/`OTIR`/`OTDR` (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR"
+  above), real `0xED 0xA3`/`0xAB`/`0xB3`/`0xBB` — every repeating
+  variant's own loop faked by landing `PC` back on its own opcode rather
+  than by any real micro-cycle, each with a genuinely different repeat
+  condition except the last pair, which genuinely shares one (`LDIR`/
+  `LDDR` watch `BC` alone, `CPIR`/`CPDR` also stop on a match found,
+  `INIR`/`INDR` and `OTIR`/`OTDR` both watch `B` alone — decrementing `B`
+  is the identical operation regardless of transfer direction, so the
+  underlying adder and its own nonzero bit are genuinely shared code,
+  not just a similar shape); `NEG` (see "x=01, z=4: NEG" above), real
+  `0xED 0x44` — `A<-0-A`, this retrofit's first non-block `ED`-table
+  opcode, every flag bit real and fresh, none left stale; and `ADC
+  HL,rr`/`SBC HL,rr` (see "x=01, z=2: ADC HL,rr/SBC HL,rr" above), real
+  `0xED 0x4A`/`0x5A`/`0x6A`/`0x7A` and `0x42`/`0x52`/`0x62`/`0x72` — the
+  identical shared 16-bit adder plain `ADD HL,rr` already built, widened
+  for a real carry-in and operand invert (the same `x=10: ADC/SBC`
+  recipe, just 16 bits wide), every flag bit real here too, unlike
+  `ADD HL,rr`'s own C-only treatment. The block instructions' own decode
+  gates were found live, while designing `NEG`'s, to have never checked
+  `dec.x` at all (see "A decode gap found across all sixteen
+  block-instruction gates" above) — fixed before `NEG` landed, rather
+  than propagating the same gap into a seventeenth gate. `ED` also has
+  thin IM1 IRQ (`IM 1`/`RETI`, plus unprefixed `EI`/`DI` — see "Thin IM1
+  IRQ" above). `CB` is closed for `BIT`/`SET`/`RES`/rotates (see above).
+  `DD` has an index-register slice (`IX`, `LD IX,nn`, `PUSH IX`,
+  `POP IX`, plus HL-clone ADD/INC/DEC/JP/LD SP/EX and `(IX+d)` LD /
+  INC/DEC / ALU `A,(IX+d)`, `DD CB` BIT/SET/RES/rot, and H→IXH remap —
+  see "DD: IX" above); `FD` has the matching IY slice (see "FD: IY"
+  above).
+- `EX (SP),HL`'s *second* execution briefly had a real, reproducible bug
+  (a transient forced-driver conflict on the RAM address bus, corrupting
+  `ir`/the phase ring counter) that turned out to be sensitive to this
+  file's own component/net ordering — and un-broke itself, without being
+  directly addressed, the moment `LDI`'s own wiring shifted that ordering
+  again. See "A real solver bug this retrofit exposed — and the test that
+  un-broke itself" above for the full story, including why this is
+  recorded here rather than treated as solved: the same ordering-
+  sensitive race is presumably still latent somewhere in this file, it
+  just isn't currently landing on a net any existing test reads.
 - `buildZ80Cpu`'s `x=11` work is the deepest circuit this project has built
   (`spAdder` — a second full ripple-carry `buildAlu` instance — plus the
   push/pop byte-select banks, the flag-computation chain, and a 4-phase FSM
@@ -3482,26 +4932,17 @@ section's own success story.
   the clearest evidence yet that this composite's fixed-phase-count design
   has a real, now-quantified cost that grows with every instruction family
   added, independent of whether that specific instruction needs the depth.
-- Every gate-building primitive in `library.ts` (`buildAnd`/`buildOr`/
-  `buildNot`/`buildXor`/...) still wires its power pins straight to
-  whichever concrete `vcc`/`gnd` pins the caller hands it — `library.ts`
-  itself is untouched. `buildZ80Cpu` fixed its own worst case a different
-  way: four extra local `Source(1)`/`Source(0)` pairs parked beside its
-  four gate clusters far from the original pair, each cluster's gates
-  pointed at its own local pair instead of the global one. This works
-  without touching `library.ts` because `VCC`/`GND` are already
-  named-tied *by value* (`Circuit.computeNets()`'s `GLOBAL_NET_NAMES` —
-  every `source` with `value=1` joins `VCC`, `value=0` joins `GND`,
-  automatically, no wire needed), so a second `Source(1)` anywhere on the
-  canvas lands on the same net as the first one for free (see "Net labels,
-  not wire spaghetti" above for the measured effect: 883 long wires down
-  to 319). Every *other* composite in this file (`buildRegister`,
-  `buildAlu`, `buildProgramCounter`, `buildMinimalCpu`, ...) still declares
-  one `vcc`/`gnd` pair for its own entire body — untouched, since none are
-  remotely `buildZ80Cpu`'s size, but a real gap: the fix lives in
-  `buildZ80Cpu` specifically, not in `library.ts` where every composite
-  would inherit it automatically. That's still real, separate work if a
-  future composite ever grows wide enough to need it.
+- Gate-building primitives in `library.ts` (`buildNot`/`buildNand`/
+  `buildNor`/`buildTriStateBuffer`, and everything built on them) attach
+  power through `tiePowerRail` — a local `Label("VCC"|"GND")` stub next to
+  each transistor, joined to the global rails by `computeNets()` the same
+  way `Source(1)`/`Source(0)` already do. Constant 0/1 signal ties use the
+  same helper (or `railPin` when a `Pin` value is needed). Callers still
+  pass `vcc`/`gnd` pins for API compatibility, but those pins are unused
+  for power. `buildZ80Cpu` keeps one Source pair to drive the rails; the
+  older cluster-Source workaround (`vcc2`…`gnd5`) is obsolete. See "Net
+  labels, not wire spaghetti" above. Cleaning unused `vcc`/`gnd`
+  parameters off the builder signatures is separate cosmetic work.
 
 ## Running it
 
@@ -3509,4 +4950,10 @@ section's own success story.
 npm install
 npm test        # engine unit tests (vitest)
 npm run dev      # canvas editor at http://localhost:5173
+npm run build:file  # static IIFE bundle into dist-file/ — open index.html via file://
 ```
+
+`build:file` exists because browsers block ES-module scripts on `file://`
+(opaque origin). It emits one classic `app.js` plus `index.html` with a
+plain `<script src>` (see `vite.config.file.ts`). Regular `npm run build`
+still targets HTTP hosting under `dist/`.

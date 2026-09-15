@@ -128,6 +128,10 @@ describe('buildZ80Cpu — x=00, z=7, y=4: DAA, plus real H/X/Y for the x=10/x=11
     wire(parent, fsmD6.pins.out, cpu.fsmD[6]!);
     const fsmD7 = makeInput(parent, 0);
     wire(parent, fsmD7.pins.out, cpu.fsmD[7]!);
+    const fsmD8 = makeInput(parent, 0);
+    wire(parent, fsmD8.pins.out, cpu.fsmD[8]!);
+    const fsmD9 = makeInput(parent, 0);
+    wire(parent, fsmD9.pins.out, cpu.fsmD[9]!);
 
     const seedIns: { we: ReturnType<typeof makeInput>; d: ReturnType<typeof makeInput>[] }[] = [];
     const seedReg = (reg: (typeof cpu)['rB'], value: number, width = 8) => {
@@ -194,6 +198,10 @@ describe('buildZ80Cpu — x=00, z=7, y=4: DAA, plus real H/X/Y for the x=10/x=11
       pulse(phaseClk); // -> EXEC5
       pulse(dataClk);
       pulse(phaseClk); // -> EXEC6
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC7 (no-op — ring widen for DD/FD CB SET/RES/rot)
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC8 (ditto)
       pulse(dataClk);
       pulse(phaseClk); // -> FETCH (next opcode)
       pulse(dataClk);

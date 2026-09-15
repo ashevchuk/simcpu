@@ -23,22 +23,21 @@ import {
   type TwoInputGate,
 } from './library.js';
 import { buildDFlipFlop, buildDLatch } from './sequential.js';
-import type { Pin } from './types.js';
 
-function scratch(): { circuit: Circuit; vcc: Pin; gnd: Pin } {
+function scratch(): Circuit {
   const circuit = new Circuit();
-  const vcc = makeSource(circuit, 1).pins.out;
-  const gnd = makeSource(circuit, 0).pins.out;
-  return { circuit, vcc, gnd };
+  makeSource(circuit, 1); // rail driver for tiePowerRail VCC
+  makeSource(circuit, 0); // rail driver for tiePowerRail GND
+  return circuit;
 }
 
 function seedTwoInputGate(
   library: ChipLibrary,
   name: string,
-  build: (circuit: Circuit, vcc: Pin, gnd: Pin) => TwoInputGate,
+  build: (circuit: Circuit) => TwoInputGate,
 ): ChipDef {
-  const { circuit, vcc, gnd } = scratch();
-  const g = build(circuit, vcc, gnd);
+  const circuit = scratch();
+  const g = build(circuit);
   return foldExposing(circuit, name, library, [
     { pin: g.a, isOutput: false },
     { pin: g.b, isOutput: false },
@@ -49,8 +48,8 @@ function seedTwoInputGate(
 /** Registers NOT, NAND, AND, NOR, OR, XOR, MUX2, MUX4, HALF_ADDER, FULL_ADDER, D_LATCH, D_FF and TRI_BUF as placeable chips. */
 export function seedStandardCells(library: ChipLibrary): void {
   {
-    const { circuit, vcc, gnd } = scratch();
-    const g = buildNot(circuit, vcc, gnd);
+    const circuit = scratch();
+    const g = buildNot(circuit);
     foldExposing(circuit, 'NOT', library, [
       { pin: g.in, isOutput: false },
       { pin: g.out, isOutput: true },
@@ -64,8 +63,8 @@ export function seedStandardCells(library: ChipLibrary): void {
   seedTwoInputGate(library, 'XOR', buildXor);
 
   {
-    const { circuit, vcc, gnd } = scratch();
-    const m = buildMux2(circuit, vcc, gnd);
+    const circuit = scratch();
+    const m = buildMux2(circuit);
     foldExposing(circuit, 'MUX2', library, [
       { pin: m.sel, isOutput: false },
       { pin: m.in0, isOutput: false },
@@ -75,8 +74,8 @@ export function seedStandardCells(library: ChipLibrary): void {
   }
 
   {
-    const { circuit, vcc, gnd } = scratch();
-    const m = buildMux4(circuit, vcc, gnd);
+    const circuit = scratch();
+    const m = buildMux4(circuit);
     foldExposing(circuit, 'MUX4', library, [
       { pin: m.sel0, isOutput: false },
       { pin: m.sel1, isOutput: false },
@@ -89,8 +88,8 @@ export function seedStandardCells(library: ChipLibrary): void {
   }
 
   {
-    const { circuit, vcc, gnd } = scratch();
-    const h = buildHalfAdder(circuit, vcc, gnd);
+    const circuit = scratch();
+    const h = buildHalfAdder(circuit);
     foldExposing(circuit, 'HALF_ADDER', library, [
       { pin: h.a, isOutput: false },
       { pin: h.b, isOutput: false },
@@ -100,8 +99,8 @@ export function seedStandardCells(library: ChipLibrary): void {
   }
 
   {
-    const { circuit, vcc, gnd } = scratch();
-    const f = buildFullAdder(circuit, vcc, gnd);
+    const circuit = scratch();
+    const f = buildFullAdder(circuit);
     foldExposing(circuit, 'FULL_ADDER', library, [
       { pin: f.a, isOutput: false },
       { pin: f.b, isOutput: false },
@@ -112,8 +111,8 @@ export function seedStandardCells(library: ChipLibrary): void {
   }
 
   {
-    const { circuit, vcc, gnd } = scratch();
-    const l = buildDLatch(circuit, vcc, gnd);
+    const circuit = scratch();
+    const l = buildDLatch(circuit);
     foldExposing(circuit, 'D_LATCH', library, [
       { pin: l.d, isOutput: false },
       { pin: l.en, isOutput: false },
@@ -123,8 +122,8 @@ export function seedStandardCells(library: ChipLibrary): void {
   }
 
   {
-    const { circuit, vcc, gnd } = scratch();
-    const f = buildDFlipFlop(circuit, vcc, gnd);
+    const circuit = scratch();
+    const f = buildDFlipFlop(circuit);
     foldExposing(circuit, 'D_FF', library, [
       { pin: f.d, isOutput: false },
       { pin: f.clk, isOutput: false },
@@ -134,8 +133,8 @@ export function seedStandardCells(library: ChipLibrary): void {
   }
 
   {
-    const { circuit, vcc, gnd } = scratch();
-    const b = buildTriStateBuffer(circuit, vcc, gnd);
+    const circuit = scratch();
+    const b = buildTriStateBuffer(circuit);
     foldExposing(circuit, 'TRI_BUF', library, [
       { pin: b.a, isOutput: false },
       { pin: b.en, isOutput: false },

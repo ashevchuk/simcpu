@@ -103,6 +103,10 @@ describe('buildZ80Cpu — x=11: JP cc,nn (conditional 16-bit jump)', () => {
     wire(parent, fsmD6.pins.out, cpu.fsmD[6]!);
     const fsmD7 = makeInput(parent, 0);
     wire(parent, fsmD7.pins.out, cpu.fsmD[7]!);
+    const fsmD8 = makeInput(parent, 0);
+    wire(parent, fsmD8.pins.out, cpu.fsmD[8]!);
+    const fsmD9 = makeInput(parent, 0);
+    wire(parent, fsmD9.pins.out, cpu.fsmD[9]!);
 
     // Seeded but otherwise irrelevant to this test — same "every register
     // gets a defined seed, even ones this test doesn't touch" discipline
@@ -173,6 +177,10 @@ describe('buildZ80Cpu — x=11: JP cc,nn (conditional 16-bit jump)', () => {
       pulse(phaseClk); // -> EXEC5
       pulse(dataClk);
       pulse(phaseClk); // -> EXEC6
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC7 (no-op — ring widen for DD/FD CB SET/RES/rot)
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC8 (ditto)
       pulse(dataClk);
       pulse(phaseClk); // -> FETCH (next opcode)
       pulse(dataClk);

@@ -1,6 +1,7 @@
 import { buildAlu, buildInstructionRegister, buildMinimalCpu, buildProgramCounter, buildRegister, buildRingCounter, buildStubRom, buildZ80Cpu } from './sim/blocks.js';
 import { ChipLibrary } from './sim/ChipLibrary.js';
 import { Circuit } from './sim/Circuit.js';
+import { foldZ80CpuLeavingRam, newComponentIdSet } from './sim/foldZ80.js';
 import { flatten, fold, renamePort } from './sim/hierarchy.js';
 import { buildNot, makeInput, makeProbe, makeRam, makeSource, wire } from './sim/library.js';
 import {
@@ -14,10 +15,14 @@ import {
 import { initialState, step } from './sim/solver.js';
 import { seedStandardCells } from './sim/stdcells.js';
 import type { ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
+import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT } from './machine/memoryMap.js';
+import { MachineRunner } from './machine/MachineRunner.js';
+import { commandRomHexPrompt } from './machine/commandRom.js';
 import { Camera, type Bounds } from './ui/Camera.js';
 import { showAlert, showConfirm, showPrompt } from './ui/Dialog.js';
 import { Editor, type Tool } from './ui/Editor.js';
 import { GRID, snap } from './ui/geometry.js';
+import { MachinePanel } from './ui/MachinePanel.js';
 import { draw } from './ui/Renderer.js';
 
 const stage = document.getElementById('stage') as HTMLDivElement;
@@ -25,15 +30,21 @@ const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d');
 if (!ctx) throw new Error('2D canvas context is not available');
 
+const machinePanelHost = document.getElementById('machine-panel');
+if (!machinePanelHost) throw new Error('#machine-panel is missing from index.html');
+const machinePanel = new MachinePanel(machinePanelHost);
+const machineRunner = new MachineRunner();
+machinePanel.bindRunner(machineRunner);
+
 const library = new ChipLibrary();
 seedStandardCells(library); // NOT/NAND/AND/NOR/OR/XOR/MUX2/MUX4/FULL_ADDER/D_LATCH/D_FF, ready to drag out
 const topCircuit = new Circuit();
 seedDemoCircuit(topCircuit);
 
 function seedDemoCircuit(c: Circuit): void {
-  const vcc = makeSource(c, 1, { x: 80, y: 60 }).pins.out;
-  const gnd = makeSource(c, 0, { x: 80, y: 140 }).pins.out;
-  const notGate = buildNot(c, vcc, gnd, { x: 220, y: 70 });
+  makeSource(c, 1, { x: 80, y: 60 }); // rail driver
+  makeSource(c, 0, { x: 80, y: 140 });
+  const notGate = buildNot(c, { x: 220, y: 70 });
   const input = makeInput(c, 0, { x: 140, y: 100 });
   const probe = makeProbe(c, { x: 300, y: 100 }, 'out');
   wire(c, input.pins.out, notGate.in);
@@ -214,6 +225,10 @@ setTool({ kind: 'select' });
 
 document.getElementById('clear')?.addEventListener('click', async () => {
   if (!(await showConfirm('Clear this level of the circuit?'))) return;
+  if (navStack.length === 1) {
+    machineRunner.detach();
+    machinePanel.detach();
+  }
   editor.circuit.components.clear();
   editor.circuit.wires.clear();
   editor.clearSelection();
@@ -255,8 +270,8 @@ function boundsOfSelection(): Bounds {
 // 8-bit register is on the order of 8 * ~60 transistors) isn't a reasonable
 // ask of anyone clicking a palette. Width is prompted, not a fixed 8, since
 // nothing else about these functions is width-specific.
-async function promptWidth(label: string): Promise<number | null> {
-  const raw = await showPrompt(`${label} width (bits):`, '4');
+async function promptWidth(label: string, defaultBits = '4'): Promise<number | null> {
+  const raw = await showPrompt(`${label} width (bits):`, defaultBits);
   if (!raw) return null;
   const bits = Math.trunc(Number(raw));
   if (!Number.isFinite(bits) || bits < 1) return null;
@@ -360,11 +375,16 @@ document.getElementById('add-cpu')?.addEventListener('click', async () => {
   refreshChipPalette();
 });
 
-/** Same shape as promptProgramBytes(), defaulted to real Z80 opcode bytes (the x=10 ALU-on-register / x=11 ALU op A,n, x=01 LD r,r', x=11 PUSH/POP/RET/RST n / JP nn / CALL nn / JP cc,nn / CALL cc,nn / RET cc / EXX / JP (HL) / LD SP,HL / EX DE,HL / EX (SP),HL / IN A,(n) / OUT (n),A, and x=00 NOP / EX AF,AF' / INC/DEC rr / INC/DEC r / LD r,n / LD dd,nn / ADD HL,rr / JR cc,e / JR e / DJNZ e / indirect loads through (BC)/(DE)/(nn) / INC (HL)/DEC (HL)/LD (HL),n / RLCA/RRCA/RLA/RRA/CPL/SCF/CCF groups buildZ80Cpu executes) instead of buildMinimalCpu's made-up encoding. */
+/**
+ * Default demo: Z80 command ROM (TTY H/M/W/G on FB @ 0xE00). Needs addrBits ≥ 12.
+ */
+const Z80_MONITOR_HEX = commandRomHexPrompt();
+
+/** Same shape as promptProgramBytes(), defaulted to the command ROM. */
 async function promptZ80ProgramBytes(): Promise<Uint8Array | null> {
   const raw = await showPrompt(
-    'Program bytes, comma-separated hex — real Z80 opcodes: 0x40-0x7F (LD r,r\', except 0x76), 0x80-0xBF (ADD/ADC/SUB/SBC/AND/XOR/OR/CP A,r — P/V is signed overflow for the first five, parity for the last three), ALU op A,n (0xC6/CE/D6/DE/E6/EE/F6/FE — same eight ops against an immediate byte that follows), PUSH rp/POP rp/RET/RST n (0xC1/C5/D1/D5/E1/E5/F1/F5, 0xC9, 0xC7-0xFF step 8), RET cc (0xC0/C8/D0/D8/E0/E8/F0/F8 — NZ/Z/NC/C/PO/PE/P/M, no operand bytes), JP nn (0xC3), CALL nn (0xCD), JP cc,nn (0xC2/CA/D2/DA/E2/EA/F2/FA), or CALL cc,nn (0xC4/CC/D4/DC/E4/EC/F4/FC — same NZ/Z/NC/C/PO/PE/P/M), each followed by its own 2-byte target/return address, low byte first — CALL, a taken CALL cc,nn, and a taken RET cc each push or pop one stack byte, poppable by (or pushed the same way as) this same RET, JR e (0x18, unconditional), DJNZ e (0x10 — decrements B, jumps if nonzero), or JR cc,e (0x20/0x28/0x30/0x38 — NZ/Z/NC/C only, real Z80\'s own limit for this opcode), each followed by its own signed 8-bit displacement (two\'s complement, e.g. 0x03 = +3, 0xFB = -5) added to PC right after the 2-byte instruction, INC rr/DEC rr (0x03/0B/13/1B/23/2B/33/3B), INC r/DEC r (0x04/05/0C/0D/14/15/1C/1D/24/25/2C/2D/3C/3D, each excluding (HL)), LD r,n (0x06/0E/16/1E/26/2E/3E, not (HL), each followed by its own immediate byte), LD dd,nn (0x01/11/21/31 — BC/DE/HL/SP — each followed by its own 2-byte immediate, low byte first), ADD HL,rr (0x09/19/29/39 — BC/DE/HL/SP, 16-bit add into HL, only the carry flag affected), LD (BC),A/LD A,(BC)/LD (DE),A/LD A,(DE) (0x02/0x0A/0x12/0x1A), LD (nn),HL/LD HL,(nn)/LD (nn),A/LD A,(nn) (0x22/0x2A/0x32/0x3A, each followed by its own 2-byte address, low byte first), INC (HL)/DEC (HL)/LD (HL),n (0x34/0x35/0x36 — the (HL) slot INC r/DEC r/LD r,n above exclude, a real RAM read-modify-write; LD (HL),n followed by its own immediate byte), RLCA/RRCA/RLA/RRA/CPL/SCF/CCF (0x07/0x0F/0x17/0x1F/0x2F/0x37/0x3F — single-byte, touch only A and/or F, no operand bytes), DAA (0x27, corrects A back into valid packed BCD after an 8-bit add or subtract — reads the real H/C/N flags this simulator now models), NOP (0x00, a genuine no-op — decoded and advances PC, touches nothing else), EX AF,AF\' (0x08) or EXX (0xD9, both single-byte, swap the shadow register set live), JP (HL) (0xE9, jumps to HL\'s own value, no operand bytes), LD SP,HL (0xF9), EX DE,HL (0xEB), EX (SP),HL (0xE3, swaps HL with the two bytes on top of the stack — a real RAM read-modify-write, not just a register swap), or IN A,(n)/OUT (n),A (0xDB/0xD3, each followed by its own immediate port-address byte — this simulator\'s own invented I/O port, wired to nothing else on this canvas, see ARCHITECTURE.md\'s "Closing out the CPU" section) only; see ARCHITECTURE.md\'s "A real Z80 decoder":',
-    '80,91,a0,a9,b6,87',
+    'Program bytes, comma-separated hex — default is the Z80 command ROM (TTY H/M/W/G; FB @ 0xE00; needs 12-bit RAM):',
+    Z80_MONITOR_HEX,
   );
   if (!raw) return null;
   const bytes = raw
@@ -376,12 +396,43 @@ async function promptZ80ProgramBytes(): Promise<Uint8Array | null> {
 }
 
 document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
-  const addrBits = await promptWidth('Z80 CPU RAM address bits');
+  // Default 12-bit so the soft TTY map (FB @ 0xE00, keys @ 0xF00) fits.
+  const addrBits = await promptWidth('Z80 CPU RAM address bits', String(MACHINE_ADDR_BITS));
   if (addrBits === null) return;
   const program = await promptZ80ProgramBytes();
   if (program === null) return;
   const pos = snap(camera.screenToWorld({ x: vw() / 2, y: vh() / 2 }, vw(), vh()));
-  buildZ80Cpu(editor.circuit, library, addrBits, program, pos);
+  machineRunner.detach();
+
+  // Snapshot ids so we can fold the flat composite into one chip afterward
+  // (RAM stays outside — see foldZ80CpuLeavingRam).
+  const beforeIds = new Set(editor.circuit.components.keys());
+  const cpu = buildZ80Cpu(editor.circuit, library, addrBits, program, pos);
+  const placedIds = newComponentIdSet(editor.circuit, beforeIds);
+
+  if (addrBits >= MACHINE_ADDR_BITS) {
+    const simTick = () => {
+      const flat = flatten(topCircuit, library);
+      const flatNetMap = flat.computeNets();
+      simState = step(flat, flatNetMap, simState);
+      // Do not set uiDirty here — tickBudget used to force a redraw every
+      // clock edge and doubled work with frame()'s own step+draw.
+    };
+    machinePanel.attach(cpu.ram);
+    machinePanel.bindRunner(machineRunner);
+    // Wire Inputs *before* fold so clocks/seeds become chip ports.
+    machineRunner.attach(editor.circuit, library, cpu, simTick);
+    machineRunner.boot();
+    machineRunner.setSpeed('soft');
+    machineRunner.setRunning(true);
+    machinePanel.refreshControls();
+    machinePanel.draw();
+  } else {
+    machinePanel.detach();
+    machineRunner.detach();
+  }
+
+  foldZ80CpuLeavingRam(editor.circuit, library, placedIds, pos);
   refreshChipPalette();
 });
 
@@ -439,6 +490,8 @@ importProjectInput.addEventListener('change', async () => {
       renderBreadcrumb();
       refreshChipPalette();
       camera.centerOn(centroid(circuitBounds(topCircuit)), 1);
+      machineRunner.detach();
+      machinePanel.detach(); // re-attach via + Z80CPU with addrBits ≥ 12
     })
     .catch((err: unknown) => {
       void showAlert(`Could not load that project file: ${err instanceof Error ? err.message : String(err)}`);
@@ -631,6 +684,50 @@ window.addEventListener('keyup', (ev) => {
 // --- Simulation + render loop -------------------------------------------
 const statusEl = document.getElementById('status') as HTMLDivElement;
 
+/** Offscreen 128×64 for soft bitmap HUD (screen-fixed, not world coords). */
+const bmpHudTmp = document.createElement('canvas');
+bmpHudTmp.width = BMP_WIDTH;
+bmpHudTmp.height = BMP_HEIGHT;
+const bmpHudCtx = bmpHudTmp.getContext('2d');
+
+/** Subtle corner preview when SoftDevices.bitmap has any set pixel. */
+function drawSoftBitmapHud(c: CanvasRenderingContext2D, _vw: number, vh: number): void {
+  if (!machineRunner.attached || !bmpHudCtx) return;
+  const bmp = machineRunner.softDevices.bitmap;
+  let any = false;
+  for (let i = 0; i < bmp.length; i++) {
+    if (bmp[i]) {
+      any = true;
+      break;
+    }
+  }
+  if (!any) return;
+
+  const img = bmpHudCtx.createImageData(BMP_WIDTH, BMP_HEIGHT);
+  for (let i = 0; i < BMP_WIDTH * BMP_HEIGHT; i++) {
+    const bit = (bmp[(i / 8) | 0]! >> (7 - (i & 7))) & 1;
+    const o = i * 4;
+    const v = bit ? 180 : 12;
+    img.data[o] = v;
+    img.data[o + 1] = bit ? 190 : 14;
+    img.data[o + 2] = bit ? 210 : 18;
+    img.data[o + 3] = bit ? 220 : 160;
+  }
+  bmpHudCtx.putImageData(img, 0, 0);
+  const scale = 1;
+  const w = BMP_WIDTH * scale;
+  const h = BMP_HEIGHT * scale;
+  const x = 8;
+  const y = vh - h - 8;
+  c.save();
+  c.globalAlpha = 0.85;
+  c.fillStyle = 'rgba(10,12,18,0.7)';
+  c.fillRect(x - 2, y - 2, w + 4, h + 4);
+  c.imageSmoothingEnabled = false;
+  c.drawImage(bmpHudTmp, x, y, w, h);
+  c.restore();
+}
+
 /**
  * Idle-frame skip: found live once `flatten()`/`computeNets()` caching (see
  * ARCHITECTURE.md's "Caching flatten()/computeNets()") turned out to fix
@@ -655,25 +752,70 @@ const statusEl = document.getElementById('status') as HTMLDivElement;
  * every frame regardless of `uiDirty`, exactly as before this change.
  */
 function frame(): void {
-  if (uiDirty || !simState.settled) {
-    const flat = flatten(topCircuit, library);
-    const flatNetMap = flat.computeNets();
-    simState = step(flat, flatNetMap, simState);
+  // Soft Run advances the interpreter only; gate Run spends a time-budgeted
+  // slice of transistor phases. Either way we avoid the old pattern of
+  // 160 full step()s *plus* another step+draw in the same rAF.
+  let machineWorked = false;
+  if (machineRunner.running) {
+    machineWorked = machineRunner.tickBudget();
+  }
 
-    const view = navStack[navStack.length - 1]!;
-    const resolve = (localPinId: string): { level: Level; contended: boolean } => {
-      const net = flatNetMap.netOf.get(view.pathPrefix + localPinId);
-      if (!net) return { level: 'Z', contended: false };
-      return { level: simState.levelOf.get(net) ?? 'Z', contended: simState.contended.has(net) };
-    };
+  const softRun = machineRunner.running && machineRunner.isSoft;
+  // Soft Run: skip transistor step/canvas every frame (TTY samples RAM).
+  // Gate Run / idle / edits: normal path. Soft still redraws canvas when
+  // the user pans/zooms (uiDirty from camera handlers).
+  const needSimDraw = softRun ? uiDirty : uiDirty || !simState.settled || (machineRunner.running && machineWorked);
 
-    draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
-    zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
-    statusEl.textContent =
-      `${navStack.map((f) => f.label).join('/')} | flat nets: ${flatNetMap.pinsOf.size} | ` +
-      `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}`;
+  if (needSimDraw) {
+    // Soft at top level: draw chip boxes without expanding ~200k components
+    // through flatten() — interactive TTY does not need pin levels. Dive-in
+    // (navStack depth > 1) or any Gates path still flattens as before.
+    const softTop = softRun && navStack.length === 1;
+    if (!softRun || uiDirty) {
+      const view = navStack[navStack.length - 1]!;
+      if (softTop) {
+        const resolve = (_localPinId: string): { level: Level; contended: boolean } => ({
+          level: 'Z',
+          contended: false,
+        });
+        draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
+        drawSoftBitmapHud(ctx!, vw(), vh());
+        zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
+        statusEl.textContent = `${navStack.map((f) => f.label).join('/')} | soft (flatten deferred) | machine: soft`;
+      } else {
+        const flat = flatten(topCircuit, library);
+        const flatNetMap = flat.computeNets();
+        if (!softRun) {
+          simState = step(flat, flatNetMap, simState);
+        }
+
+        const resolve = (localPinId: string): { level: Level; contended: boolean } => {
+          const net = flatNetMap.netOf.get(view.pathPrefix + localPinId);
+          if (!net) return { level: 'Z', contended: false };
+          return { level: simState.levelOf.get(net) ?? 'Z', contended: simState.contended.has(net) };
+        };
+
+        draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
+        drawSoftBitmapHud(ctx!, vw(), vh());
+        zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
+        const mode =
+          machineRunner.running && machineRunner.isSoft
+            ? 'machine: soft'
+            : machineRunner.running
+              ? 'machine: gates'
+              : machineRunner.attached
+                ? 'machine: pause'
+                : '';
+        statusEl.textContent =
+          `${navStack.map((f) => f.label).join('/')} | flat nets: ${flatNetMap.pinsOf.size} | ` +
+          `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}` +
+          (mode ? ` | ${mode}` : '');
+      }
+    }
     uiDirty = false;
   }
+  // Soft TTY samples ram.bytes independently of the transistor canvas.
+  if (machinePanel.attached) machinePanel.draw();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

@@ -3,9 +3,18 @@ import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import type { ChipDef } from '../src/sim/ChipLibrary.js';
 import { Circuit } from '../src/sim/Circuit.js';
 import { flatten, fold, foldExposing, renamePort } from '../src/sim/hierarchy.js';
-import { buildNand, buildNot, makeChipInstance, makeInput, makeRam, makeSource, wire } from '../src/sim/library.js';
+import {
+  buildNand,
+  buildNot,
+  makeChipInstance,
+  makeInput,
+  makeLabel,
+  makeRam,
+  makeSource,
+  wire,
+} from '../src/sim/library.js';
 import { initialState, step } from '../src/sim/solver.js';
-import type { Level } from '../src/sim/types.js';
+import type { Level, LabelComponent } from '../src/sim/types.js';
 
 /** Run the relaxation solver on a (possibly hierarchical) circuit until it settles. */
 function settle(circuit: Circuit, library: ChipLibrary) {
@@ -29,7 +38,7 @@ function makeNandChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
   const vcc = makeSource(scratch, 1).pins.out;
   const gnd = makeSource(scratch, 0).pins.out;
-  const nand = buildNand(scratch, vcc, gnd);
+  const nand = buildNand(scratch);
   return foldExposing(scratch, 'NAND', library, [
     { pin: nand.a, isOutput: false },
     { pin: nand.b, isOutput: false },
@@ -39,9 +48,9 @@ function makeNandChip(library: ChipLibrary): ChipDef {
 
 function makeNotChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
-  const vcc = makeSource(scratch, 1).pins.out;
-  const gnd = makeSource(scratch, 0).pins.out;
-  const notGate = buildNot(scratch, vcc, gnd);
+  makeSource(scratch, 1); // rail driver
+  makeSource(scratch, 0);
+  const notGate = buildNot(scratch);
   return foldExposing(scratch, 'NOT', library, [
     { pin: notGate.in, isOutput: false },
     { pin: notGate.out, isOutput: true },
@@ -128,6 +137,52 @@ describe('two independent instances of the same chip def', () => {
     expect(levelAt(state, netMap, inst1.pins[notDef.ports[1]!]!.id)).toBe(1); // NOT(0)
     expect(levelAt(state, netMap, inst2.pins[notDef.ports[1]!]!.id)).toBe(0); // NOT(1)
     expect(state.contended.size).toBe(0);
+  });
+});
+
+describe('flatten namespaces non-global labels per chip instance', () => {
+  it('keeps SIG labels on separate nets while VCC/GND stay global', () => {
+    const library = new ChipLibrary();
+    const scratch = new Circuit();
+    const vcc = makeSource(scratch, 1).pins.out;
+    const gnd = makeSource(scratch, 0).pins.out;
+    const nand = buildNand(scratch);
+    // Named internal tie — without namespacing, two instances would short SIG.
+    wire(scratch, nand.out, makeLabel(scratch, 'SIG').pins.net);
+    wire(scratch, vcc, makeLabel(scratch, 'VCC').pins.net);
+    wire(scratch, gnd, makeLabel(scratch, 'GND').pins.net);
+    const def = foldExposing(scratch, 'SIG_CHIP', library, [
+      { pin: nand.a, isOutput: false },
+      { pin: nand.b, isOutput: false },
+      { pin: nand.out, isOutput: true },
+    ]);
+
+    const parent = new Circuit();
+    makeChipInstance(parent, def, { x: 0, y: 0 });
+    makeChipInstance(parent, def, { x: 200, y: 0 });
+    const flat = flatten(parent, library);
+
+    const sigLabels = [...flat.components.values()].filter(
+      (c): c is LabelComponent => c.kind === 'label' && c.name.includes('SIG'),
+    );
+    expect(sigLabels).toHaveLength(2);
+    expect(sigLabels[0]!.name).not.toBe(sigLabels[1]!.name);
+    expect(sigLabels[0]!.name).toContain('SIG');
+    expect(sigLabels[1]!.name).toContain('SIG');
+
+    const netMap = flat.computeNets();
+    const sigNet0 = netMap.netOf.get(sigLabels[0]!.pins.net.id);
+    const sigNet1 = netMap.netOf.get(sigLabels[1]!.pins.net.id);
+    expect(sigNet0).toBeDefined();
+    expect(sigNet1).toBeDefined();
+    expect(sigNet0).not.toBe(sigNet1);
+
+    const powerLabels = [...flat.components.values()].filter(
+      (c): c is LabelComponent => c.kind === 'label' && (c.name === 'VCC' || c.name === 'GND'),
+    );
+    expect(powerLabels.some((c) => c.name === 'VCC')).toBe(true);
+    expect(powerLabels.some((c) => c.name === 'GND')).toBe(true);
+    expect(powerLabels.every((c) => c.name === 'VCC' || c.name === 'GND')).toBe(true);
   });
 });
 

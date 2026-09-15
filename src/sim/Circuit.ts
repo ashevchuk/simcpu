@@ -2,7 +2,7 @@ import type { Component, NetMap, Pin, Point, Wire } from './types.js';
 import { UnionFind } from './UnionFind.js';
 
 /** Names that always resolve to the same global net, regardless of wiring topology. */
-const GLOBAL_NET_NAMES = new Set(['VCC', 'GND']);
+export const GLOBAL_NET_NAMES = new Set(['VCC', 'GND']);
 
 let idCounter = 0;
 export function nextId(prefix: string): string {
@@ -190,17 +190,17 @@ export class Circuit {
     }
 
     const groups = uf.groups();
+    // Map UF root → preferred net name in O(|byName|), not O(|groups|×|byName|).
+    // Z80 place/fold hits ~12k groups × ~1k labels otherwise (~1.3s of fold).
+    const rootToName = new Map<string, string>();
+    for (const [name, list] of byName) {
+      if (list.length > 0) rootToName.set(uf.find(list[0] as string), name);
+    }
     const netOf = new Map<string, string>();
     const pinsOf = new Map<string, string[]>();
     for (const [root, members] of groups) {
       // Prefer a stable, readable net id: a global/named net keeps its name.
-      let netId = root;
-      for (const [name, list] of byName) {
-        if (list.length > 0 && uf.find(list[0] as string) === root) {
-          netId = name;
-          break;
-        }
-      }
+      const netId = rootToName.get(root) ?? root;
       pinsOf.set(netId, members);
       for (const m of members) netOf.set(m, netId);
     }

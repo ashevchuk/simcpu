@@ -26,11 +26,11 @@ export interface DLatch {
  * `en=0` → n1=n2=1 → both latch inputs inactive → hold (the SR latch's own
  * cross-coupled feedback keeps whatever level it last saw).
  */
-export function buildDLatch(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): DLatch {
-  const notD = buildNot(circuit, vcc, gnd, pos);
-  const nand1 = buildNand(circuit, vcc, gnd, { x: pos.x + 150, y: pos.y });
-  const nand2 = buildNand(circuit, vcc, gnd, { x: pos.x + 150, y: pos.y + 150 });
-  const latch = buildSrLatch(circuit, vcc, gnd, { x: pos.x + 350, y: pos.y });
+export function buildDLatch(circuit: Circuit, pos: Point = { x: 0, y: 0 }): DLatch {
+  const notD = buildNot(circuit, pos);
+  const nand1 = buildNand(circuit, { x: pos.x + 150, y: pos.y });
+  const nand2 = buildNand(circuit, { x: pos.x + 150, y: pos.y + 150 });
+  const latch = buildSrLatch(circuit, { x: pos.x + 350, y: pos.y });
 
   wire(circuit, notD.in, nand1.a); // external D also feeds the inverter's input directly
   wire(circuit, notD.out, nand2.a);
@@ -57,10 +57,10 @@ export interface DFlipFlop {
  * explicit sequencing needed, it falls out of the topology, the same way
  * buildSrLatch's feedback loop needs no special-casing in the solver.
  */
-export function buildDFlipFlop(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): DFlipFlop {
-  const clkInv = buildNot(circuit, vcc, gnd, pos);
-  const master = buildDLatch(circuit, vcc, gnd, { x: pos.x + 150, y: pos.y });
-  const slave = buildDLatch(circuit, vcc, gnd, { x: pos.x + 800, y: pos.y });
+export function buildDFlipFlop(circuit: Circuit, pos: Point = { x: 0, y: 0 }): DFlipFlop {
+  const clkInv = buildNot(circuit, pos);
+  const master = buildDLatch(circuit, { x: pos.x + 150, y: pos.y });
+  const slave = buildDLatch(circuit, { x: pos.x + 800, y: pos.y });
 
   wire(circuit, clkInv.out, master.en); // master transparent while CLK=0
   wire(circuit, clkInv.in, slave.en); // slave transparent while CLK=1
@@ -86,9 +86,9 @@ export interface RegisterBit {
  * is how you get glitches in real hardware; gating the data input, as
  * every actual CPU register file does, is not).
  */
-export function buildRegisterBit(circuit: Circuit, vcc: Pin, gnd: Pin, pos: Point = { x: 0, y: 0 }): RegisterBit {
-  const mux = buildMux2(circuit, vcc, gnd, pos);
-  const dff = buildDFlipFlop(circuit, vcc, gnd, { x: pos.x + 1200, y: pos.y });
+export function buildRegisterBit(circuit: Circuit, pos: Point = { x: 0, y: 0 }): RegisterBit {
+  const mux = buildMux2(circuit, pos);
+  const dff = buildDFlipFlop(circuit, { x: pos.x + 1200, y: pos.y });
 
   wire(circuit, mux.out, dff.d);
   wire(circuit, dff.q, mux.in0); // WE=0: hold (feed Q back into D)

@@ -113,7 +113,7 @@ describe('buildAluSlice — 1-bit ADD/AND/OR/XOR selected by a 2-bit opcode', ()
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const slice = buildAluSlice(circuit, vcc, gnd);
+    const slice = buildAluSlice(circuit);
     const inA = makeInput(circuit, a);
     const inB = makeInput(circuit, b);
     const inCin = makeInput(circuit, cin);
@@ -134,9 +134,9 @@ describe('buildAluSlice — 1-bit ADD/AND/OR/XOR selected by a 2-bit opcode', ()
 
   it('cout always reflects the adder, independent of the selected op', () => {
     const circuit = new Circuit();
-    const vcc = makeSource(circuit, 1).pins.out;
-    const gnd = makeSource(circuit, 0).pins.out;
-    const slice = buildAluSlice(circuit, vcc, gnd);
+    makeSource(circuit, 1); // rail driver
+    makeSource(circuit, 0);
+    const slice = buildAluSlice(circuit);
     const inA = makeInput(circuit, 1);
     const inB = makeInput(circuit, 1);
     const inCin = makeInput(circuit, 0);

@@ -22,7 +22,7 @@ describe('D-latch — transparent while EN=1, holds while EN=0', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const latch = buildDLatch(circuit, vcc, gnd);
+    const latch = buildDLatch(circuit);
     const d = makeInput(circuit, 0);
     const en = makeInput(circuit, 0);
     wire(circuit, d.pins.out, latch.d);
@@ -60,7 +60,7 @@ describe('D flip-flop — captures D only on the CLK 0->1 edge', () => {
     const circuit = new Circuit();
     const vcc = makeSource(circuit, 1).pins.out;
     const gnd = makeSource(circuit, 0).pins.out;
-    const dff = buildDFlipFlop(circuit, vcc, gnd);
+    const dff = buildDFlipFlop(circuit);
     const d = makeInput(circuit, 0);
     const clk = makeInput(circuit, 0);
     wire(circuit, d.pins.out, dff.d);
@@ -103,9 +103,9 @@ describe('D flip-flop — captures D only on the CLK 0->1 edge', () => {
 describe('register bit — writes on WE=1, re-latches its own Q on WE=0', () => {
   it('is a write-gated D flip-flop, not a clock-gated one', () => {
     const circuit = new Circuit();
-    const vcc = makeSource(circuit, 1).pins.out;
-    const gnd = makeSource(circuit, 0).pins.out;
-    const bit = buildRegisterBit(circuit, vcc, gnd);
+    makeSource(circuit, 1); // rail driver
+    makeSource(circuit, 0);
+    const bit = buildRegisterBit(circuit);
     const d = makeInput(circuit, 0);
     const we = makeInput(circuit, 0);
     const clk = makeInput(circuit, 0);

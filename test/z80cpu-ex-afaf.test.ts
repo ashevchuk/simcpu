@@ -92,6 +92,10 @@ describe("buildZ80Cpu — x=00, z=0, y=1: EX AF,AF'", () => {
     wire(parent, fsmD6.pins.out, cpu.fsmD[6]!);
     const fsmD7 = makeInput(parent, 0);
     wire(parent, fsmD7.pins.out, cpu.fsmD[7]!);
+    const fsmD8 = makeInput(parent, 0);
+    wire(parent, fsmD8.pins.out, cpu.fsmD[8]!);
+    const fsmD9 = makeInput(parent, 0);
+    wire(parent, fsmD9.pins.out, cpu.fsmD[9]!);
 
     // A'/F' seeded to 0x55/0x81 — deliberately distinct from A/F's own
     // post-XOR/SCF values, so the swap shows up as a real value change,
@@ -165,6 +169,10 @@ describe("buildZ80Cpu — x=00, z=0, y=1: EX AF,AF'", () => {
       pulse(phaseClk); // -> EXEC5
       pulse(dataClk);
       pulse(phaseClk); // -> EXEC6
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC7 (no-op — ring widen for DD/FD CB SET/RES/rot)
+      pulse(dataClk);
+      pulse(phaseClk); // -> EXEC8 (ditto)
       pulse(dataClk);
       pulse(phaseClk); // -> FETCH (next opcode)
       pulse(dataClk);

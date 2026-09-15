@@ -1,6 +1,6 @@
-import { Circuit } from './Circuit.js';
-import { UnionFind } from './UnionFind.js';
-import type { Level, NetMap, RamComponent, SimState, TransistorComponent } from './types.js';
+import { Circuit, currentStructureVersion } from './Circuit.js';
+import { KEY_DATA, KEY_STATUS } from '../machine/memoryMap.js';
+import type { Level, NetMap, RamComponent, SimState } from './types.js';
 
 /**
  * Switch-level relaxation solver.
@@ -25,100 +25,412 @@ import type { Level, NetMap, RamComponent, SimState, TransistorComponent } from 
  * models the parasitic capacitance that lets a floating CMOS node
  * "remember" the last level it was driven to, which is exactly how an SR
  * latch built from cross-coupled transistors holds state with no dedicated
- * memory primitive.
+ * memory primitive. "Previous value" means a majority vote among every
+ * group member's own remembered level, not an arbitrary member's — see the
+ * fallback's own comment below for why a naive pick reliably corrupts a
+ * live signal's history the first time an always-floating, never-driven
+ * net happens to merge into its group.
+ *
+ * A group driven by two conflicting forced levels is `contended`, and
+ * *always* resolves to `Z` immediately, never a vote — an actual short is
+ * exactly the case a vote must not rescue with a concrete guess: this
+ * project's own `ram.test.ts` and stub-ROM decoder tests both depend on
+ * genuine contention reading as `Z` (0) on every single pass, not
+ * whichever value's history happens to be more entrenched.
  *
  * RamComponent (see types.ts) is the one deliberate exception to "every
  * active device is a transistor" — see "Real RAM" in ARCHITECTURE.md for
- * why. Its read side (`computeRamReadForces`) plugs into this same
- * per-iteration force-resolution as an *additional conditional driver*,
- * exactly like a transistor's conduction: recomputed every pass from the
- * current `levelOf`, because whether it's actually driving (its `oe`) may
- * itself still be settling. Its write side (`applyRamWrites`) is
- * fundamentally different — a `clk` rising edge is a *fact about this tick
- * relative to the previous one*, not something a within-tick relaxation
- * pass can discover — so it runs once, after the loop below has already
- * settled, comparing `prev`'s levels to this call's final ones, and directly
- * mutates the RAM component's own `bytes` (the only side effect anywhere in
- * this file; everything else here computes a new SimState without touching
- * the circuit).
+ * why. Its read side plugs into this same per-iteration force-resolution as
+ * an *additional conditional driver*, exactly like a transistor's
+ * conduction: recomputed every pass from the current levels, because
+ * whether it's actually driving (its `oe`) may itself still be settling.
+ * Its write side (`applyRamWrites`) is fundamentally different — a `clk`
+ * rising edge is a *fact about this tick relative to the previous one*, not
+ * something a within-tick relaxation pass can discover — so it runs once,
+ * after the loop below has already settled, comparing `prev`'s levels to
+ * this call's final ones, and directly mutates the RAM component's own
+ * `bytes` (the only side effect anywhere in this file; everything else
+ * here computes a new SimState without touching the circuit).
+ *
+ * Hot-path shape: nets are indexed once per `step()` into dense parallel
+ * arrays (levels, driver bitmasks, Int32Array union-find). Transistor pin
+ * → net lookups happen once up front, not once per relaxation pass — on a
+ * ~67k-transistor Z80 composite that alone was the difference between
+ * ~670ms/tick and something tests can finish in a tolerable time.
+ *
+ * Across ticks on an unchanged netlist (the common case: flatten +
+ * computeNets both hit their structure-version caches, only Input values
+ * flip), the transistor/RAM index and union-find scratch buffers are
+ * reused via a per-Circuit WeakMap — rebuilding ~67k pin→net lookups every
+ * tick was still a measurable fraction of step time after the dense-array
+ * rewrite. Driver bitmasks are refreshed every tick (Inputs change). When
+ * the caller threads the previous `SimState` straight back in (harness /
+ * editor tick loops), seeding `cur[]` also skips ~34k `Map.get`s by copying
+ * the dense levels retained alongside that Map's identity.
  */
+
+type TransistorIdx = { isN: boolean; gate: number; drain: number; source: number };
+type RamIdx = {
+  oe: number;
+  we: number;
+  addr: number[];
+  data: number[];
+  ram: RamComponent;
+};
+
+type StepStructureCache = {
+  structureVersion: number;
+  netMap: NetMap;
+  netIds: string[];
+  indexOf: Map<string, number>;
+  transistors: TransistorIdx[];
+  ramIdx: RamIdx[];
+  rams: RamComponent[];
+  driverPins: { netIdx: number; comp: { value: 0 | 1 } }[];
+  parent: Int32Array;
+  rootOf: Int32Array;
+  head: Int32Array;
+  link: Int32Array;
+  ramMask: Uint8Array;
+  driverMask: Uint8Array;
+  hist: Level[];
+  histLen: Uint8Array;
+  histStart: Uint8Array;
+  transitionsInWindow: Uint8Array;
+  gaveUp: Uint8Array;
+  cur: Level[];
+  nxt: Level[];
+  /** Identity of the `levelOf` Map last returned from `step` on this cache. */
+  lastLevelOf: Map<string, Level> | null;
+  /** Dense copy of that Map's levels, parallel to `netIds`. */
+  lastLevels: Level[];
+};
+
+const stepStructureCache = new WeakMap<Circuit, StepStructureCache>();
+const HISTORY_WINDOW = 16;
+const WINDOW_FLIP_LIMIT = 5;
+
+function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache {
+  const version = currentStructureVersion();
+  const hit = stepStructureCache.get(circuit);
+  if (hit && hit.structureVersion === version && hit.netMap === netMap) return hit;
+
+  const netIds = [...netMap.pinsOf.keys()];
+  const n = netIds.length;
+  const indexOf = new Map<string, number>();
+  for (let i = 0; i < n; i++) indexOf.set(netIds[i]!, i);
+
+  const transistors: TransistorIdx[] = [];
+  const rams: RamComponent[] = [];
+  const ramIdx: RamIdx[] = [];
+  const driverPins: { netIdx: number; comp: { value: 0 | 1 } }[] = [];
+
+  for (const c of circuit.components.values()) {
+    if (c.kind === 'source' || c.kind === 'input') {
+      const net = netMap.netOf.get(c.pins.out.id);
+      if (!net) continue;
+      const i = indexOf.get(net);
+      if (i === undefined) continue;
+      driverPins.push({ netIdx: i, comp: c });
+    } else if (c.kind === 'transistor') {
+      const gate = indexOf.get(netMap.netOf.get(c.pins.gate.id)!);
+      const drain = indexOf.get(netMap.netOf.get(c.pins.drain.id)!);
+      const source = indexOf.get(netMap.netOf.get(c.pins.source.id)!);
+      if (gate === undefined || drain === undefined || source === undefined) continue;
+      transistors.push({ isN: c.type === 'N', gate, drain, source });
+    } else if (c.kind === 'ram') {
+      rams.push(c);
+      const oeNet = netMap.netOf.get(c.pins.oe!.id);
+      const weNet = netMap.netOf.get(c.pins.we!.id);
+      const oe = oeNet !== undefined ? indexOf.get(oeNet) : undefined;
+      const we = weNet !== undefined ? indexOf.get(weNet) : undefined;
+      if (oe === undefined || we === undefined) continue;
+      const addr: number[] = [];
+      const data: number[] = [];
+      let ok = true;
+      for (let i = 0; i < c.addrBits; i++) {
+        const net = netMap.netOf.get(c.pins[`addr${i}`]!.id);
+        const idx = net !== undefined ? indexOf.get(net) : undefined;
+        if (idx === undefined) {
+          ok = false;
+          break;
+        }
+        addr.push(idx);
+      }
+      for (let i = 0; i < c.dataBits; i++) {
+        const net = netMap.netOf.get(c.pins[`data${i}`]!.id);
+        const idx = net !== undefined ? indexOf.get(net) : undefined;
+        if (idx === undefined) {
+          ok = false;
+          break;
+        }
+        data.push(idx);
+      }
+      if (ok) ramIdx.push({ oe, we, addr, data, ram: c });
+    }
+  }
+
+  const built: StepStructureCache = {
+    structureVersion: version,
+    netMap,
+    netIds,
+    indexOf,
+    transistors,
+    ramIdx,
+    rams,
+    driverPins,
+    parent: new Int32Array(n),
+    rootOf: new Int32Array(n),
+    head: new Int32Array(n),
+    link: new Int32Array(n),
+    ramMask: new Uint8Array(n),
+    driverMask: new Uint8Array(n),
+    hist: new Array<Level>(n * HISTORY_WINDOW),
+    histLen: new Uint8Array(n),
+    histStart: new Uint8Array(n),
+    transitionsInWindow: new Uint8Array(n),
+    gaveUp: new Uint8Array(n),
+    cur: new Array(n),
+    nxt: new Array(n),
+    lastLevelOf: null,
+    lastLevels: new Array(n),
+  };
+  stepStructureCache.set(circuit, built);
+  return built;
+}
+
 export function step(
   circuit: Circuit,
   netMap: NetMap,
   prev: SimState,
   maxIterations = 64,
 ): SimState {
-  const netIds = [...netMap.pinsOf.keys()];
-  const drivers = computeDrivers(circuit, netMap);
+  const cache = getStepStructure(circuit, netMap);
+  const {
+    netIds,
+    transistors,
+    ramIdx,
+    rams,
+    driverPins,
+    parent,
+    rootOf,
+    head,
+    link,
+    ramMask,
+    driverMask,
+    hist,
+    histLen,
+    histStart,
+    transitionsInWindow,
+    gaveUp,
+  } = cache;
+  const n = netIds.length;
 
-  let levelOf = new Map<string, Level>(prev.levelOf);
-  for (const id of netIds) if (!levelOf.has(id)) levelOf.set(id, 'Z');
-
-  const transistors: TransistorComponent[] = [];
-  const rams: RamComponent[] = [];
-  for (const c of circuit.components.values()) {
-    if (c.kind === 'transistor') transistors.push(c);
-    else if (c.kind === 'ram') rams.push(c);
+  // Dense level buffers. Encoding stays Level (0|1|'Z') — the API contract
+  // — but parallel arrays beat Map.get on every net, every pass.
+  let cur = cache.cur;
+  let nxt = cache.nxt;
+  if (prev.levelOf === cache.lastLevelOf) {
+    // Same Map object this cache handed out last tick — copy densified
+    // levels instead of re-walking ~34k string keys.
+    const prevLevels = cache.lastLevels;
+    for (let i = 0; i < n; i++) cur[i] = prevLevels[i]!;
+  } else {
+    for (let i = 0; i < n; i++) cur[i] = prev.levelOf.get(netIds[i]!) ?? 'Z';
   }
+  // Driver bitmask per net: bit0 = forced 0, bit1 = forced 1. Both bits set
+  // is a short. Inputs can flip between ticks, so this is refreshed every
+  // step from the cached pin list; RAM's own conditional drive is OR'd in
+  // per pass below.
+  driverMask.fill(0);
+  for (const d of driverPins) driverMask[d.netIdx]! |= d.comp.value === 1 ? 2 : 1;
 
-  let contended = new Set<string>();
+  // Oscillation bookkeeping is per-step (same semantics as a fresh buffer).
+  histLen.fill(0);
+  histStart.fill(0);
+  transitionsInWindow.fill(0);
+  gaveUp.fill(0);
+
+  let contendedIdx = new Set<number>();
   let iterations = 0;
   let changed = true;
+
+  const find = (x: number): number => {
+    let r = x;
+    while (parent[r] !== r) r = parent[r]!;
+    let cur = x;
+    while (parent[cur] !== r) {
+      const next = parent[cur]!;
+      parent[cur] = r;
+      cur = next;
+    }
+    return r;
+  };
 
   while (changed && iterations < maxIterations) {
     iterations += 1;
 
-    // Union nets connected by currently-conducting transistors.
-    const uf = new UnionFind();
-    for (const id of netIds) uf.find(id);
+    for (let i = 0; i < n; i++) parent[i] = i;
     for (const t of transistors) {
-      const gateNet = netMap.netOf.get(t.pins.gate.id);
-      const gateLevel = gateNet ? levelOf.get(gateNet) : undefined;
-      const conducts = t.type === 'N' ? gateLevel === 1 : gateLevel === 0;
+      const gateLevel = cur[t.gate];
+      const conducts = t.isN ? gateLevel === 1 : gateLevel === 0;
       if (!conducts) continue;
-      const dNet = netMap.netOf.get(t.pins.drain.id);
-      const sNet = netMap.netOf.get(t.pins.source.id);
-      if (dNet && sNet) uf.union(dNet, sNet);
+      const ra = find(t.drain);
+      const rb = find(t.source);
+      if (ra !== rb) parent[ra] = rb;
     }
 
-    const ramForces = computeRamReadForces(rams, netMap, levelOf);
+    // RAM read forces for this pass — same conditional-driver role as a
+    // conducting transistor, recomputed every iteration.
+    ramMask.fill(0);
+    for (const r of ramIdx) {
+      if (cur[r.oe] !== 1) continue;
+      if (cur[r.we] === 1) continue;
+      let addr = 0;
+      let resolved = true;
+      for (let i = 0; i < r.addr.length; i++) {
+        const lvl = cur[r.addr[i]!];
+        if (lvl !== 0 && lvl !== 1) {
+          resolved = false;
+          break;
+        }
+        if (lvl === 1) addr |= 1 << i;
+      }
+      if (!resolved) continue;
+      const byte = r.ram.bytes[addr] ?? 0;
+      for (let i = 0; i < r.data.length; i++) {
+        const bit = ((byte >> i) & 1) as 0 | 1;
+        ramMask[r.data[i]!]! |= bit === 1 ? 2 : 1;
+      }
+    }
 
-    const nextLevel = new Map<string, Level>();
-    const nextContended = new Set<string>();
-    for (const members of uf.groups().values()) {
-      const forced = new Set<Level>();
-      for (const m of members) {
-        const ds = drivers.get(m);
-        if (ds) for (const d of ds) forced.add(d);
-        const rd = ramForces.get(m);
-        if (rd) for (const d of rd) forced.add(d);
+    for (let i = 0; i < n; i++) rootOf[i] = find(i);
+    head.fill(-1);
+    for (let i = 0; i < n; i++) {
+      const r = rootOf[i]!;
+      link[i] = head[r]!;
+      head[r] = i;
+    }
+
+    const nextContended = new Set<number>();
+    for (let r = 0; r < n; r++) {
+      let m = head[r]!;
+      if (m < 0) continue;
+
+      // Collect forced mask across the group (drivers ∪ RAM).
+      let forced = 0;
+      for (let x = m; x >= 0; x = link[x]!) {
+        forced |= driverMask[x]! | ramMask[x]!;
       }
+
       let value: Level;
-      if (forced.size > 1) {
+      if (forced === 1) {
+        value = 0;
+      } else if (forced === 2) {
+        value = 1;
+      } else if (forced === 3) {
+        // Two genuinely conflicting drivers — unconditional Z, no vote.
+        // See the long comment in the previous Map-based implementation;
+        // the semantics here are identical.
         value = 'Z';
-        for (const m of members) nextContended.add(m);
-      } else if (forced.size === 1) {
-        value = [...forced][0] as Level;
+        for (let x = m; x >= 0; x = link[x]!) nextContended.add(x);
       } else {
-        // Floating group: capacitive hold of whatever this net settled to before.
-        value = levelOf.get(members[0] as string) ?? 'Z';
+        // forced === 0: capacitive hold via majority vote among remembered
+        // non-Z members (excluding proven oscillators).
+        let soleValue: Level | undefined;
+        let soleCount = 0;
+        let count0 = 0;
+        let count1 = 0;
+        let multi = false;
+        for (let x = m; x >= 0; x = link[x]!) {
+          if (gaveUp[x]) continue;
+          const v = cur[x];
+          if (v === undefined || v === 'Z') continue;
+          if (!multi) {
+            if (soleValue === undefined) {
+              soleValue = v;
+              soleCount = 1;
+            } else if (v === soleValue) {
+              soleCount++;
+            } else {
+              multi = true;
+              count0 = soleValue === 0 ? soleCount : 0;
+              count1 = soleValue === 1 ? soleCount : 0;
+              if (v === 0) count0++;
+              else count1++;
+            }
+          } else if (v === 0) {
+            count0++;
+          } else {
+            count1++;
+          }
+        }
+        if (!multi) {
+          value = soleValue ?? 'Z';
+        } else if (count0 > count1) {
+          value = 0;
+        } else if (count1 > count0) {
+          value = 1;
+        } else {
+          value = 'Z';
+        }
+
+        // Oscillation bookkeeping — circular buffer, no Array.shift().
+        for (let x = m; x >= 0; x = link[x]!) {
+          const len = histLen[x]!;
+          if (len > 0) {
+            const lastIdx = (histStart[x]! + len - 1) % HISTORY_WINDOW;
+            const prevH = hist[x * HISTORY_WINDOW + lastIdx];
+            if (prevH !== undefined && prevH !== value) {
+              transitionsInWindow[x]!++;
+            }
+          }
+          if (len < HISTORY_WINDOW) {
+            hist[x * HISTORY_WINDOW + ((histStart[x]! + len) % HISTORY_WINDOW)] = value;
+            histLen[x] = len + 1;
+          } else {
+            const start = histStart[x]!;
+            const evicted = hist[x * HISTORY_WINDOW + start];
+            hist[x * HISTORY_WINDOW + start] = value;
+            histStart[x] = (start + 1) % HISTORY_WINDOW;
+            const nextOldest = hist[x * HISTORY_WINDOW + histStart[x]!];
+            if (nextOldest !== undefined && evicted !== nextOldest) {
+              transitionsInWindow[x] = Math.max(0, transitionsInWindow[x]! - 1);
+            }
+          }
+          if (transitionsInWindow[x]! > WINDOW_FLIP_LIMIT) gaveUp[x] = 1;
+        }
       }
-      for (const m of members) nextLevel.set(m, value);
+
+      for (let x = m; x >= 0; x = link[x]!) nxt[x] = value;
     }
 
     changed = false;
-    for (const id of netIds) {
-      if (levelOf.get(id) !== (nextLevel.get(id) ?? 'Z')) {
+    for (let i = 0; i < n; i++) {
+      if (cur[i] !== nxt[i]) {
         changed = true;
         break;
       }
     }
-
-    levelOf = nextLevel;
-    contended = nextContended;
+    const swap = cur;
+    cur = nxt;
+    nxt = swap;
+    contendedIdx = nextContended;
   }
 
+  const levelOf = new Map<string, Level>();
+  const lastLevels = cache.lastLevels;
+  for (let i = 0; i < n; i++) {
+    const v = cur[i]!;
+    levelOf.set(netIds[i]!, v);
+    lastLevels[i] = v;
+  }
+  cache.lastLevelOf = levelOf;
+  const contended = new Set<string>();
+  for (const i of contendedIdx) contended.add(netIds[i]!);
+
   applyRamWrites(rams, netMap, prev.levelOf, levelOf);
+  applyRamKeyClearOnRead(rams, netMap, levelOf);
 
   return { levelOf, contended, settled: !changed, iterations };
 }
@@ -137,39 +449,6 @@ function resolvedAddr(ram: RamComponent, netMap: NetMap, levelOf: Map<string, Le
     if (lvl === 1) addr |= 1 << i;
   }
   return addr;
-}
-
-/**
- * RAM's read side, recomputed every relaxation pass like a transistor's own
- * conduction: while `oe=1` and `we` is not 1 (write mode suppresses the
- * read-drive entirely — real RAM chips define asserting both as invalid,
- * and "don't fight your own write" is the least surprising choice here) and
- * every address bit is concretely resolved, `bytes[addr]` is forced onto
- * the data pins for this pass, exactly like an enabled `buildTriStateBuffer`
- * bank would. An unresolved address (still settling, or never driven at
- * all) drives nothing — the data pins fall back to whatever else drives
- * them, or float, same as a tri-state buffer whose own inputs aren't known
- * yet.
- */
-function computeRamReadForces(rams: RamComponent[], netMap: NetMap, levelOf: Map<string, Level>): Map<string, Set<Level>> {
-  const forces = new Map<string, Set<Level>>();
-  for (const ram of rams) {
-    if (netLevel(netMap, levelOf, ram.pins.oe!.id) !== 1) continue;
-    if (netLevel(netMap, levelOf, ram.pins.we!.id) === 1) continue;
-    const addr = resolvedAddr(ram, netMap, levelOf);
-    if (addr === undefined) continue;
-
-    const byte = ram.bytes[addr] ?? 0;
-    for (let i = 0; i < ram.dataBits; i++) {
-      const net = netMap.netOf.get(ram.pins[`data${i}`]!.id);
-      if (!net) continue;
-      const bit = ((byte >> i) & 1) as Level;
-      const set = forces.get(net);
-      if (set) set.add(bit);
-      else forces.set(net, new Set([bit]));
-    }
-  }
-  return forces;
 }
 
 /**
@@ -207,23 +486,34 @@ function applyRamWrites(rams: RamComponent[], netMap: NetMap, prev: Map<string, 
   }
 }
 
-// A net id maps to *every* distinct forced level driving it. Almost always
-// a singleton set; two entries means two sources/inputs land on the same
-// net (whether by a direct wire or by transistors merging them later) —
-// exactly the short circuit `step()` needs to detect, so this must not
-// collapse multiple drivers on one net down to a single value.
-function computeDrivers(circuit: Circuit, netMap: NetMap): Map<string, Set<Level>> {
-  const drivers = new Map<string, Set<Level>>();
-  for (const c of circuit.components.values()) {
-    if (c.kind === 'source' || c.kind === 'input') {
-      const net = netMap.netOf.get(c.pins.out.id);
-      if (!net) continue;
-      const set = drivers.get(net);
-      if (set) set.add(c.value);
-      else drivers.set(net, new Set([c.value]));
-    }
+/**
+ * Gate-path clear-on-read for keyboard MMIO: when OE is driving a resolved
+ * read of KEY_DATA (and WE is not asserted), clear KEY_STATUS — same side
+ * effect softZ80 SoftMemHooks provide. Called once after settle so address
+ * flicker during relaxation does not spuriously clear.
+ */
+export function applyRamKeyClearOnRead(
+  rams: RamComponent[],
+  netMap: NetMap,
+  settled: Map<string, Level>,
+): void {
+  for (const ram of rams) {
+    if (netLevel(netMap, settled, ram.pins.oe!.id) !== 1) continue;
+    if (netLevel(netMap, settled, ram.pins.we!.id) === 1) continue;
+    const addr = resolvedAddr(ram, netMap, settled);
+    if (addr === undefined) continue;
+    clearKeyStatusOnDataRead(ram.bytes, addr);
   }
-  return drivers;
+}
+
+/**
+ * If `addr` is KEY_DATA, clear KEY_STATUS in `bytes`. Exported for unit tests
+ * and shared with the gate solver's post-settle MMIO hook.
+ */
+export function clearKeyStatusOnDataRead(bytes: Uint8Array, addr: number): void {
+  if (addr !== KEY_DATA) return;
+  if (KEY_STATUS >= bytes.length) return;
+  bytes[KEY_STATUS] = 0;
 }
 
 export function initialState(): SimState {
