@@ -21,7 +21,51 @@ import type {
 } from './types.js';
 
 function pin(componentId: string, name: string, pos: Point, dx: number, dy: number): Pin {
-  return { id: `${componentId}:${name}`, componentId, name, pos: { x: pos.x + dx, y: pos.y + dy } };
+  return {
+    id: componentId + ':' + name,
+    componentId,
+    name,
+    pos: { x: pos.x + dx, y: pos.y + dy },
+  };
+}
+
+/** Precomputed pin dy offsets for makeChipInstance — keyed by port count. */
+const chipPinDyByCount: number[][] = [];
+function chipPinDys(portCount: number): number[] {
+  let dys = chipPinDyByCount[portCount];
+  if (dys) return dys;
+  dys = new Array(portCount);
+  const mid = (portCount - 1) / 2;
+  for (let i = 0; i < portCount; i++) dys[i] = (i - mid) * 20;
+  chipPinDyByCount[portCount] = dys;
+  return dys;
+}
+
+/**
+ * Per-circuit VCC/GND pins for railPin() when a caller needs a wireable Pin
+ * on the rail (e.g. mux in1 = 0). Prefer an existing Source; else one Label.
+ */
+const circuitRailPins = new WeakMap<Circuit, { VCC?: Pin; GND?: Pin }>();
+
+function getCircuitRailPin(circuit: Circuit, rail: 'VCC' | 'GND', at: Point): Pin {
+  let cached = circuitRailPins.get(circuit);
+  if (!cached) {
+    cached = {};
+    circuitRailPins.set(circuit, cached);
+  }
+  const hit = cached[rail];
+  if (hit) return hit;
+
+  const want = rail === 'VCC' ? 1 : 0;
+  for (const c of circuit.components.values()) {
+    if (c.kind === 'source' && c.value === want) {
+      cached[rail] = c.pins.out;
+      return c.pins.out;
+    }
+  }
+  const lbl = makeLabel(circuit, rail, at);
+  cached[rail] = lbl.pins.net;
+  return lbl.pins.net;
 }
 
 // Fixed pin offsets from a component's center, shared by the factories below
@@ -41,7 +85,9 @@ export function makeTransistor(
   pos: Point = { x: 0, y: 0 },
 ): TransistorComponent {
   const id = nextId('t');
-  const L = LAYOUT.transistor;
+  const x = pos.x;
+  const y = pos.y;
+  // Inline fixed LAYOUT.transistor offsets — hot path for every gate builder.
   const c: TransistorComponent = {
     id,
     kind: 'transistor',
@@ -49,9 +95,9 @@ export function makeTransistor(
     pos,
     rotation: 0,
     pins: {
-      gate: pin(id, 'gate', pos, ...L.gate),
-      drain: pin(id, 'drain', pos, ...L.drain),
-      source: pin(id, 'source', pos, ...L.source),
+      gate: { id: id + ':gate', componentId: id, name: 'gate', pos: { x: x - 20, y } },
+      drain: { id: id + ':drain', componentId: id, name: 'drain', pos: { x, y: y - 20 } },
+      source: { id: id + ':source', componentId: id, name: 'source', pos: { x, y: y + 20 } },
     },
   };
   circuit.addComponent(c);
@@ -99,26 +145,29 @@ export function makeLabel(circuit: Circuit, name: string, pos: Point = { x: 0, y
     kind: 'label',
     name,
     pos,
-    pins: { net: pin(id, 'net', pos, ...LAYOUT.label.net) },
+    pins: {
+      net: { id: id + ':net', componentId: id, name: 'net', pos: { x: pos.x, y: pos.y } },
+    },
   };
   circuit.addComponent(c);
   return c;
 }
 
 /**
- * Attach a pin to the global VCC or GND rail via a local Label — same
- * computeNets() join that Source(1)/Source(0) and Label("VCC"|"GND") share.
- * Short stub wire only; no cross-canvas power spaghetti. The circuit still
- * needs at least one Source(1) and Source(0) somewhere to *drive* the rail.
+ * Attach a pin to the global VCC or GND rail — same computeNets() join that
+ * Source(1)/Source(0) and Label("VCC"|"GND") share. Reuses one Source (or,
+ * if none exist yet, one Label) per rail per circuit so Z80 place does not
+ * allocate tens of thousands of stub Labels. Electrically identical; wires
+ * may span to the shared rail pin. The circuit still needs at least one
+ * Source(1) and Source(0) somewhere to *drive* the rail.
  */
 export function tiePowerRail(circuit: Circuit, rail: 'VCC' | 'GND', p: Pin): void {
-  const lbl = makeLabel(circuit, rail, { x: p.pos.x, y: p.pos.y });
-  wire(circuit, p, lbl.pins.net);
+  wire(circuit, p, getCircuitRailPin(circuit, rail, p.pos));
 }
 
-/** A local Label pin already on the VCC/GND rail — use when you need a Pin value (e.g. mux in1 = 0) without reaching for a distant Source. */
+/** A pin already on the VCC/GND rail — use when you need a Pin value (e.g. mux in1 = 0) without reaching for a distant Source. */
 export function railPin(circuit: Circuit, rail: 'VCC' | 'GND', pos: Point): Pin {
-  return makeLabel(circuit, rail, pos).pins.net;
+  return getCircuitRailPin(circuit, rail, pos);
 }
 
 export function makeProbe(circuit: Circuit, pos: Point = { x: 0, y: 0 }, label?: string): ProbeComponent {
@@ -166,12 +215,21 @@ export function chipInstanceHeight(portCount: number): number {
  */
 export function makeChipInstance(circuit: Circuit, def: ChipDef, pos: Point = { x: 0, y: 0 }): ChipInstanceComponent {
   const id = nextId('chip');
+  const ports = def.ports;
+  const n = ports.length;
+  const dys = chipPinDys(n);
   const pins: Record<string, Pin> = {};
-  const n = def.ports.length;
-  def.ports.forEach((name, i) => {
-    const dy = (i - (n - 1) / 2) * 20;
-    pins[name] = pin(id, name, pos, -40, dy);
-  });
+  const px = pos.x - 40;
+  const py = pos.y;
+  for (let i = 0; i < n; i++) {
+    const name = ports[i]!;
+    pins[name] = {
+      id: id + ':' + name,
+      componentId: id,
+      name,
+      pos: { x: px, y: py + dys[i]! },
+    };
+  }
   const c: ChipInstanceComponent = { id, kind: 'chip', defId: def.id, pos, pins };
   circuit.addComponent(c);
   return c;

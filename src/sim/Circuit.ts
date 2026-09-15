@@ -57,10 +57,27 @@ export class Circuit {
   readonly components = new Map<string, Component>();
   readonly wires = new Map<string, Wire>();
   private netsCache: { version: number; result: NetMap } | undefined;
+  /** Nested beginBatch/endBatch depth — defer structure-version bumps while > 0. */
+  private batchDepth = 0;
+
+  /**
+   * Defer bumpStructureVersion across many addComponent/addWire calls.
+   * endBatch bumps once when the outermost batch closes. Safe for builders
+   * that do not read flatten/computeNets caches mid-construction.
+   */
+  beginBatch(): void {
+    this.batchDepth += 1;
+  }
+
+  endBatch(): void {
+    if (this.batchDepth <= 0) return;
+    this.batchDepth -= 1;
+    if (this.batchDepth === 0) bumpStructureVersion();
+  }
 
   addComponent(c: Component): void {
     this.components.set(c.id, c);
-    bumpStructureVersion();
+    if (this.batchDepth === 0) bumpStructureVersion();
   }
 
   /** Insert an already-built Component verbatim, no version bump — the
@@ -104,9 +121,11 @@ export class Circuit {
   }
 
   addWire(a: string, b: string, waypoints?: Point[]): Wire {
-    const w: Wire = waypoints && waypoints.length ? { id: nextId('w'), a, b, waypoints } : { id: nextId('w'), a, b };
-    this.wires.set(w.id, w);
-    bumpStructureVersion();
+    const id = nextId('w');
+    const w: Wire =
+      waypoints !== undefined && waypoints.length > 0 ? { id, a, b, waypoints } : { id, a, b };
+    this.wires.set(id, w);
+    if (this.batchDepth === 0) bumpStructureVersion();
     return w;
   }
 

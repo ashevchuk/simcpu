@@ -322,4 +322,88 @@ describe('mini assembler', () => {
     expect(r.errors).toEqual([]);
     expect([...r.bytes]).toEqual([0x76, 0x00, 0x76, 0x00]);
   });
+
+  it('nested MACRO invocation expands inner macros', () => {
+    const r = assemble(
+      `
+      MACRO INNER x
+        LD A,x
+      ENDM
+      MACRO OUTER x,y
+        INNER x
+        LD B,y
+      ENDM
+      OUTER 0x11,0x22
+      `,
+    );
+    expect(r.errors).toEqual([]);
+    expect([...r.bytes]).toEqual([0x3e, 0x11, 0x06, 0x22]);
+  });
+
+  it('rejects recursive MACRO cycles', () => {
+    const r = assemble(
+      `
+      MACRO A
+        B
+      ENDM
+      MACRO B
+        A
+      ENDM
+      A
+      `,
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /recursive MACRO/i.test(e))).toBe(true);
+  });
+
+  it('evaluates * / with standard precedence (before + -)', () => {
+    const r = assemble(
+      `
+      LD A,2*3+1
+      LD B,2+3*4
+      LD C,(1+2)*3
+      LD D,10/3
+      EQU N,2*3+1
+      LD E,N
+      `,
+    );
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect([...r.bytes]).toEqual([
+      0x3e, 0x07, // 2*3+1 = 7
+      0x06, 0x0e, // 2+3*4 = 14
+      0x0e, 0x09, // (1+2)*3 = 9
+      0x16, 0x03, // 10/3 = 3
+      0x1e, 0x07, // EQU N
+    ]);
+  });
+
+  it('PHASE sets logical label PC; bytes still emit at physical PC', () => {
+    const r = assemble(
+      `
+      ORG 0x100
+      PHASE 0x8000
+      here:
+        LD A,1
+        DW here
+        JR here
+      DEPHASE
+      after:
+        LD HL,here
+        LD A,LOW after
+      `,
+      0x100,
+    );
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+    // phys 0x100: LD A,1; DW here(=0x8000); JR here (log next 0x8006 → disp -6 = 0xFA)
+    // phys 0x106 after DEPHASE: LD HL,here; LD A,LOW after (after=0x106)
+    expect([...r.bytes]).toEqual([
+      0x3e, 0x01,
+      0x00, 0x80,
+      0x18, 0xfa,
+      0x21, 0x00, 0x80,
+      0x3e, 0x06,
+    ]);
+  });
 });

@@ -24,7 +24,8 @@ console.log(
   (tBuild - t0).toFixed(0),
   'components',
   parent.components.size,
-  '(dominated by makeChipInstance / gate-builder loops)',
+  'wires',
+  parent.wires.size,
 );
 
 const t1 = performance.now();
