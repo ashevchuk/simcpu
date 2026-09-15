@@ -55,14 +55,12 @@ describe('mini BASIC', () => {
       70 END
     `);
     expect(cpu.halted).toBe(true);
-    // Skipped PRINT "NO" still reserved two FB cells at compile time.
-    expect(ram[FB_BASE]).toBe(0);
-    expect(ram[FB_BASE + 1]).toBe(0);
-    expect(ram[FB_BASE + 2]).toBe('A'.charCodeAt(0));
-    expect(ram[FB_BASE + 3]).toBe(5);
-    expect(ram[FB_BASE + 4]).toBe('B'.charCodeAt(0));
-    expect(ram[FB_BASE + 5]).toBe(0x20); // comma → space
-    expect(ram[FB_BASE + 6]).toBe(5);
+    // Runtime PRINT cursor: skipped PRINT "NO" does not consume FB slots.
+    expect(ram[FB_BASE]).toBe('A'.charCodeAt(0));
+    expect(ram[FB_BASE + 1]).toBe(5);
+    expect(ram[FB_BASE + 2]).toBe('B'.charCodeAt(0));
+    expect(ram[FB_BASE + 3]).toBe(0x20); // comma → space
+    expect(ram[FB_BASE + 4]).toBe(5);
   });
 
   it('supports IF comparisons <> < >', () => {
@@ -78,9 +76,23 @@ describe('mini BASIC', () => {
       90 END
     `);
     expect(cpu.halted).toBe(true);
-    // Skipped PRINT "X"/"Y"/"Z" each reserved one cell.
-    expect(ram[FB_BASE + 3]).toBe('O'.charCodeAt(0));
-    expect(ram[FB_BASE + 4]).toBe('K'.charCodeAt(0));
+    // Skipped PRINT branches leave no holes in the FB.
+    expect(ram[FB_BASE]).toBe('O'.charCodeAt(0));
+    expect(ram[FB_BASE + 1]).toBe('K'.charCodeAt(0));
+  });
+
+  it('IF skipping PRINT does not consume FB slots for skipped branch', () => {
+    const { ram, cpu } = runBasic(`
+      10 LET A=1
+      20 IF A=1 THEN 40
+      30 PRINT "SKIP"
+      40 PRINT "GO"
+      50 END
+    `);
+    expect(cpu.halted).toBe(true);
+    expect(ram[FB_BASE]).toBe('G'.charCodeAt(0));
+    expect(ram[FB_BASE + 1]).toBe('O'.charCodeAt(0));
+    expect(ram[FB_BASE + 2]).toBe(0);
   });
 
   it('supports FOR / NEXT loops', () => {
@@ -99,6 +111,46 @@ describe('mini BASIC', () => {
     expect(ram[0xc00]).toBe(3);
     expect(ram[FB_BASE]).toBe(3);
     expect(ram[0xc00 + ('I'.charCodeAt(0) - 65)]).toBe(3);
+  });
+
+  it('supports nested FOR / NEXT (bare NEXT closes innermost)', () => {
+    const { ram, cpu } = runBasic(
+      `
+      10 LET A=0
+      20 FOR I=1 TO 2
+      30 FOR J=1 TO 3
+      40 LET A=A+1
+      50 NEXT
+      60 NEXT I
+      70 PRINT A
+      80 END
+      `,
+      8000,
+    );
+    expect(cpu.halted).toBe(true);
+    expect(ram[0xc00]).toBe(6);
+    expect(ram[FB_BASE]).toBe(6);
+  });
+
+  it('supports var+var and number-var expressions', () => {
+    const { ram, cpu } = runBasic(`
+      10 LET A=10
+      20 LET B=3
+      30 LET C=A+B
+      40 LET D=20-B
+      50 LET E=5+A
+      60 PRINT C
+      70 PRINT D
+      80 PRINT E
+      90 END
+    `);
+    expect(cpu.halted).toBe(true);
+    expect(ram[0xc00 + 2]).toBe(13); // C
+    expect(ram[0xc00 + 3]).toBe(17); // D
+    expect(ram[0xc00 + 4]).toBe(15); // E
+    expect(ram[FB_BASE]).toBe(13);
+    expect(ram[FB_BASE + 1]).toBe(17);
+    expect(ram[FB_BASE + 2]).toBe(15);
   });
 
   it('supports INPUT via KEY_STATUS / KEY_DATA busy-wait', () => {

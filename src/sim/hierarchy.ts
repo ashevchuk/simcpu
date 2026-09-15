@@ -131,19 +131,6 @@ export function fold(
   instancePos: Point,
 ): FoldResult {
   if (selectedIds.size === 0) throw new Error('cannot fold an empty selection');
-  // `parent.components.delete(id)`/`parent.wires.delete(w.id)` below are
-  // raw Map mutations, bypassing Circuit's own removeComponent()/
-  // removeWire() (needed here since fold() moves entries into `internal`
-  // rather than discarding them) — every one of those bypasses the bump
-  // those tracked methods would otherwise do. In practice this function
-  // always ends up bumping anyway, incidentally, through `internal`'s own
-  // addComponent()/addWire() calls and `parent`'s own addWire() for
-  // reconnected crossing wires below (the shared counter doesn't care
-  // which Circuit's tracked method fired it) — but relying on that
-  // incidental coverage staying true through some future edit of this
-  // function is exactly the kind of assumption that quietly rots. One
-  // explicit bump here costs nothing and makes it not matter either way.
-  bumpStructureVersion();
   for (const id of selectedIds) {
     // A folded chip's internal circuit is one shared template every
     // instance's flatten() expands from — fine for transistors (each
@@ -158,30 +145,39 @@ export function fold(
     }
   }
 
-  const netMap = parent.computeNets(); // must run before any mutation below
+  // Nets *before* any mutation (and before bumping) — fold needs net ids for
+  // crossing wires / VCC·GND. Bumping first would only force a cold compute.
+  const netMap = parent.computeNets();
   const ownerOf = new Map<string, string>();
-  for (const p of parent.allPins()) ownerOf.set(p.id, p.componentId);
+  for (const c of parent.components.values()) {
+    for (const p of Object.values(c.pins) as Pin[]) ownerOf.set(p.id, c.id);
+  }
   const isSelected = (pinId: string) => selectedIds.has(ownerOf.get(pinId) ?? '');
 
+  // Batch-move selected components with addRawComponent (no per-id bump).
+  // Same for inside wires via addRawWire. One explicit bump at the end covers
+  // the raw Map deletes that bypass removeComponent()/removeWire().
   const internal = new Circuit();
   for (const id of selectedIds) {
     const c = parent.components.get(id);
     if (!c) throw new Error(`selected component not found: ${id}`);
     parent.components.delete(id);
-    internal.addComponent(c);
+    internal.addRawComponent(c);
   }
 
   const ports: string[] = [];
   const portByNet = new Map<string, { name: string; ioPinId: string }>();
   const pendingOutsideWires: { outsidePinId: string; portName: string }[] = [];
 
-  for (const w of [...parent.wires.values()]) {
+  // Delete while iterating — Map forbids only inserting unseen keys; deleting
+  // the current entry is fine and avoids copying ~50k wires on Z80 fold.
+  for (const w of parent.wires.values()) {
     const aIn = isSelected(w.a);
     const bIn = isSelected(w.b);
     if (aIn && bIn) {
       // Fully inside: moves into the chip's internals verbatim.
       parent.wires.delete(w.id);
-      internal.addWire(w.a, w.b);
+      internal.addRawWire(w);
       continue;
     }
     if (!aIn && !bIn) continue; // fully outside the selection, untouched
@@ -224,6 +220,7 @@ export function fold(
     if (instancePin) parent.addWire(outsidePinId, instancePin.id);
   }
 
+  bumpStructureVersion();
   return { def, instance };
 }
 

@@ -12,9 +12,9 @@ import type { Point } from './types.js';
  * nets become chip ports. RAM stays outside for the same reason `fold()`
  * refuses to fold it (shared `Uint8Array` across ChipDef instances).
  *
- * **Single instance only.** `buildZ80Cpu` uses global `tieToLabel` names
- * (`CLK`, `BUS0`, …) that `flatten()` does not namespace — a second folded
- * Z80 on the same top circuit would short those nets together.
+ * **Labels:** `flatten()` namespaces non-`VCC`/`GND` label names per chip
+ * instance, so multiple folded Z80s no longer short `CLK`/`BUS*`. Still
+ * prefer one machine per top circuit for the soft TTY / runner UX.
  */
 export function foldZ80CpuLeavingRam(
   parent: Circuit,
@@ -23,12 +23,13 @@ export function foldZ80CpuLeavingRam(
   instancePos: Point,
   name = 'Z80CPU',
 ): FoldResult {
+  // Build the selection Set in one pass. Callers often pass `newComponentIds`
+  // (already non-existent-before place); we still skip missing/RAM here so
+  // fold() does not need a second RAM scan beyond its own safety check.
   const selected = new Set<string>();
   for (const id of placedIds) {
     const c = parent.components.get(id);
-    if (!c) continue;
-    if (c.kind === 'ram') continue;
-    selected.add(id);
+    if (c !== undefined && c.kind !== 'ram') selected.add(id);
   }
   if (selected.size === 0) {
     throw new Error('foldZ80CpuLeavingRam: no non-RAM components to fold');
@@ -36,11 +37,20 @@ export function foldZ80CpuLeavingRam(
   return fold(parent, selected, name, library, instancePos);
 }
 
-/** Component ids present in `circuit` but not in `before`. */
+/**
+ * Component ids present in `circuit` but not in `before`.
+ * Prefer {@link newComponentIdSet} when feeding `foldZ80CpuLeavingRam`
+ * (avoids an intermediate array of ~40k ids on a 12-bit Z80 place).
+ */
 export function newComponentIds(circuit: Circuit, before: ReadonlySet<string>): string[] {
-  const out: string[] = [];
+  return [...newComponentIdSet(circuit, before)];
+}
+
+/** Same as {@link newComponentIds}, but as a Set (cheaper for fold). */
+export function newComponentIdSet(circuit: Circuit, before: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>();
   for (const id of circuit.components.keys()) {
-    if (!before.has(id)) out.push(id);
+    if (!before.has(id)) out.add(id);
   }
   return out;
 }

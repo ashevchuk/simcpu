@@ -1,7 +1,7 @@
 import { buildAlu, buildInstructionRegister, buildMinimalCpu, buildProgramCounter, buildRegister, buildRingCounter, buildStubRom, buildZ80Cpu } from './sim/blocks.js';
 import { ChipLibrary } from './sim/ChipLibrary.js';
 import { Circuit } from './sim/Circuit.js';
-import { foldZ80CpuLeavingRam, newComponentIds } from './sim/foldZ80.js';
+import { foldZ80CpuLeavingRam, newComponentIdSet } from './sim/foldZ80.js';
 import { flatten, fold, renamePort } from './sim/hierarchy.js';
 import { buildNot, makeInput, makeProbe, makeRam, makeSource, wire } from './sim/library.js';
 import {
@@ -408,7 +408,7 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
   // (RAM stays outside — see foldZ80CpuLeavingRam).
   const beforeIds = new Set(editor.circuit.components.keys());
   const cpu = buildZ80Cpu(editor.circuit, library, addrBits, program, pos);
-  const placedIds = newComponentIds(editor.circuit, beforeIds);
+  const placedIds = newComponentIdSet(editor.circuit, beforeIds);
 
   if (addrBits >= MACHINE_ADDR_BITS) {
     const simTick = () => {

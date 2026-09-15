@@ -164,4 +164,162 @@ describe('mini assembler', () => {
     expect(quiet.listing).toEqual([]);
     expect(bytesToHexPrompt(quiet.bytes, 2)).toBe('3e,00');
   });
+
+  it('evaluates expressions in immediates and EQU (+ - HIGH/LOW)', () => {
+    const r = assemble(
+      `
+      EQU BASE,0x1000
+      EQU LO,LOW BASE
+      EQU HI,HIGH(BASE)
+      EQU NEXT,BASE+1
+      LD A,LO
+      LD B,HI
+      LD C,BASE-0xFF0
+      LD HL,NEXT
+      LD A,HIGH 0xABCD
+      LD A,LOW(0xABCD)
+      `,
+      0,
+    );
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect([...r.bytes]).toEqual([
+      0x3e, 0x00, // LD A,LOW BASE
+      0x06, 0x10, // LD B,HIGH(BASE)
+      0x0e, 0x10, // LD C,BASE-0xFF0 → 0x10
+      0x21, 0x01, 0x10, // LD HL,BASE+1
+      0x3e, 0xab, // LD A,HIGH 0xABCD
+      0x3e, 0xcd, // LD A,LOW(0xABCD)
+    ]);
+  });
+
+  it('resolves forward label expressions in pass 2', () => {
+    const r = assemble(
+      `
+      LD A,HERE+1
+      LD B,LOW(HERE+1)
+      HERE:
+      NOP
+      DW HERE
+      DW HERE+1
+      `,
+      0,
+    );
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+    // LD A / LD B at 0..3; HERE at 4; HERE+1 = 5
+    expect([...r.bytes.slice(0, 5)]).toEqual([0x3e, 0x05, 0x06, 0x05, 0x00]);
+    expect([...r.bytes.slice(5, 9)]).toEqual([0x04, 0x00, 0x05, 0x00]);
+  });
+
+  it('ORG mid-stream fills gaps with zeros', () => {
+    const r = assemble(
+      `
+      LD A,1
+      ORG 0x108
+      LD B,2
+      `,
+      0x100,
+    );
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect(r.origin).toBe(0x100);
+    expect(r.bytes.length).toBe(0x0a); // 0x100..0x109 (LD B,2 is 2 bytes at 0x108)
+    expect([...r.bytes]).toEqual([
+      0x3e, 0x01, // at 0x100
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // gap
+      0x06, 0x02, // at 0x108
+    ]);
+    expect(r.listing.some((l) => l.startsWith('0108'))).toBe(true);
+  });
+
+  it('ORG can use EQU and labels for later code', () => {
+    const r = assemble(
+      `
+      EQU DEST,0x110
+      NOP
+      ORG DEST
+      there:
+      RET
+      `,
+      0x100,
+    );
+    expect(r.errors).toEqual([]);
+    expect(r.bytes[0]).toBe(0x00);
+    expect(r.bytes[0x10]).toBe(0xc9);
+    expect(r.bytes.length).toBe(0x11);
+  });
+
+  it('INCLUDE splices files via readFile mock', () => {
+    const files: Record<string, string> = {
+      '/asm/inc.s': 'LD A,0x42\n',
+      '/asm/main.s': 'INCLUDE "inc.s"\nRET\n',
+    };
+    const r = assemble('INCLUDE "main.s"', 0, {
+      includeBase: '/asm',
+      readFile: (p) => {
+        const t = files[p];
+        if (t === undefined) throw new Error(`missing ${p}`);
+        return t;
+      },
+    });
+    expect(r.errors).toEqual([]);
+    expect([...r.bytes]).toEqual([0x3e, 0x42, 0xc9]);
+  });
+
+  it('INCLUDE without readFile reports a clear error', () => {
+    const r = assemble('INCLUDE "x.s"');
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /readFile/i.test(e))).toBe(true);
+  });
+
+  it('MACRO expands with textual arg substitution', () => {
+    const r = assemble(
+      `
+      MACRO LDAB x,y
+        LD A,x
+        LD B,y
+      ENDM
+      LDAB 0x11,0x22
+      LDAB 'A','B'
+      `,
+    );
+    expect(r.errors).toEqual([]);
+    expect([...r.bytes]).toEqual([
+      0x3e, 0x11, 0x06, 0x22,
+      0x3e, 0x41, 0x06, 0x42,
+    ]);
+  });
+
+  it('REPT repeats a body n times (literal or EQU)', () => {
+    const r = assemble(
+      `
+      EQU N,3
+      REPT N
+        NOP
+      ENDR
+      REPT 2
+        LD A,1
+      ENDR
+      `,
+    );
+    expect(r.errors).toEqual([]);
+    expect([...r.bytes]).toEqual([0x00, 0x00, 0x00, 0x3e, 0x01, 0x3e, 0x01]);
+  });
+
+  it('MACRO and REPT can combine', () => {
+    const r = assemble(
+      `
+      MACRO HN
+        HALT
+        NOP
+      ENDM
+      REPT 2
+        HN
+      ENDR
+      `,
+    );
+    expect(r.errors).toEqual([]);
+    expect([...r.bytes]).toEqual([0x76, 0x00, 0x76, 0x00]);
+  });
 });

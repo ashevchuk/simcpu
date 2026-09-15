@@ -1030,6 +1030,14 @@ Cold `flatten()` of a folded 12-bit Z80 (~222k components) is ~1.4s after
 fast component clone + ChipDef expand cache (`hierarchy.ts`); previously
 ~4s via `structuredClone`. Soft still defers flatten entirely.
 
+**Place/fold latency (addrBits=12, `scripts/bench-flatten.mts`):** build
+~210ms (still dominated by `makeChipInstance` / gate-builder loops — no
+easy win without changing how the flat composite is constructed), fold
+~300ms after fixing `Circuit.computeNets` net-name assignment from
+O(groups×labels) (~1.5s fold) to O(groups+labels), plus fold batching
+(`addRawComponent`/`addRawWire`, no wire-array copy, nets before bump).
+Flatten unchanged ~1.4s.
+
 Gate-path keyboard clear-on-read: when RAM OE samples `KEY_DATA` (0xF01),
 the solver clears `KEY_STATUS` (0xF00) — same contract as soft
 `SoftMemHooks`.
@@ -1039,9 +1047,9 @@ pos?)`, etc.); power is always `tiePowerRail`.
 
 ### Explicitly later
 
-Full commercial Z80ASM (MACRO/REPT, expressions, INCLUDE); nested BASIC
-FOR and richer exprs; still-faster cold flatten if Gates place latency
-matters more.
+Nested macros; `*` `/` in asm expressions; PHASE/reloc objects; still-faster
+Gates place if buildZ80 construction is rewritten. Soft↔gate parity covers a
+tiny shared suite (`test/soft-gate-parity.test.ts`); widen as needed.
 
 ## Decode and execute: a tiny working CPU
 

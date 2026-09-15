@@ -1,17 +1,31 @@
 import { buildZ80Cpu } from '../src/sim/blocks.js';
 import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import { Circuit, currentStructureVersion } from '../src/sim/Circuit.js';
-import { foldZ80CpuLeavingRam, newComponentIds } from '../src/sim/foldZ80.js';
+import { foldZ80CpuLeavingRam, newComponentIdSet } from '../src/sim/foldZ80.js';
 import { flatten } from '../src/sim/hierarchy.js';
 
+/**
+ * Place/fold/flatten timings for a 12-bit Z80 (addrBits=12).
+ *
+ * Reports wall times for the Gates-path bottleneck trio:
+ *   buildZ80Cpu → foldZ80CpuLeavingRam → flatten (cold + cache hit)
+ */
+const ADDR_BITS = 12;
 const library = new ChipLibrary();
 const parent = new Circuit();
-const before = new Set(parent.components.keys());
+const beforeIds = new Set(parent.components.keys());
+
 const t0 = performance.now();
-const cpu = buildZ80Cpu(parent, library, 12, new Uint8Array([0x00]), { x: 0, y: 0 });
+const cpu = buildZ80Cpu(parent, library, ADDR_BITS, new Uint8Array([0x00]), { x: 0, y: 0 });
 const tBuild = performance.now();
-const placed = newComponentIds(parent, before);
-console.log('buildZ80Cpu ms', (tBuild - t0).toFixed(0), 'components', parent.components.size);
+const placed = newComponentIdSet(parent, beforeIds);
+console.log(
+  'buildZ80Cpu ms',
+  (tBuild - t0).toFixed(0),
+  'components',
+  parent.components.size,
+  '(dominated by makeChipInstance / gate-builder loops)',
+);
 
 const t1 = performance.now();
 foldZ80CpuLeavingRam(parent, library, placed, { x: 0, y: 0 });
@@ -37,35 +51,6 @@ console.log(
   'unique nested defs',
   defCounts.size,
 );
-const top = [...defCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-console.log(
-  'top nested defs',
-  top.map(([id, n]) => id.slice(0, 40) + ':' + n).join(', '),
-);
-for (const [id, n] of top) {
-  const d = library.get(id);
-  let nested = 0;
-  let transistors = 0;
-  let other = 0;
-  for (const c of d.circuit.components.values()) {
-    if (c.kind === 'chip') nested++;
-    else if (c.kind === 'transistor') transistors++;
-    else other++;
-  }
-  console.log(
-    '  def',
-    id,
-    'x' + n,
-    'comps',
-    d.circuit.components.size,
-    'tx',
-    transistors,
-    'nestedChips',
-    nested,
-    'other',
-    other,
-  );
-}
 
 const t2 = performance.now();
 const flat = flatten(parent, library);
@@ -87,5 +72,12 @@ console.log(
   (tFlat2 - t3).toFixed(1),
   'structureVersion',
   currentStructureVersion(),
+);
+
+console.log(
+  'summary build/fold/flatten_ms',
+  (tBuild - t0).toFixed(0),
+  (tFold - t1).toFixed(0),
+  (tFlat1 - t2).toFixed(0),
 );
 void cpu;
