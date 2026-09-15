@@ -15,6 +15,8 @@ import {
   buildHalfAdder,
   buildMux2,
   buildMux4,
+  buildNand,
+  buildNor,
   buildNot,
   buildOr,
   buildTriStateBuffer,
@@ -29,8 +31,12 @@ import {
   ramAddrPins,
   ramDataPins,
   railPin,
+  setCircuitGatePlacer,
   tiePowerRail,
   wire,
+  type CircuitGatePlacer,
+  type NotGate,
+  type TwoInputGate,
 } from './library.js';
 import { buildRegisterBit } from './sequential.js';
 import type { Pin, Point, RamComponent } from './types.js';
@@ -295,6 +301,98 @@ function getMux2Chip(library: ChipLibrary): ChipDef {
     mux2Defs.set(library, def);
   }
   return def;
+}
+
+/** Fold a 1-input gate (NOT) — ports in order: in, out → p0, p1 after fold. */
+function makeNotChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const g = buildNot(scratch);
+  return foldExposing(scratch, 'NOT', library, [
+    { pin: g.in, isOutput: false },
+    { pin: g.out, isOutput: true },
+  ]);
+}
+
+/** Fold a 2-input gate — ports in order: a, b, out → p0, p1, p2 after fold. */
+function makeTwoInputGateChip(
+  library: ChipLibrary,
+  name: string,
+  build: (circuit: Circuit) => TwoInputGate,
+): ChipDef {
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const g = build(scratch);
+  return foldExposing(scratch, name, library, [
+    { pin: g.a, isOutput: false },
+    { pin: g.b, isOutput: false },
+    { pin: g.out, isOutput: true },
+  ]);
+}
+
+const notChipDefs = new WeakMap<ChipLibrary, ChipDef>();
+const nandChipDefs = new WeakMap<ChipLibrary, ChipDef>();
+const andChipDefs = new WeakMap<ChipLibrary, ChipDef>();
+const norChipDefs = new WeakMap<ChipLibrary, ChipDef>();
+const orChipDefs = new WeakMap<ChipLibrary, ChipDef>();
+const xorChipDefs = new WeakMap<ChipLibrary, ChipDef>();
+
+function getNamedGateChip(
+  library: ChipLibrary,
+  cache: WeakMap<ChipLibrary, ChipDef>,
+  name: string,
+  make: (library: ChipLibrary) => ChipDef,
+): ChipDef {
+  let def = cache.get(library);
+  if (!def) {
+    def = library.findByName(name) ?? make(library);
+    cache.set(library, def);
+  }
+  return def;
+}
+
+function placeNotChip(circuit: Circuit, def: ChipDef, pos: Point): NotGate {
+  const inst = makeChipInstance(circuit, def, pos);
+  return { in: inst.pins[def.ports[0]!]!, out: inst.pins[def.ports[1]!]! };
+}
+
+function placeTwoInputChip(circuit: Circuit, def: ChipDef, pos: Point): TwoInputGate {
+  const inst = makeChipInstance(circuit, def, pos);
+  return {
+    a: inst.pins[def.ports[0]!]!,
+    b: inst.pins[def.ports[1]!]!,
+    out: inst.pins[def.ports[2]!]!,
+  };
+}
+
+/** Stdcell chip placers for AND/OR/NOT/… — same netlist as transistor builders after flatten. */
+function makeZ80GatePlacer(library: ChipLibrary): CircuitGatePlacer {
+  const notDef = getNamedGateChip(library, notChipDefs, 'NOT', makeNotChip);
+  const nandDef = getNamedGateChip(library, nandChipDefs, 'NAND', (lib) =>
+    makeTwoInputGateChip(lib, 'NAND', buildNand),
+  );
+  const andDef = getNamedGateChip(library, andChipDefs, 'AND', (lib) =>
+    makeTwoInputGateChip(lib, 'AND', buildAnd),
+  );
+  const norDef = getNamedGateChip(library, norChipDefs, 'NOR', (lib) =>
+    makeTwoInputGateChip(lib, 'NOR', buildNor),
+  );
+  const orDef = getNamedGateChip(library, orChipDefs, 'OR', (lib) =>
+    makeTwoInputGateChip(lib, 'OR', buildOr),
+  );
+  const xorDef = getNamedGateChip(library, xorChipDefs, 'XOR', (lib) =>
+    makeTwoInputGateChip(lib, 'XOR', buildXor),
+  );
+  return {
+    not: (c, pos) => placeNotChip(c, notDef, pos),
+    nand: (c, pos) => placeTwoInputChip(c, nandDef, pos),
+    and: (c, pos) => placeTwoInputChip(c, andDef, pos),
+    nor: (c, pos) => placeTwoInputChip(c, norDef, pos),
+    or: (c, pos) => placeTwoInputChip(c, orDef, pos),
+    xor: (c, pos) => placeTwoInputChip(c, xorDef, pos),
+  };
 }
 
 export interface ProgramCounter {
@@ -1949,9 +2047,14 @@ export function buildZ80Cpu(
   pos: Point = { x: 0, y: 0 },
 ): Z80Cpu {
   parent.beginBatch();
+  // Place control-logic gates as seeded stdcell chips (AND/OR/NOT/…) instead
+  // of expanding ~17k transistors at place time. Flatten still sees the same
+  // transistor guts via ChipDef expansion.
+  setCircuitGatePlacer(parent, makeZ80GatePlacer(library));
   try {
     return buildZ80CpuInner(parent, library, addrBits, program, pos);
   } finally {
+    setCircuitGatePlacer(parent, null);
     parent.endBatch();
   }
 }
@@ -2059,8 +2162,16 @@ function buildZ80CpuInner(
   // `buildZ80Cpu`s placed in the same project and using these same
   // names would collide the same way — a real, documented limitation,
   // not a hidden one.
+  // One Label per net name — computeNets already joins same-named labels;
+  // reusing the first pin avoids thousands of duplicate Label stubs.
+  const labelAnchors = new Map<string, Pin>();
   const tieToLabel = (name: string, p: Pin, labelPos: Point): void => {
-    wire(parent, p, makeLabel(parent, name, labelPos).pins.net);
+    let anchor = labelAnchors.get(name);
+    if (!anchor) {
+      anchor = makeLabel(parent, name, labelPos).pins.net;
+      labelAnchors.set(name, anchor);
+    }
+    wire(parent, p, anchor);
   };
   tieToLabel('CPU_RESET', pc.reset, { x: pos.x - 50, y: pos.y - 80 }); // anchor — IFF/IM1 power-on clear (far)
 

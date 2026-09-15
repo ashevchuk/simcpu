@@ -1032,16 +1032,13 @@ component clone + ChipDef expand cache (`hierarchy.ts`); previously ~4s via
 `structuredClone`. Soft still defers flatten entirely.
 
 **Place/fold latency (addrBits=12, `scripts/bench-flatten.mts` /
-`scripts/bench-build.mts`):** build ~100–175ms (was ~210–250ms) after
-`tiePowerRail`/`railPin` reuse one Source (or Label) per rail per circuit
-instead of a stub Label per transistor, cached chip pin dy layout, batched
-structure-version bumps during `buildZ80Cpu`, leaner transistor/label/chip
-factories, and reusing seeded stdcell defs (`ChipLibrary.findByName`) for
-MUX2/TRI_BUF/HALF_ADDER. Still dominated by gate-builder transistor
-construction. Fold ~250–300ms after fixing `Circuit.computeNets` net-name
-assignment from O(groups×labels) (~1.5s fold) to O(groups+labels), plus fold
-batching (`addRawComponent`/`addRawWire`, no wire-array copy, nets before
-bump). Flatten ~1.2s (fewer power stubs in the expanded netlist).
+`scripts/bench-build.mts`):** build ~40–100ms (was ~100–175ms; earlier
+~210–250ms) after placing AND/OR/NOT/NAND/NOR/XOR as stdcell chip instances
+instead of ~17k inline transistors, plus one Label anchor per fanout name
+(`tieToLabel` cache). Fold ~80ms (was ~250–300ms) on the smaller place
+graph (~6.8k comps / ~5.8k nested chips). Flatten still ~1.2s for the
+expanded ~128k-transistor netlist. Shared-rail `tiePowerRail`/`railPin`,
+batched structure bumps, and MUX2/TRI_BUF/HALF_ADDER/REG_BIT reuse remain.
 
 Gate-path keyboard clear-on-read: when RAM OE samples `KEY_DATA` (0xF01),
 the solver clears `KEY_STATUS` (0xF00) — same contract as soft
@@ -1049,13 +1046,14 @@ the solver clears `KEY_STATUS` (0xF00) — same contract as soft
 
 Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
 pos?)`, etc.); power is always `tiePowerRail` (reuses the circuit's Source
-pins when present).
+pins when present). Soft↔gate parity covers unprefixed/CB plus ED/DD cases
+via a multi-ring `gateCatchUp` harness (prefixed ops may need >1×10 phases).
 
 ### Explicitly later
 
-Still-faster Gates place if buildZ80 is rewritten away from per-gate
-transistors; soft↔gate parity for ED/DD needs a multi-phase harness
-(prefixed ops often exceed one 10-phase `runInstruction`).
+Still-faster place if large control/decode trees are folded into named
+macros (beyond per-gate stdcells). Stack-heavy CALL/RET soft↔gate parity
+beyond simple DD IX forms.
 
 ## Decode and execute: a tiny working CPU
 
