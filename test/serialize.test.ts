@@ -91,7 +91,15 @@ describe('project serialize/deserialize round-trip', () => {
     const topCircuit = new Circuit();
     // Simulate a project saved by a session whose counter had run way ahead.
     const highId = 'src999999';
-    topCircuit.components.set(highId, { id: highId, kind: 'source', value: 1, pos: { x: 0, y: 0 }, pins: { out: { id: `${highId}:out`, componentId: highId, name: 'out', pos: { x: 0, y: 0 } } } });
+    topCircuit.components.set(highId, {
+      id: highId,
+      kind: 'source',
+      value: 1,
+      pos: { x: 0, y: 0 },
+      rotation: 0,
+      mirrorX: false,
+      pins: { out: { id: `${highId}:out`, componentId: highId, name: 'out', pos: { x: 0, y: 0 } } },
+    });
     const project: SerializedProject = {
       format: 'z80-sim-project',
       version: 1,

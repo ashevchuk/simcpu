@@ -122,6 +122,7 @@ export function makeTransistor(
     type,
     pos,
     rotation: 0,
+    mirrorX: false,
     pins: {
       gate: { id: id + ':gate', componentId: id, name: 'gate', pos: { x: x + off.gate[0], y: y + off.gate[1] } },
       drain: { id: id + ':drain', componentId: id, name: 'drain', pos: { x: x + off.drain[0], y: y + off.drain[1] } },
@@ -143,6 +144,8 @@ export function makeSource(
     kind: 'source',
     value,
     pos,
+    rotation: 0,
+    mirrorX: false,
     pins: { out: pin(id, 'out', pos, ...LAYOUT.source.out) },
   };
   circuit.addComponent(c);
@@ -160,6 +163,8 @@ export function makeInput(
     kind: 'input',
     value,
     pos,
+    rotation: 0,
+    mirrorX: false,
     pins: { out: pin(id, 'out', pos, ...LAYOUT.input.out) },
   };
   circuit.addComponent(c);
@@ -180,6 +185,8 @@ export function makeButton(
     holdFrames: 0,
     pulseFrames: 8,
     pos,
+    rotation: 0,
+    mirrorX: false,
     pins: { out: pin(id, 'out', pos, ...LAYOUT.button.out) },
   };
   circuit.addComponent(c);
@@ -199,6 +206,8 @@ export function makeLed(
     ...(label !== undefined ? { label } : {}),
     color,
     pos,
+    rotation: 0,
+    mirrorX: false,
     pins: { in: pin(id, 'in', pos, ...LAYOUT.led.in) },
   };
   circuit.addComponent(c);
@@ -226,6 +235,8 @@ export function makeClock(
     holdFrames: 0,
     lastTrig: 0,
     pos,
+    rotation: 0,
+    mirrorX: false,
     pins: {
       out: pin(id, 'out', pos, ...LAYOUT.clock.out),
       trig: pin(id, 'trig', pos, ...LAYOUT.clock.trig),
@@ -322,6 +333,8 @@ export function makeProbe(circuit: Circuit, pos: Point = { x: 0, y: 0 }, label?:
     kind: 'probe',
     label,
     pos,
+    rotation: 0,
+    mirrorX: false,
     pins: { in: pin(id, 'in', pos, ...LAYOUT.probe.in) },
   };
   circuit.addComponent(c);

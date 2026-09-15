@@ -1,3 +1,4 @@
+import { bodyEdgeToward, getOrientation } from '../sim/orientation.js';
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import { CHIP_INSTANCE_WIDTH, chipInstanceHeight, ramPortCount, romPortCount } from '../sim/library.js';
@@ -410,9 +411,8 @@ function drawBodyPinLabel(
 }
 
 /**
- * Classic enhancement-mode MOSFET schematic (no chip-style capsule).
- * Gate on the left, drain/source on the vertical channel; PMOS has a
- * gate bubble; source carries the type arrow (N→channel, P←channel).
+ * Classic enhancement-mode MOSFET in local coords (gate left, D/S vertical),
+ * then oriented via rotation / mirrorX on the canvas transform.
  */
 function drawMosfetSymbol(
   ctx: CanvasRenderingContext2D,
@@ -421,24 +421,27 @@ function drawMosfetSymbol(
   selected: boolean,
   hovered: boolean,
 ): void {
-  const { x, y } = c.pos;
-  const gate = c.pins.gate.pos;
-  const drain = c.pins.drain.pos;
-  const source = c.pins.source.pos;
-  // Channel sits between body center and the vertical pin axis.
-  const chanX = x + 2;
-  const gatePlateX = x - 8;
-  const topY = Math.min(drain.y, source.y);
-  const botY = Math.max(drain.y, source.y);
-  const midY = y;
+  const { rotation, mirrorX } = getOrientation(c);
+  const chanX = 2;
+  const gatePlateX = -8;
+  const gateX = -28;
+  const topY = -28;
+  const botY = 28;
+  const midY = 0;
+  const sourceY = c.type === 'P' ? -28 : 28;
+  const drainY = c.type === 'P' ? 28 : -28;
 
   ctx.save();
+  ctx.translate(c.pos.x, c.pos.y);
+  if (mirrorX) ctx.scale(-1, 1);
+  ctx.rotate((rotation * Math.PI) / 180);
+
   if (selected || hovered) {
     ctx.strokeStyle = selected ? COLOR.selected : COLOR.hover;
     ctx.globalAlpha = 0.35;
     ctx.lineWidth = 8;
     ctx.beginPath();
-    ctx.moveTo(gate.x, gate.y);
+    ctx.moveTo(gateX, midY);
     ctx.lineTo(gatePlateX, midY);
     ctx.moveTo(chanX, topY);
     ctx.lineTo(chanX, botY);
@@ -452,11 +455,10 @@ function drawMosfetSymbol(
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  // Gate lead → optional PMOS bubble → insulated gate plate (two lines).
   ctx.beginPath();
   if (c.type === 'P') {
-    const bx = (gate.x + gatePlateX) / 2;
-    ctx.moveTo(gate.x, gate.y);
+    const bx = (gateX + gatePlateX) / 2;
+    ctx.moveTo(gateX, midY);
     ctx.lineTo(bx - 3.5, midY);
     ctx.stroke();
     ctx.beginPath();
@@ -466,12 +468,11 @@ function drawMosfetSymbol(
     ctx.moveTo(bx + 3.5, midY);
     ctx.lineTo(gatePlateX, midY);
   } else {
-    ctx.moveTo(gate.x, gate.y);
+    ctx.moveTo(gateX, midY);
     ctx.lineTo(gatePlateX, midY);
   }
   ctx.stroke();
 
-  // Insulated gate: two parallel vertical plates, gap to channel.
   ctx.beginPath();
   ctx.moveTo(gatePlateX, midY - 10);
   ctx.lineTo(gatePlateX, midY + 10);
@@ -479,7 +480,6 @@ function drawMosfetSymbol(
   ctx.lineTo(gatePlateX + 3.5, midY + 10);
   ctx.stroke();
 
-  // Enhancement channel: vertical backbone + three horizontal fingers.
   ctx.beginPath();
   ctx.moveTo(chanX, topY);
   ctx.lineTo(chanX, botY);
@@ -491,26 +491,22 @@ function drawMosfetSymbol(
     ctx.stroke();
   }
 
-  // Leads to drain / source pins.
   ctx.beginPath();
-  ctx.moveTo(chanX, drain.y);
-  ctx.lineTo(drain.x, drain.y);
-  ctx.moveTo(chanX, source.y);
-  ctx.lineTo(source.x, source.y);
+  ctx.moveTo(chanX, drainY);
+  ctx.lineTo(0, drainY);
+  ctx.moveTo(chanX, sourceY);
+  ctx.lineTo(0, sourceY);
   ctx.stroke();
 
-  // Source arrow on the channel near the source end (IEEE-style MOSFET).
-  const ay = source.y > midY ? midY + 12 : midY - 12;
+  const ay = sourceY > 0 ? midY + 12 : midY - 12;
   const ax = chanX;
   const s = 3.4;
   ctx.beginPath();
   if (c.type === 'N') {
-    // Arrow into channel (body → channel), pointing right toward backbone.
     ctx.moveTo(ax - 6, ay - s);
     ctx.lineTo(ax - 6, ay + s);
     ctx.lineTo(ax - 1, ay);
   } else {
-    // Arrow out of channel toward source (pointing left / outward).
     ctx.moveTo(ax - 1, ay - s);
     ctx.lineTo(ax - 1, ay + s);
     ctx.lineTo(ax - 6, ay);
@@ -518,7 +514,6 @@ function drawMosfetSymbol(
   ctx.closePath();
   ctx.fill();
 
-  // Tiny type tag — symbol already carries polarity via bubble/arrow.
   ctx.font = '9px ui-monospace, "SF Mono", monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
@@ -587,6 +582,12 @@ function drawComponent(
     ctx.stroke();
   };
 
+  /** Stub from body bbox edge toward the pin (orientation-aware). */
+  const stubPin = (cx: number, cy: number, hw: number, hh: number, pin: Pin) => {
+    const edge = bodyEdgeToward(cx, cy, hw, hh, pin.pos);
+    stub(edge.x, edge.y, pin);
+  };
+
   switch (c.kind) {
     case 'transistor': {
       const stroke = c.type === 'N' ? COLOR.strokeN : COLOR.strokeP;
@@ -608,7 +609,7 @@ function drawComponent(
       ctx.strokeStyle = bodyStroke(stroke);
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
-      stub(x, y + h / 2, c.pins.out);
+      stubPin(x, y, w / 2, h / 2, c.pins.out);
       drawPinDot(ctx, c.pins.out, resolve);
       ctx.fillStyle = COLOR.text;
       ctx.fillText(c.value === 1 ? 'VCC' : 'GND', x, y);
@@ -625,7 +626,7 @@ function drawComponent(
       ctx.strokeStyle = bodyStroke(c.value === 1 ? COLOR.wireHigh : COLOR.wireLow);
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
-      stub(x + w / 2, y, c.pins.out);
+      stubPin(x, y, w / 2, h / 2, c.pins.out);
       drawPinDot(ctx, c.pins.out, resolve);
       ctx.fillStyle = COLOR.text;
       ctx.fillText(String(c.value), x, y);
@@ -643,7 +644,7 @@ function drawComponent(
       ctx.strokeStyle = bodyStroke(on ? COLOR.selected : COLOR.bodyStroke);
       ctx.lineWidth = selected || hovered ? 2.2 : 1.4;
       ctx.stroke();
-      stub(x + w / 2, y, c.pins.out);
+      stubPin(x, y, w / 2, h / 2, c.pins.out);
       drawPinDot(ctx, c.pins.out, resolve);
       ctx.fillStyle = COLOR.text;
       ctx.fillText(c.mode === 'toggle' ? 'T' : 'BTN', x, y);
@@ -661,8 +662,8 @@ function drawComponent(
       ctx.strokeStyle = bodyStroke(c.value === 1 ? COLOR.wireHigh : COLOR.bodyStroke);
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
-      stub(x + w / 2, y, c.pins.out);
-      stub(x - w / 2, y, c.pins.trig);
+      stubPin(x, y, w / 2, h / 2, c.pins.out);
+      stubPin(x, y, w / 2, h / 2, c.pins.trig);
       drawPinDot(ctx, c.pins.out, resolve);
       drawPinDot(ctx, c.pins.trig, resolve);
       ctx.save();
@@ -755,7 +756,7 @@ function drawComponent(
       ctx.strokeStyle = bodyStroke(on ? c.color : COLOR.bodyStroke);
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
-      stub(x - 11, y, c.pins.in);
+      stubPin(x, y, 11, 11, c.pins.in);
       drawPinDot(ctx, c.pins.in, resolve);
       if (c.label) {
         ctx.fillStyle = COLOR.textDim;
@@ -783,7 +784,7 @@ function drawComponent(
       ctx.strokeStyle = bodyStroke(COLOR.bodyStroke);
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
-      stub(x - 10, y, c.pins.in);
+      stubPin(x, y, 10, 10, c.pins.in);
       drawPinDot(ctx, c.pins.in, resolve);
       ctx.fillStyle = levelColor(level, contended);
       ctx.fillText(level === 'Z' ? '?' : String(level), x, y);

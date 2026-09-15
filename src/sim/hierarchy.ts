@@ -480,6 +480,7 @@ function cloneComponent(c: Component): Component {
         type: c.type,
         pos,
         rotation: c.rotation,
+        mirrorX: c.mirrorX,
         pins: {
           gate: clonePin(c.pins.gate),
           drain: clonePin(c.pins.drain),
@@ -487,9 +488,25 @@ function cloneComponent(c: Component): Component {
         },
       };
     case 'source':
-      return { id: c.id, kind: 'source', value: c.value, pos, pins: { out: clonePin(c.pins.out) } };
+      return {
+        id: c.id,
+        kind: 'source',
+        value: c.value,
+        pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        pins: { out: clonePin(c.pins.out) },
+      };
     case 'input':
-      return { id: c.id, kind: 'input', value: c.value, pos, pins: { out: clonePin(c.pins.out) } };
+      return {
+        id: c.id,
+        kind: 'input',
+        value: c.value,
+        pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        pins: { out: clonePin(c.pins.out) },
+      };
     case 'button':
       return {
         id: c.id,
@@ -499,6 +516,8 @@ function cloneComponent(c: Component): Component {
         holdFrames: c.holdFrames,
         pulseFrames: c.pulseFrames,
         pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
         pins: { out: clonePin(c.pins.out) },
       };
     case 'led':
@@ -508,6 +527,8 @@ function cloneComponent(c: Component): Component {
         ...(c.label !== undefined ? { label: c.label } : {}),
         color: c.color,
         pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
         pins: { in: clonePin(c.pins.in) },
       };
     case 'clock':
@@ -523,6 +544,8 @@ function cloneComponent(c: Component): Component {
         holdFrames: c.holdFrames,
         lastTrig: c.lastTrig,
         pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
         pins: { out: clonePin(c.pins.out), trig: clonePin(c.pins.trig) },
       };
     case 'analyzer': {
@@ -551,6 +574,8 @@ function cloneComponent(c: Component): Component {
         kind: 'probe',
         ...(c.label !== undefined ? { label: c.label } : {}),
         pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
         pins: { in: clonePin(c.pins.in) },
       };
     case 'label':

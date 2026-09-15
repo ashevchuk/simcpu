@@ -47,6 +47,7 @@ export interface TransistorComponent {
   type: TransistorType;
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
   pins: {
     gate: Pin;
     drain: Pin;
@@ -59,6 +60,8 @@ export interface SourceComponent {
   kind: 'source';
   value: 0 | 1; // VCC = 1, GND = 0
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
   pins: { out: Pin };
 }
 
@@ -67,6 +70,8 @@ export interface InputComponent {
   kind: 'input';
   value: 0 | 1;
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
   pins: { out: Pin };
 }
 
@@ -80,6 +85,8 @@ export interface ButtonComponent {
   holdFrames: number;
   pulseFrames: number;
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
   pins: { out: Pin };
 }
 
@@ -90,6 +97,8 @@ export interface LedComponent {
   label?: string;
   color: string; // CSS color for the "on" glow
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
   pins: { in: Pin };
 }
 
@@ -112,6 +121,8 @@ export interface ClockComponent {
   /** Last sampled TRIG level — rising-edge detect for oneshot / start. */
   lastTrig: 0 | 1 | 'Z';
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
   pins: { out: Pin; trig: Pin };
 }
 
@@ -141,6 +152,8 @@ export interface ProbeComponent {
   kind: 'probe';
   label?: string;
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
   pins: { in: Pin };
 }
 

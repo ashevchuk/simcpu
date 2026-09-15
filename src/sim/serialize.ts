@@ -22,6 +22,7 @@
 
 import { ChipLibrary, type ChipDef } from './ChipLibrary.js';
 import { bumpStructureVersion, Circuit, nextId, noteUsedId } from './Circuit.js';
+import { applyPinLayout, isOrientable } from './orientation.js';
 import type {
   ChipInstanceComponent,
   ClockComponent,
@@ -52,6 +53,8 @@ function fromSerializedComponent(c: SerializedComponent): Component {
       mode?: ClockComponent['mode'];
       holdFrames?: number;
       lastTrig?: Level;
+      rotation?: ClockComponent['rotation'];
+      mirrorX?: boolean;
       pins: { out: Pin; trig?: Pin };
     };
     const trig =
@@ -62,7 +65,7 @@ function fromSerializedComponent(c: SerializedComponent): Component {
         name: 'trig',
         pos: { x: raw.pos.x - 18, y: raw.pos.y },
       } satisfies Pin);
-    return {
+    const clock: ClockComponent = {
       id: raw.id,
       kind: 'clock',
       mode: raw.mode ?? 'continuous',
@@ -74,10 +77,21 @@ function fromSerializedComponent(c: SerializedComponent): Component {
       holdFrames: raw.holdFrames ?? 0,
       lastTrig: raw.lastTrig ?? 0,
       pos: raw.pos,
+      rotation: raw.rotation ?? 0,
+      mirrorX: raw.mirrorX ?? false,
       pins: { out: raw.pins.out, trig },
     };
+    applyPinLayout(clock);
+    return clock;
   }
-  return c as Component;
+  const comp = c as Component;
+  if (isOrientable(comp)) {
+    const o = comp as Component & { rotation?: number; mirrorX?: boolean };
+    (o as { rotation: number }).rotation = o.rotation ?? 0;
+    (o as { mirrorX: boolean }).mirrorX = o.mirrorX ?? false;
+    applyPinLayout(o);
+  }
+  return comp;
 }
 
 export interface SerializedCircuit {

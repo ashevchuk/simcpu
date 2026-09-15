@@ -4,7 +4,7 @@ import { Circuit } from './sim/Circuit.js';
 import { foldZ80CpuLeavingRam, newComponentIdSet, packFoldedMachine } from './sim/foldZ80.js';
 import { replaceLongWiresWithLabels } from './sim/labelWires.js';
 import { circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
-import { flatten, fold, renamePort } from './sim/hierarchy.js';
+import { flatten, fold } from './sim/hierarchy.js';
 import { buildNot, makeButton, makeLed, makeProbe, makeRam, makeRom, makeSource, makeTty, wire } from './sim/library.js';
 import {
   deserializeProject,
@@ -28,7 +28,15 @@ import { GRID, snap } from './ui/geometry.js';
 import { LogicAnalyzer } from './ui/LogicAnalyzer.js';
 import { MachinePanel } from './ui/MachinePanel.js';
 import { MemoryEditor } from './ui/MemoryEditor.js';
+import { ObjectInspector } from './ui/ObjectInspector.js';
 import { draw } from './ui/Renderer.js';
+import {
+  getOrientation,
+  isOrientable,
+  rotateCcw,
+  rotateCw,
+  setOrientation,
+} from './sim/orientation.js';
 
 const stage = document.getElementById('stage') as HTMLDivElement;
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
@@ -41,7 +49,7 @@ machinePanel.bindRunner(machineRunner);
 
 const memoryEditor = new MemoryEditor();
 const logicAnalyzer = new LogicAnalyzer();
-
+const objectInspector = new ObjectInspector();
 
 const library = new ChipLibrary();
 seedStandardCells(library); // NOT/NAND/AND/NOR/OR/XOR/MUX2/MUX4/FULL_ADDER/D_LATCH/D_FF, ready to drag out
@@ -121,6 +129,7 @@ const navStack: NavFrame[] = [{ circuit: topCircuit, pathPrefix: '', label: 'top
 const editor = new Editor(topCircuit, library);
 const editHistory = new EditHistory();
 editor.onBeforeEdit = () => editHistory.checkpoint(editor.circuit);
+objectInspector.onBeforeEdit = () => editHistory.checkpoint(editor.circuit);
 let simState: SimState = initialState();
 
 // A single window-level, capture-phase tap on every event type that could
@@ -136,6 +145,24 @@ let simState: SimState = initialState();
 // `frame()`'s own doc comment for why marking too eagerly is the safe
 // direction to err in here.
 let uiDirty = true;
+objectInspector.onChange = () => {
+  uiDirty = true;
+};
+objectInspector.setContext({
+  circuit: topCircuit,
+  library,
+  defId: null,
+  allCircuits: [topCircuit, ...library.list().map((d) => d.circuit)],
+});
+
+function syncInspector(): void {
+  if (editor.selectedIds.size !== 1) {
+    objectInspector.sync(null);
+    return;
+  }
+  const id = [...editor.selectedIds][0]!;
+  objectInspector.sync(editor.circuit.components.get(id) ?? null);
+}
 memoryEditor.setOnChange(() => {
   uiDirty = true;
 });
@@ -180,6 +207,13 @@ function enterLevel(): void {
   editor.clearSelection();
   editor.cancelWire();
   editHistory.clear();
+  objectInspector.setContext({
+    circuit: view.circuit,
+    library,
+    defId: view.defId ?? null,
+    allCircuits: [topCircuit, ...library.list().map((d) => d.circuit)],
+  });
+  objectInspector.sync(null);
   // "Auto-centered at 100%" — see the reference project's own dive-in behavior.
   camera.centerOn(centroid(circuitBounds(view.circuit)), 1);
   renderBreadcrumb();
@@ -807,40 +841,8 @@ canvas.addEventListener('dblclick', async (ev) => {
     } else {
       await showAlert('TTY is not linked to a machine RAM. Place a Z80CPU (≥12 addr bits) first.');
     }
-  } else if (hit.kind === 'clock') {
-    const modeRaw = await showPrompt(
-      'Pulse generator — mode (continuous|oneshot), period frames, pulse width frames:\ne.g. continuous,30,15  or  oneshot,30,4',
-      `${hit.mode},${hit.periodFrames},${hit.dutyFrames}`,
-    );
-    if (!modeRaw) return;
-    const parts = modeRaw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
-    const mode = parts[0] === 'oneshot' ? 'oneshot' : parts[0] === 'continuous' ? 'continuous' : null;
-    const period = parseInt(parts[1] ?? '', 10);
-    const duty = parseInt(parts[2] ?? '', 10);
-    if (!mode || !Number.isFinite(period) || period < 2) return;
-    hit.mode = mode;
-    hit.periodFrames = period;
-    hit.dutyFrames = Math.max(1, Math.min(period - 1, Number.isFinite(duty) ? duty : Math.floor(period / 2)));
-    hit.phase = 0;
-    hit.holdFrames = 0;
-    hit.running = false;
-    hit.value = 0;
-  } else if (hit.kind === 'button') {
-    hit.mode = hit.mode === 'toggle' ? 'momentary' : 'toggle';
-    hit.holdFrames = 0;
-    hit.value = 0;
-    await showAlert(`Button mode: ${hit.mode}`);
-  } else if (hit.kind === 'label') {
-    const name = await showPrompt('Rename net:', hit.name);
-    if (name) hit.name = name;
-  } else if (hit.kind === 'port') {
-    const view = navStack[navStack.length - 1]!;
-    if (!view.defId) return; // a bare port can't exist outside a chip's internals
-    const name = await showPrompt('Rename port:', hit.name);
-    if (!name || name === hit.name) return;
-    const ok = renamePort(library, [topCircuit, ...library.list().map((d) => d.circuit)], view.defId, hit.name, name);
-    if (!ok) await showAlert(`Port name "${name}" is already used on this chip.`);
   }
+  // Labels / buttons / clocks / ports — use the Object Inspector (selection).
 });
 
 const NUDGE_KEYS: Record<string, [number, number]> = {
@@ -897,6 +899,38 @@ window.addEventListener('keydown', (ev) => {
     editHistory.checkpoint(editor.circuit);
     const [dx, dy] = NUDGE_KEYS[ev.key]!;
     for (const id of editor.selectedIds) editor.circuit.moveComponent(id, dx, dy);
+  } else if (noModifiers && (ev.key === 'r' || ev.key === 'R')) {
+    const ids = [...editor.selectedIds];
+    const comps = ids
+      .map((id) => editor.circuit.components.get(id))
+      .filter((c): c is Component => !!c && isOrientable(c));
+    if (comps.length > 0) {
+      ev.preventDefault();
+      editHistory.checkpoint(editor.circuit);
+      for (const c of comps) {
+        const { rotation, mirrorX } = getOrientation(c);
+        setOrientation(c, ev.shiftKey ? rotateCcw(rotation) : rotateCw(rotation), mirrorX);
+      }
+      uiDirty = true;
+      syncInspector();
+      objectInspector.refresh();
+    }
+  } else if (noModifiers && ev.key.toLowerCase() === 'm') {
+    const ids = [...editor.selectedIds];
+    const comps = ids
+      .map((id) => editor.circuit.components.get(id))
+      .filter((c): c is Component => !!c && isOrientable(c));
+    if (comps.length > 0) {
+      ev.preventDefault();
+      editHistory.checkpoint(editor.circuit);
+      for (const c of comps) {
+        const { rotation, mirrorX } = getOrientation(c);
+        setOrientation(c, rotation, !mirrorX);
+      }
+      uiDirty = true;
+      syncInspector();
+      objectInspector.refresh();
+    }
   } else if (noModifiers && TOOL_KEYS.has(ev.key.toLowerCase())) {
     setTool(TOOL_KEYS.get(ev.key.toLowerCase())!);
   }
@@ -976,6 +1010,7 @@ function drawSoftBitmapHud(c: CanvasRenderingContext2D, _vw: number, vh: number)
  * every frame regardless of `uiDirty`, exactly as before this change.
  */
 function frame(): void {
+  syncInspector();
   // Soft Run advances the interpreter only; gate Run spends a time-budgeted
   // slice of transistor phases. Either way we avoid the old pattern of
   // 160 full step()s *plus* another step+draw in the same rAF.
