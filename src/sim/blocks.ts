@@ -7449,74 +7449,29 @@ function buildZ80CpuInner(
   const ramWriteNow = buildAnd(parent, { x: pos.x + 9550, y: pos.y + 250 });
   wire(parent, ldWritesHl.out, ramWriteNow.a);
   wire(parent, notZ6.out, ramWriteNow.b);
-  const ramWeStage = buildOr(parent, { x: pos.x + 9600, y: pos.y + 300 });
-  wire(parent, ramWriteNow.out, ramWeStage.a);
-  wire(parent, stackWriteNow.out, ramWeStage.b);
-  // Indirect loads' own writes (see "x=00: indirect loads through
-  // (BC)/(DE)/(nn)" above): `LD (BC),A`/`LD (DE),A`/`LD (nn),A`, and
-  // `LD (nn),HL`'s own low and high bytes — five more terms, one `OR`
-  // stage each, the identical widen-not-replace shape this file uses for
-  // every group of terms sharing one gate.
-  const ramWeStage2 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 350 });
-  wire(parent, ramWeStage.out, ramWeStage2.a);
-  tieToLabel('LDBCA_NOW', ramWeStage2.b, { x: pos.x + 9500, y: pos.y + 350 });
-  const ramWeStage3 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 400 });
-  wire(parent, ramWeStage2.out, ramWeStage3.a);
-  tieToLabel('LDDEA_NOW', ramWeStage3.b, { x: pos.x + 9500, y: pos.y + 400 });
-  const ramWeStage4 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 450 });
-  wire(parent, ramWeStage3.out, ramWeStage4.a);
-  tieToLabel('LDNNA_NOW', ramWeStage4.b, { x: pos.x + 9500, y: pos.y + 450 });
-  const ramWeStage5 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 500 });
-  wire(parent, ramWeStage4.out, ramWeStage5.a);
-  tieToLabel('LDNNHL_LOW_NOW', ramWeStage5.b, { x: pos.x + 9500, y: pos.y + 500 });
-  const ramWeStage6 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 550 });
-  wire(parent, ramWeStage5.out, ramWeStage6.a);
-  tieToLabel('LDNNHL_HIGH_NOW', ramWeStage6.b, { x: pos.x + 9500, y: pos.y + 550 });
-  // INC (HL)/DEC (HL)'s own write-back and LD (HL),n's own write (see
-  // "x=00: INC (HL)/DEC (HL)/LD (HL),n" above) — two more terms.
-  const ramWeStage7 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 600 });
-  wire(parent, ramWeStage6.out, ramWeStage7.a);
+  // Side-folds for RAM WE — stay outside RAM_WE_OR and feed as single
+  // inputs (same discipline as RAM_OE_OR). INC/DEC/SET/RES/CB-rot (HL),
+  // EX (SP),HL/IX/IY, ED LD (nn),dd, and DD/FD mem writes are reduced
+  // here; RRDRLD_WRITE_NOW remains the last term of the main OR so its
+  // path depth to ram.we is unchanged.
   const hlMemWeTerms = buildOr(parent, { x: pos.x + 9550, y: pos.y + 600 });
   tieToLabel('INCDEC_HLMEM_NOW', hlMemWeTerms.a, { x: pos.x + 9450, y: pos.y + 600 });
   tieToLabel('SETRES_HL_WRITE_NOW', hlMemWeTerms.b, { x: pos.x + 9450, y: pos.y + 620 });
   const hlMemWeTerms2 = buildOr(parent, { x: pos.x + 9520, y: pos.y + 610 });
   wire(parent, hlMemWeTerms.out, hlMemWeTerms2.a);
   tieToLabel('CBROT_HL_WRITE_NOW', hlMemWeTerms2.b, { x: pos.x + 9420, y: pos.y + 630 });
-  wire(parent, hlMemWeTerms2.out, ramWeStage7.b);
-  const ramWe = buildOr(parent, { x: pos.x + 9600, y: pos.y + 650 });
-  wire(parent, ramWeStage7.out, ramWe.a);
-  tieToLabel('LDHLN_WRITE_NOW', ramWe.b, { x: pos.x + 9500, y: pos.y + 650 });
-  // EX (SP),HL's own two writes (see "x=11: EX (SP),HL" below) — two more
-  // terms. DD/FD EX (SP),IX/IY side-folded then merged so RRD/EDNN depth
-  // stays unchanged.
-  const ramWeStage8 = buildOr(parent, { x: pos.x + 9700, y: pos.y + 700 });
-  wire(parent, ramWe.out, ramWeStage8.a);
   const exSpWriteLowAny = buildOr(parent, { x: pos.x + 9650, y: pos.y + 700 });
   tieToLabel('EXSPHL_WRITE_LOW_NOW', exSpWriteLowAny.a, { x: pos.x + 9550, y: pos.y + 700 });
   tieToLabel('EXSPIX_WRITE_LOW_NOW', exSpWriteLowAny.b, { x: pos.x + 9550, y: pos.y + 720 });
   const exSpWriteLowAny2 = buildOr(parent, { x: pos.x + 9680, y: pos.y + 710 });
   wire(parent, exSpWriteLowAny.out, exSpWriteLowAny2.a);
   tieToLabel('EXSPIY_WRITE_LOW_NOW', exSpWriteLowAny2.b, { x: pos.x + 9580, y: pos.y + 730 });
-  wire(parent, exSpWriteLowAny2.out, ramWeStage8.b);
-  const ramWeStage9 = buildOr(parent, { x: pos.x + 9800, y: pos.y + 750 });
-  wire(parent, ramWeStage8.out, ramWeStage9.a);
   const exSpWriteHighAny = buildOr(parent, { x: pos.x + 9750, y: pos.y + 750 });
   tieToLabel('EXSPHL_WRITE_HIGH_NOW', exSpWriteHighAny.a, { x: pos.x + 9650, y: pos.y + 750 });
   tieToLabel('EXSPIX_WRITE_HIGH_NOW', exSpWriteHighAny.b, { x: pos.x + 9650, y: pos.y + 770 });
   const exSpWriteHighAny2 = buildOr(parent, { x: pos.x + 9780, y: pos.y + 760 });
   wire(parent, exSpWriteHighAny.out, exSpWriteHighAny2.a);
   tieToLabel('EXSPIY_WRITE_HIGH_NOW', exSpWriteHighAny2.b, { x: pos.x + 9680, y: pos.y + 780 });
-  wire(parent, exSpWriteHighAny2.out, ramWeStage9.b);
-  // LDI's own write to (DE) (see "x=10, y=4, z=0: LDI" above) — a tenth and
-  // final term.
-  const ramWeFinal = buildOr(parent, { x: pos.x + 9900, y: pos.y + 800 });
-  wire(parent, ramWeStage9.out, ramWeFinal.a);
-  tieToLabel('LDBLOCK_WRITE_NOW', ramWeFinal.b, { x: pos.x + 9800, y: pos.y + 800 });
-  // INI's own write to (HL) (see "x=10, y=4, z=2: INI" above) — an
-  // eleventh term.
-  const ramWeFinal2 = buildOr(parent, { x: pos.x + 10000, y: pos.y + 825 });
-  wire(parent, ramWeFinal.out, ramWeFinal2.a);
-  tieToLabel('INBLOCK_WRITE_NOW', ramWeFinal2.b, { x: pos.x + 9900, y: pos.y + 825 });
   // ED LD (nn),dd store writes (see "x=01, z=3") — folded off to the side
   // then merged *before* RRD/RLD's own term below. Found live: chaining
   // two more sequential `OR`s *after* `RRDRLD_WRITE_NOW` (the identical
@@ -7526,9 +7481,6 @@ function buildZ80CpuInner(
   const edNnWeAny = buildOr(parent, { x: pos.x + 10100, y: pos.y + 860 });
   tieToLabel('EDNN_WRITE_LOW_NOW', edNnWeAny.a, { x: pos.x + 10000, y: pos.y + 860 });
   tieToLabel('EDNN_WRITE_HIGH_NOW', edNnWeAny.b, { x: pos.x + 10000, y: pos.y + 880 });
-  const ramWeFinal3 = buildOr(parent, { x: pos.x + 10200, y: pos.y + 850 });
-  wire(parent, ramWeFinal2.out, ramWeFinal3.a);
-  wire(parent, edNnWeAny.out, ramWeFinal3.b);
   // DD/FD (IX+d)/(IY+d) LD + INCDEC writes — side-folded before RRD.
   const ddMemLdWeAny = buildOr(parent, { x: pos.x + 10250, y: pos.y + 870 });
   tieToLabel('DDMEMLD_WRITE_NOW', ddMemLdWeAny.a, { x: pos.x + 10150, y: pos.y + 870 });
@@ -7557,15 +7509,30 @@ function buildZ80CpuInner(
   const ddFdMemWeAny2 = buildOr(parent, { x: pos.x + 10350, y: pos.y + 960 });
   wire(parent, ddFdMemWeAny.out, ddFdMemWeAny2.a);
   wire(parent, ddFdCbMemWe.out, ddFdMemWeAny2.b);
-  const ramWeFinal3b = buildOr(parent, { x: pos.x + 10350, y: pos.y + 860 });
-  wire(parent, ramWeFinal3.out, ramWeFinal3b.a);
-  wire(parent, ddFdMemWeAny2.out, ramWeFinal3b.b);
-  // RRD/RLD's own write-back to (HL) — kept as the *last* term so its
-  // path to `ram.we` stays one `OR` deep past the prior merge.
-  const ramWeFinal4 = buildOr(parent, { x: pos.x + 10400, y: pos.y + 850 });
-  wire(parent, ramWeFinal3b.out, ramWeFinal4.a);
-  tieToLabel('RRDRLD_WRITE_NOW', ramWeFinal4.b, { x: pos.x + 10300, y: pos.y + 850 });
-  wire(parent, ramWeFinal4.out, ram.pins.we!);
+  // RAM WE OR — sequential left-associated OR of every write enable (same
+  // order as the former ramWeStage…ramWeFinal4 chain). Side-folds above
+  // feed as single inputs; RRDRLD_WRITE_NOW is deliberately the *last*
+  // term so WE path depth for RRD/RLD stays unchanged.
+  const ramWeOrDef = getOrNChip(library, 16, 'RAM_WE_OR');
+  const ramWeOr = makeChipInstance(parent, ramWeOrDef, { x: pos.x + 9600, y: pos.y + 300 });
+  const ramWeIn = (idx: number) => ramWeOr.pins[ramWeOrDef.ports[idx]!]!;
+  wire(parent, ramWriteNow.out, ramWeIn(0));
+  wire(parent, stackWriteNow.out, ramWeIn(1));
+  tieToLabel('LDBCA_NOW', ramWeIn(2), { x: pos.x + 9500, y: pos.y + 350 });
+  tieToLabel('LDDEA_NOW', ramWeIn(3), { x: pos.x + 9500, y: pos.y + 400 });
+  tieToLabel('LDNNA_NOW', ramWeIn(4), { x: pos.x + 9500, y: pos.y + 450 });
+  tieToLabel('LDNNHL_LOW_NOW', ramWeIn(5), { x: pos.x + 9500, y: pos.y + 500 });
+  tieToLabel('LDNNHL_HIGH_NOW', ramWeIn(6), { x: pos.x + 9500, y: pos.y + 550 });
+  wire(parent, hlMemWeTerms2.out, ramWeIn(7));
+  tieToLabel('LDHLN_WRITE_NOW', ramWeIn(8), { x: pos.x + 9500, y: pos.y + 650 });
+  wire(parent, exSpWriteLowAny2.out, ramWeIn(9));
+  wire(parent, exSpWriteHighAny2.out, ramWeIn(10));
+  tieToLabel('LDBLOCK_WRITE_NOW', ramWeIn(11), { x: pos.x + 9800, y: pos.y + 800 });
+  tieToLabel('INBLOCK_WRITE_NOW', ramWeIn(12), { x: pos.x + 9900, y: pos.y + 825 });
+  wire(parent, edNnWeAny.out, ramWeIn(13));
+  wire(parent, ddFdMemWeAny2.out, ramWeIn(14));
+  tieToLabel('RRDRLD_WRITE_NOW', ramWeIn(15), { x: pos.x + 10300, y: pos.y + 850 });
+  wire(parent, ramWeOr.pins[ramWeOrDef.ports[16]!]!, ram.pins.we!);
 
   // ramOe's FETCH term is deliberately gated by NOT(groupActive), not bare
   // phase0. A ring counter's rotation passes through a transient window
@@ -9023,63 +8990,26 @@ function buildZ80CpuInner(
     tiePowerRail(parent, 'GND', resetMux.pins[muxDef.ports[2]!]!); // in1: reset — force 0
     wire(parent, resetMux.pins[muxDef.ports[3]!]!, a.d[i]!);
   }
-  const aWeStage = buildOr(parent, { x: pos.x + 4300, y: pos.y + 1950 });
-  wire(parent, aWe.out, aWeStage.a);
-  wire(parent, isBusToA.out, aWeStage.b);
-  const aWeStage2 = buildOr(parent, { x: pos.x + 4350, y: pos.y + 1950 });
-  wire(parent, aWeStage.out, aWeStage2.a);
-  tieToLabel('INCDEC_A_NOW', aWeStage2.b, { x: pos.x + 4250, y: pos.y + 1950 });
-  // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) needs
-  // `A`'s own `we` too — a fourth OR term, the identical shape every other
-  // competing writer of `A` in this file already gets.
-  const aWeStageDaa = buildOr(parent, { x: pos.x + 4370, y: pos.y + 1950 });
-  wire(parent, aWeStage2.out, aWeStageDaa.a);
-  tieToLabel('DAA_NOW', aWeStageDaa.b, { x: pos.x + 4270, y: pos.y + 1950 });
-  // RLCA/RRCA/RLA/RRA/CPL (x=00, z=7 — see the doc comment above) need
-  // `A`'s own `we` too, the same third-OR-term shape ADD HL,rr's own
-  // C-bit write uses on `F`'s `we` below — SCF/CCF never assert
-  // `ROTACC_A_NOW` (neither one ever writes `A`), so this term alone is
-  // enough for all five of the ops that do.
-  const aWeStage3 = buildOr(parent, { x: pos.x + 4380, y: pos.y + 1950 });
-  wire(parent, aWeStageDaa.out, aWeStage3.a);
-  tieToLabel('ROTACC_A_NOW', aWeStage3.b, { x: pos.x + 4280, y: pos.y + 1950 });
-  // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) needs `A`'s
-  // own `we` too — a fifth OR term, the identical shape every earlier
-  // competing writer of `A` already gets.
-  const aWeStage4 = buildOr(parent, { x: pos.x + 4390, y: pos.y + 1950 });
-  wire(parent, aWeStage3.out, aWeStage4.a);
-  tieToLabel('EX_AFAF_NOW', aWeStage4.b, { x: pos.x + 4290, y: pos.y + 1950 });
-  // IN A,(n) (x=11, z=3, y=3 — see "x=11: IN A,(n) / OUT (n),A" above)
-  // needs `A`'s own `we` too — a sixth OR term.
-  const aWeStage5 = buildOr(parent, { x: pos.x + 4395, y: pos.y + 1950 });
-  wire(parent, aWeStage4.out, aWeStage5.a);
-  tieToLabel('IN_NOW', aWeStage5.b, { x: pos.x + 4295, y: pos.y + 1950 });
-  // NEG (see "x=00, z=4: NEG" above) needs `A`'s own `we` too — a
-  // seventh OR term.
-  const aWeStage6 = buildOr(parent, { x: pos.x + 4398, y: pos.y + 1950 });
-  wire(parent, aWeStage5.out, aWeStage6.a);
-  tieToLabel('NEG_NOW', aWeStage6.b, { x: pos.x + 4298, y: pos.y + 1950 });
-  // RRD/RLD (see "x=01, z=7: RRD/RLD" above) needs `A`'s own `we` too —
-  // an eighth OR term.
-  const aWeStage7 = buildOr(parent, { x: pos.x + 4399, y: pos.y + 1950 });
-  wire(parent, aWeStage6.out, aWeStage7.a);
-  tieToLabel('RRDRLD_COMMIT_NOW', aWeStage7.b, { x: pos.x + 4299, y: pos.y + 1950 });
-  const aWeStage8 = buildOr(parent, { x: pos.x + 4401, y: pos.y + 1950 });
-  wire(parent, aWeStage7.out, aWeStage8.a);
-  tieToLabel('INRC_WE_A_NOW', aWeStage8.b, { x: pos.x + 4301, y: pos.y + 1950 });
-  const aWeStage9 = buildOr(parent, { x: pos.x + 4402, y: pos.y + 1950 });
-  wire(parent, aWeStage8.out, aWeStage9.a);
-  tieToLabel('LDAIR_NOW', aWeStage9.b, { x: pos.x + 4302, y: pos.y + 1950 });
-  const aWeStage10 = buildOr(parent, { x: pos.x + 4403, y: pos.y + 1950 });
-  wire(parent, aWeStage9.out, aWeStage10.a);
-  tieToLabel('SETRES_WE_A_NOW', aWeStage10.b, { x: pos.x + 4303, y: pos.y + 1950 });
-  const aWeStage11 = buildOr(parent, { x: pos.x + 4403.5, y: pos.y + 1950 });
-  wire(parent, aWeStage10.out, aWeStage11.a);
-  tieToLabel('CBROT_WE_A_NOW', aWeStage11.b, { x: pos.x + 4303.5, y: pos.y + 1950 });
-  const aWeFinal = buildOr(parent, { x: pos.x + 4404, y: pos.y + 1950 });
-  wire(parent, aWeStage11.out, aWeFinal.a);
-  wire(parent, aReset, aWeFinal.b);
-  wire(parent, aWeFinal.out, a.we);
+  // A WE OR — sequential left-associated OR of every A write-enable term
+  // (same order as the former aWeStage…aWeFinal chain).
+  const aWeOrDef = getOrNChip(library, 14, 'A_WE_OR');
+  const aWeOr = makeChipInstance(parent, aWeOrDef, { x: pos.x + 4300, y: pos.y + 1950 });
+  const aWeIn = (idx: number) => aWeOr.pins[aWeOrDef.ports[idx]!]!;
+  wire(parent, aWe.out, aWeIn(0));
+  wire(parent, isBusToA.out, aWeIn(1));
+  tieToLabel('INCDEC_A_NOW', aWeIn(2), { x: pos.x + 4250, y: pos.y + 1950 });
+  tieToLabel('DAA_NOW', aWeIn(3), { x: pos.x + 4270, y: pos.y + 1950 });
+  tieToLabel('ROTACC_A_NOW', aWeIn(4), { x: pos.x + 4280, y: pos.y + 1950 });
+  tieToLabel('EX_AFAF_NOW', aWeIn(5), { x: pos.x + 4290, y: pos.y + 1950 });
+  tieToLabel('IN_NOW', aWeIn(6), { x: pos.x + 4295, y: pos.y + 1950 });
+  tieToLabel('NEG_NOW', aWeIn(7), { x: pos.x + 4298, y: pos.y + 1950 });
+  tieToLabel('RRDRLD_COMMIT_NOW', aWeIn(8), { x: pos.x + 4299, y: pos.y + 1950 });
+  tieToLabel('INRC_WE_A_NOW', aWeIn(9), { x: pos.x + 4301, y: pos.y + 1950 });
+  tieToLabel('LDAIR_NOW', aWeIn(10), { x: pos.x + 4302, y: pos.y + 1950 });
+  tieToLabel('SETRES_WE_A_NOW', aWeIn(11), { x: pos.x + 4303, y: pos.y + 1950 });
+  tieToLabel('CBROT_WE_A_NOW', aWeIn(12), { x: pos.x + 4303.5, y: pos.y + 1950 });
+  wire(parent, aReset, aWeIn(13));
+  wire(parent, aWeOr.pins[aWeOrDef.ports[14]!]!, a.we);
 
   // LD r,r' destinations B/C/D/E/H/L: each gets the same "mux ahead of d,
   // OR into we" treatment as A above, selecting the bus outright (never
@@ -10553,96 +10483,41 @@ function buildZ80CpuInner(
     tieToLabel(`BUS${i}`, mux.pins[muxDef.ports[2]!]!, { x: pos.x + 8300, y: pos.y + 2100 + i * 100 }); // in1: POP AF's low byte (the bus)
     wire(parent, mux.pins[muxDef.ports[3]!]!, f.d[i]!);
   }
-  const fWeStage = buildOr(parent, { x: pos.x + 8500, y: pos.y + 2180 });
-  wire(parent, fWe.out, fWeStage.a);
-  tieToLabel('INCDEC_R8_NOW', fWeStage.b, { x: pos.x + 8400, y: pos.y + 2180 });
-  const fWeStage2 = buildOr(parent, { x: pos.x + 8600, y: pos.y + 2200 });
-  wire(parent, fWeStage.out, fWeStage2.a);
-  wire(parent, isBusToF.out, fWeStage2.b);
-  // ADD HL,rr's own C-bit write (see "x=00: ADD HL,rr" above) needs F's
-  // own `we` to fire too — a third OR term, otherwise the fresh mux
-  // selection above would sit ready but never actually commit. Widened
-  // for ADD IX,rr / ADD IY,rr (same ADDHL_C).
-  const fWeStage3 = buildOr(parent, { x: pos.x + 8700, y: pos.y + 2220 });
-  wire(parent, fWeStage2.out, fWeStage3.a);
+  // ADD HL,rr / ADD IX,rr / ADD IY,rr C-bit write — side-fold stays
+  // outside F_WE_OR and feeds as a single input.
   const addHlCWe1 = buildOr(parent, { x: pos.x + 8650, y: pos.y + 2220 });
   tieToLabel('ADDHL_NOW', addHlCWe1.a, { x: pos.x + 8550, y: pos.y + 2220 });
   tieToLabel('ADDIX_NOW', addHlCWe1.b, { x: pos.x + 8550, y: pos.y + 2240 });
   const addHlCWe = buildOr(parent, { x: pos.x + 8670, y: pos.y + 2220 });
   wire(parent, addHlCWe1.out, addHlCWe.a);
   tieToLabel('ADDIY_NOW', addHlCWe.b, { x: pos.x + 8570, y: pos.y + 2240 });
-  wire(parent, addHlCWe.out, fWeStage3.b);
-  // RLCA/RRCA/RLA/RRA/CPL/SCF/CCF (x=00, z=7 — see the doc comment above)
-  // need `F`'s own `we` too — `ROTACC_N_NOW` is already the OR of all
-  // seven (six from `rotAccCNowFinal`, plus CPL), so this one term alone
-  // covers the whole group, not just the bit-0/bit-1 layers it also gates.
-  const fWeStage4 = buildOr(parent, { x: pos.x + 8750, y: pos.y + 2230 });
-  wire(parent, fWeStage3.out, fWeStage4.a);
-  tieToLabel('ROTACC_N_NOW', fWeStage4.b, { x: pos.x + 8650, y: pos.y + 2230 });
-  // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) needs `F`'s
-  // own `we` too — a fifth OR term.
-  const fWeStage5 = buildOr(parent, { x: pos.x + 8760, y: pos.y + 2240 });
-  wire(parent, fWeStage4.out, fWeStage5.a);
-  tieToLabel('EX_AFAF_NOW', fWeStage5.b, { x: pos.x + 8660, y: pos.y + 2240 });
-  // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) needs
-  // `F`'s own `we` too — a sixth OR term.
-  const fWeStage6 = buildOr(parent, { x: pos.x + 8770, y: pos.y + 2250 });
-  wire(parent, fWeStage5.out, fWeStage6.a);
-  tieToLabel('DAA_NOW', fWeStage6.b, { x: pos.x + 8670, y: pos.y + 2250 });
-  // LDI (see "x=10, y=4, z=0: LDI" above) needs `F`'s own `we` too — a
-  // seventh and final OR term.
-  const fWeFinal = buildOr(parent, { x: pos.x + 8870, y: pos.y + 2260 });
-  wire(parent, fWeStage6.out, fWeFinal.a);
-  tieToLabel('LDBLOCK_COMMIT_NOW', fWeFinal.b, { x: pos.x + 8770, y: pos.y + 2260 });
-  // CPI/CPD/CPIR/CPDR (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above) needs
-  // `F`'s own `we` too — an eighth and final OR term.
-  const fWeFinal2 = buildOr(parent, { x: pos.x + 8970, y: pos.y + 2270 });
-  wire(parent, fWeFinal.out, fWeFinal2.a);
-  tieToLabel('CPBLOCK_COMMIT_NOW', fWeFinal2.b, { x: pos.x + 8870, y: pos.y + 2270 });
-  // INI (see "x=10, y=4, z=2: INI" above) needs `F`'s own `we` too — a
-  // ninth and final OR term.
-  const fWeFinal3 = buildOr(parent, { x: pos.x + 9070, y: pos.y + 2280 });
-  wire(parent, fWeFinal2.out, fWeFinal3.a);
-  tieToLabel('INBLOCK_COMMIT_NOW', fWeFinal3.b, { x: pos.x + 8970, y: pos.y + 2280 });
-  // OUTI/OUTD/OTIR/OTDR (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above)
-  // needs `F`'s own `we` too — a tenth and final OR term.
-  const fWeFinal4 = buildOr(parent, { x: pos.x + 9170, y: pos.y + 2290 });
-  wire(parent, fWeFinal3.out, fWeFinal4.a);
-  tieToLabel('OUTBLOCK_COMMIT_NOW', fWeFinal4.b, { x: pos.x + 9070, y: pos.y + 2290 });
-  // NEG (see "x=00, z=4: NEG" above) needs `F`'s own `we` too — an
-  // eleventh and final OR term.
-  const fWeFinal5 = buildOr(parent, { x: pos.x + 9270, y: pos.y + 2300 });
-  wire(parent, fWeFinal4.out, fWeFinal5.a);
-  tieToLabel('NEG_NOW', fWeFinal5.b, { x: pos.x + 9170, y: pos.y + 2300 });
-  // ADC HL,rr/SBC HL,rr (see "x=01, z=2: ADC HL,rr/SBC HL,rr" above)
-  // needs `F`'s own `we` too — a twelfth and final OR term.
-  const fWeFinal6 = buildOr(parent, { x: pos.x + 9370, y: pos.y + 2310 });
-  wire(parent, fWeFinal5.out, fWeFinal6.a);
-  tieToLabel('ADCSBCHL_COMMIT_NOW', fWeFinal6.b, { x: pos.x + 9270, y: pos.y + 2310 });
-  // RRD/RLD (see "x=01, z=7: RRD/RLD" above) needs `F`'s own `we` too —
-  // a thirteenth and final OR term.
-  const fWeFinal7 = buildOr(parent, { x: pos.x + 9470, y: pos.y + 2320 });
-  wire(parent, fWeFinal6.out, fWeFinal7.a);
-  tieToLabel('RRDRLD_COMMIT_NOW', fWeFinal7.b, { x: pos.x + 9370, y: pos.y + 2320 });
-  const fWeFinal8 = buildOr(parent, { x: pos.x + 9570, y: pos.y + 2330 });
-  wire(parent, fWeFinal7.out, fWeFinal8.a);
-  tieToLabel('INRC_NOW', fWeFinal8.b, { x: pos.x + 9470, y: pos.y + 2330 });
-  const fWeFinal9 = buildOr(parent, { x: pos.x + 9670, y: pos.y + 2340 });
-  wire(parent, fWeFinal8.out, fWeFinal9.a);
-  tieToLabel('LDAIR_NOW', fWeFinal9.b, { x: pos.x + 9570, y: pos.y + 2340 });
-  const fWeFinal10 = buildOr(parent, { x: pos.x + 9770, y: pos.y + 2350 });
-  wire(parent, fWeFinal9.out, fWeFinal10.a);
-  tieToLabel('BIT_REG_NOW', fWeFinal10.b, { x: pos.x + 9670, y: pos.y + 2350 });
-  const fWeFinal11 = buildOr(parent, { x: pos.x + 9870, y: pos.y + 2360 });
-  wire(parent, fWeFinal10.out, fWeFinal11.a);
-  tieToLabel('BIT_HL_NOW', fWeFinal11.b, { x: pos.x + 9770, y: pos.y + 2360 });
-  const fWeFinal11b = buildOr(parent, { x: pos.x + 9920, y: pos.y + 2365 });
-  wire(parent, fWeFinal11.out, fWeFinal11b.a);
-  tieToLabel('BIT_IXIY_NOW', fWeFinal11b.b, { x: pos.x + 9820, y: pos.y + 2365 });
-  const fWeFinal12 = buildOr(parent, { x: pos.x + 9970, y: pos.y + 2370 });
-  wire(parent, fWeFinal11b.out, fWeFinal12.a);
-  tieToLabel('CBROT_NOW', fWeFinal12.b, { x: pos.x + 9870, y: pos.y + 2370 });
-  wire(parent, fWeFinal12.out, f.we);
+  // F WE OR — sequential left-associated OR of every F write-enable term
+  // (same order as the former fWeStage…fWeFinal12 chain). RRDRLD_COMMIT_NOW
+  // stays mid-chain; ADD HL/IX/IY side-fold is a single input.
+  const fWeOrDef = getOrNChip(library, 20, 'F_WE_OR');
+  const fWeOr = makeChipInstance(parent, fWeOrDef, { x: pos.x + 8500, y: pos.y + 2180 });
+  const fWeIn = (idx: number) => fWeOr.pins[fWeOrDef.ports[idx]!]!;
+  wire(parent, fWe.out, fWeIn(0));
+  tieToLabel('INCDEC_R8_NOW', fWeIn(1), { x: pos.x + 8400, y: pos.y + 2180 });
+  wire(parent, isBusToF.out, fWeIn(2));
+  wire(parent, addHlCWe.out, fWeIn(3));
+  tieToLabel('ROTACC_N_NOW', fWeIn(4), { x: pos.x + 8650, y: pos.y + 2230 });
+  tieToLabel('EX_AFAF_NOW', fWeIn(5), { x: pos.x + 8660, y: pos.y + 2240 });
+  tieToLabel('DAA_NOW', fWeIn(6), { x: pos.x + 8670, y: pos.y + 2250 });
+  tieToLabel('LDBLOCK_COMMIT_NOW', fWeIn(7), { x: pos.x + 8770, y: pos.y + 2260 });
+  tieToLabel('CPBLOCK_COMMIT_NOW', fWeIn(8), { x: pos.x + 8870, y: pos.y + 2270 });
+  tieToLabel('INBLOCK_COMMIT_NOW', fWeIn(9), { x: pos.x + 8970, y: pos.y + 2280 });
+  tieToLabel('OUTBLOCK_COMMIT_NOW', fWeIn(10), { x: pos.x + 9070, y: pos.y + 2290 });
+  tieToLabel('NEG_NOW', fWeIn(11), { x: pos.x + 9170, y: pos.y + 2300 });
+  tieToLabel('ADCSBCHL_COMMIT_NOW', fWeIn(12), { x: pos.x + 9270, y: pos.y + 2310 });
+  tieToLabel('RRDRLD_COMMIT_NOW', fWeIn(13), { x: pos.x + 9370, y: pos.y + 2320 });
+  tieToLabel('INRC_NOW', fWeIn(14), { x: pos.x + 9470, y: pos.y + 2330 });
+  tieToLabel('LDAIR_NOW', fWeIn(15), { x: pos.x + 9570, y: pos.y + 2340 });
+  tieToLabel('BIT_REG_NOW', fWeIn(16), { x: pos.x + 9670, y: pos.y + 2350 });
+  tieToLabel('BIT_HL_NOW', fWeIn(17), { x: pos.x + 9770, y: pos.y + 2360 });
+  tieToLabel('BIT_IXIY_NOW', fWeIn(18), { x: pos.x + 9820, y: pos.y + 2365 });
+  tieToLabel('CBROT_NOW', fWeIn(19), { x: pos.x + 9870, y: pos.y + 2370 });
+  wire(parent, fWeOr.pins[fWeOrDef.ports[20]!]!, f.we);
 
   // SP: same external-seed contract as B..L above — `sp.d`/`sp.we` here
   // are the caller's own sink pins, muxed ahead of the raw register the

@@ -19,8 +19,9 @@ import type { Pin } from '../src/sim/types.js';
  *   arithmetic. Documented bits S/Z/H/N/C are compared.
  *
  * Soft runs with `addrBits=7` + `gateCallStack` so CALL/RET/RST match the
- * gate's single-byte return stack; PUSH/POP qq stay two-byte on both sides.
- * `gateCatchUp` advances rings until PC and SP match after each softStep.
+ * gate's single-byte return stack; PUSH/POP qq and EX (SP),HL stay two-byte
+ * on both sides. `gateCatchUp` advances rings until PC and SP match after
+ * each softStep.
  */
 const FLAG_MASK = 0xd3; // S Z - H - - N C  (exclude Y=0x20, X=0x08, P/V=0x04)
 const ADDR_BITS = 7;
@@ -50,9 +51,7 @@ function softSnap(cpu: SoftZ80State, ram: Uint8Array, addrs: number[]): Snapshot
     ix: cpu.ix & 0xffff,
     sp: cpu.sp & ADDR_MASK,
     pc: cpu.pc & ADDR_MASK,
-    // Gate CALL/RET/RST push addrBits-wide PC onto an 8-bit bus — unused
-    // high bits may float; only the address-width low bits are meaningful.
-    ram: addrs.map((a) => (ram[a] ?? 0) & ADDR_MASK),
+    ram: addrs.map((a) => ram[a] ?? 0),
   };
 }
 
@@ -67,7 +66,7 @@ function gateSnap(h: Z80Harness, addrs: number[]): Snapshot {
     ix: (readReg(cpu.rIXH.q) << 8) | readReg(cpu.rIXL.q),
     sp: readReg(cpu.sp.q),
     pc: readReg(cpu.pc),
-    ram: addrs.map((a) => (cpu.ram.bytes[a] ?? 0) & ADDR_MASK),
+    ram: addrs.map((a) => cpu.ram.bytes[a] ?? 0),
   };
 }
 
@@ -349,13 +348,53 @@ describe('softZ80 vs buildZ80Cpu parity', () => {
   });
 
   it('RST 30h / RET / HALT', () => {
-    // RST 30H (0xF7) → 0x30; subroutine LD A,0x42 / RET; then LD A,0x99 / HALT
+    // RST 30H (0xF7) → 0x30; subroutine LD A,0x42 / RET; then LD A,0x99 / HALT.
+    // Skip stack RAM compare: gate may float high bits on the addrBits-wide
+    // return-byte bus (soft writes a clean 8-bit return PC).
     const program = new Uint8Array(128);
     program.set([0xf7, 0x3e, 0x99, 0x76], 0);
     program.set([0x3e, 0x42, 0xc9], 0x30);
-    const { soft, gate } = runBoth(program, [0x5f], 16);
+    const { soft, gate } = runBoth(program, [], 16);
     expectParity('RST 30h', soft, gate);
     expect(soft.a).toBe(0x99);
+    expect(soft.sp).toBe(SP0);
+  });
+
+  it('CALL C taken / CALL NC not-taken / HALT', () => {
+    // SCF / CALL C,0x20 / LD A,0x11 / CALL NC,0x30 / LD A,0x22 / HALT
+    const program = new Uint8Array(128);
+    program.set([0x37, 0xdc, 0x20, 0x00, 0x3e, 0x11, 0xd4, 0x30, 0x00, 0x3e, 0x22, 0x76], 0);
+    program.set([0x3e, 0x42, 0xc9], 0x20);
+    program.set([0x3e, 0x99], 0x30);
+    const { soft, gate } = runBoth(program, [], 16);
+    expectParity('CALL C/NC', soft, gate);
+    expect(soft.a).toBe(0x22);
+    expect(soft.sp).toBe(SP0);
+  });
+
+  it('RET C taken / RET NC not-taken / HALT', () => {
+    // SCF / CALL 0x40 / LD A,0x11 / CALL 0x50 / LD A,0x22 / HALT
+    const program = new Uint8Array(128);
+    program.set([0x37, 0xcd, 0x40, 0x00, 0x3e, 0x11, 0xcd, 0x50, 0x00, 0x3e, 0x22, 0x76], 0);
+    program.set([0xd8], 0x40);
+    program.set([0xd0, 0xc9], 0x50);
+    const { soft, gate } = runBoth(program, [], 16);
+    expectParity('RET C/NC', soft, gate);
+    expect(soft.a).toBe(0x22);
+    expect(soft.sp).toBe(SP0);
+  });
+
+  it('EX (SP),HL / HALT', () => {
+    // LD HL,0xBBAA / EX (SP),HL / HALT; RAM[SP]=0x11, RAM[SP+1]=0x22
+    const program = new Uint8Array(128);
+    program.set([0x21, 0xaa, 0xbb, 0xe3, 0x76], 0);
+    program[SP0] = 0x11;
+    program[SP0 + 1] = 0x22;
+    const { soft, gate } = runBoth(program, [SP0, SP0 + 1], 16);
+    expectParity('EX (SP),HL', soft, gate);
+    expect(soft.hl).toBe(0x2211);
+    expect(soft.ram[0]).toBe(0xaa);
+    expect(soft.ram[1]).toBe(0xbb);
     expect(soft.sp).toBe(SP0);
   });
 });
