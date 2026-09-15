@@ -304,11 +304,44 @@ export interface NotGate {
   out: Pin;
 }
 
+export interface TwoInputGate {
+  a: Pin;
+  b: Pin;
+  out: Pin;
+}
+
+/**
+ * Optional per-circuit gate placers. When set (see `setCircuitGatePlacer`),
+ * `buildAnd`/`buildOr`/`buildNot`/… place chip instances instead of inline
+ * transistors — used by `buildZ80Cpu` to keep place-time netlists hierarchical.
+ * Scratch circuits used while folding stdcells never set a placer, so their
+ * guts stay real transistors.
+ */
+export interface CircuitGatePlacer {
+  not: (circuit: Circuit, pos: Point) => NotGate;
+  nand: (circuit: Circuit, pos: Point) => TwoInputGate;
+  and: (circuit: Circuit, pos: Point) => TwoInputGate;
+  nor: (circuit: Circuit, pos: Point) => TwoInputGate;
+  or: (circuit: Circuit, pos: Point) => TwoInputGate;
+  xor: (circuit: Circuit, pos: Point) => TwoInputGate;
+}
+
+const circuitGatePlacers = new WeakMap<Circuit, CircuitGatePlacer>();
+
+/** Attach or clear chip-backed gate placement for one circuit. */
+export function setCircuitGatePlacer(circuit: Circuit, placer: CircuitGatePlacer | null): void {
+  if (placer) circuitGatePlacers.set(circuit, placer);
+  else circuitGatePlacers.delete(circuit);
+}
+
 /** Standard 2-transistor CMOS inverter: PMOS pulls up, NMOS pulls down. */
 export function buildNot(
   circuit: Circuit,
   pos: Point = { x: 0, y: 0 },
 ): NotGate {
+  const placer = circuitGatePlacers.get(circuit);
+  if (placer) return placer.not(circuit, pos);
+
   const pmos = makeTransistor(circuit, 'P', pos);
   const nmos = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
   // Power via rail labels — see tiePowerRail. Circuit still needs Source(1)/Source(0) rail drivers.
@@ -319,17 +352,14 @@ export function buildNot(
   return { in: pmos.pins.gate, out: pmos.pins.drain };
 }
 
-export interface TwoInputGate {
-  a: Pin;
-  b: Pin;
-  out: Pin;
-}
-
 /** Standard CMOS NAND: two PMOS in parallel (pull-up), two NMOS in series (pull-down). */
 export function buildNand(
   circuit: Circuit,
   pos: Point = { x: 0, y: 0 },
 ): TwoInputGate {
+  const placer = circuitGatePlacers.get(circuit);
+  if (placer) return placer.nand(circuit, pos);
+
   const p1 = makeTransistor(circuit, 'P', pos);
   const p2 = makeTransistor(circuit, 'P', { x: pos.x + 50, y: pos.y });
   const n1 = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
@@ -350,6 +380,9 @@ export function buildNand(
 
 /** NAND followed by an inverter. */
 export function buildAnd(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+  const placer = circuitGatePlacers.get(circuit);
+  if (placer) return placer.and(circuit, pos);
+
   const nand = buildNand(circuit, pos);
   const inv = buildNot(circuit, { x: pos.x + 120, y: pos.y });
   wire(circuit, nand.out, inv.in);
@@ -361,6 +394,9 @@ export function buildNor(
   circuit: Circuit,
   pos: Point = { x: 0, y: 0 },
 ): TwoInputGate {
+  const placer = circuitGatePlacers.get(circuit);
+  if (placer) return placer.nor(circuit, pos);
+
   const p1 = makeTransistor(circuit, 'P', pos);
   const p2 = makeTransistor(circuit, 'P', { x: pos.x, y: pos.y + 60 });
   const n1 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y });
@@ -381,6 +417,9 @@ export function buildNor(
 
 /** NOR followed by an inverter. */
 export function buildOr(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+  const placer = circuitGatePlacers.get(circuit);
+  if (placer) return placer.or(circuit, pos);
+
   const nor = buildNor(circuit, pos);
   const inv = buildNot(circuit, { x: pos.x + 120, y: pos.y });
   wire(circuit, nor.out, inv.in);
@@ -393,6 +432,9 @@ export function buildOr(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInput
  * keeps XOR built from the same NAND primitive as everything else here.
  */
 export function buildXor(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+  const placer = circuitGatePlacers.get(circuit);
+  if (placer) return placer.xor(circuit, pos);
+
   const g1 = buildNand(circuit, pos); // n1 = NAND(a, b)
   const g2 = buildNand(circuit, { x: pos.x, y: pos.y + 150 }); // NAND(a, n1)
   const g3 = buildNand(circuit, { x: pos.x + 150, y: pos.y + 150 }); // NAND(b, n1)
