@@ -7586,100 +7586,11 @@ function buildZ80CpuInner(
   const fetchRead = buildAnd(parent, { x: pos.x + 9550, y: pos.y - 300 });
   tieToLabel('PHASE0', fetchRead.a, { x: pos.x + 9450, y: pos.y - 300 });
   wire(parent, notBusActive.out, fetchRead.b);
-  const ramOeStage = buildOr(parent, { x: pos.x + 9600, y: pos.y - 200 });
-  wire(parent, fetchRead.out, ramOeStage.a);
-  wire(parent, hlNow.out, ramOeStage.b);
-  // LD r,n's own read (see "x=00, z=6: LD r,n" above) needs the identical
-  // treatment hlNow already gets here: OR'd straight into ramOeStage, not
-  // routed through busActive — safe for the same structural reason hlNow
-  // is: `ldImm8ReadNow` requires `isX0Group`, `hlNow` requires
-  // `groupActive` (x=10/x=01 only) — mutually exclusive by `dec.x`'s own
-  // one-hot decode, so the two can never compete for this OR gate's input
-  // in the same cycle.
-  const ramOeStage2 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 250 });
-  wire(parent, ramOeStage.out, ramOeStage2.a);
-  tieToLabel('LDIMM8_READ_NOW', ramOeStage2.b, { x: pos.x + 9500, y: pos.y - 250 });
-  // LD dd,nn's own two reads (see "x=00, z=1: LD dd,nn" above) get the
-  // identical treatment — same reasoning as LDIMM8_READ_NOW just above.
-  const ramOeStage3 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 300 });
-  wire(parent, ramOeStage2.out, ramOeStage3.a);
-  tieToLabel('LDDDNN_LOW_NOW', ramOeStage3.b, { x: pos.x + 9500, y: pos.y - 300 });
-  const ramOeStage4 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 350 });
-  wire(parent, ramOeStage3.out, ramOeStage4.a);
-  tieToLabel('LDDDNN_HIGH_NOW', ramOeStage4.b, { x: pos.x + 9500, y: pos.y - 350 });
-  // JP nn's own two reads (see "x=11: JP nn" above) get the identical
-  // treatment.
-  const ramOeStage5 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 400 });
-  wire(parent, ramOeStage4.out, ramOeStage5.a);
-  tieToLabel('JP_READ_LOW_NOW', ramOeStage5.b, { x: pos.x + 9500, y: pos.y - 400 });
-  const ramOeStage6 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 450 });
-  wire(parent, ramOeStage5.out, ramOeStage6.a);
-  tieToLabel('JP_READ_HIGH_NOW', ramOeStage6.b, { x: pos.x + 9500, y: pos.y - 450 });
-  // CALL nn's own two reads (see "x=11: CALL nn" above) get the identical
-  // treatment.
-  const ramOeStage7 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 500 });
-  wire(parent, ramOeStage6.out, ramOeStage7.a);
-  tieToLabel('CALL_READ_LOW_NOW', ramOeStage7.b, { x: pos.x + 9500, y: pos.y - 500 });
-  const ramOeStage8 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 550 });
-  wire(parent, ramOeStage7.out, ramOeStage8.a);
-  tieToLabel('CALL_READ_HIGH_NOW', ramOeStage8.b, { x: pos.x + 9500, y: pos.y - 550 });
-  // JP cc,nn's own two reads (see "x=11: JP cc,nn" above) get the
-  // identical treatment.
-  const ramOeStage9 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 600 });
-  wire(parent, ramOeStage8.out, ramOeStage9.a);
-  tieToLabel('JPCC_READ_LOW_NOW', ramOeStage9.b, { x: pos.x + 9500, y: pos.y - 600 });
-  const ramOeStage10 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 650 });
-  wire(parent, ramOeStage9.out, ramOeStage10.a);
-  tieToLabel('JPCC_READ_HIGH_NOW', ramOeStage10.b, { x: pos.x + 9500, y: pos.y - 650 });
-  // CALL cc,nn's own two reads (see "x=11: CALL cc,nn" above) get the
-  // identical treatment.
-  const ramOeStage11 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 700 });
-  wire(parent, ramOeStage10.out, ramOeStage11.a);
-  tieToLabel('CALLCC_READ_LOW_NOW', ramOeStage11.b, { x: pos.x + 9500, y: pos.y - 700 });
-  const ramOeStage12 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 750 });
-  wire(parent, ramOeStage11.out, ramOeStage12.a);
-  tieToLabel('CALLCC_READ_HIGH_NOW', ramOeStage12.b, { x: pos.x + 9500, y: pos.y - 750 });
-  // JR cc's own single read (see "x=00: JR cc,e" above) gets the identical
-  // treatment.
-  const ramOeStage13 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 800 });
-  wire(parent, ramOeStage12.out, ramOeStage13.a);
-  tieToLabel('JR_READ_NOW', ramOeStage13.b, { x: pos.x + 9500, y: pos.y - 800 });
-  // Indirect loads' own reads (see "x=00: indirect loads through
-  // (BC)/(DE)/(nn)" above): `LD A,(BC)`/`LD A,(DE)`, `nn`'s own address
-  // bytes (off PC), and — through `nn` itself — `LD HL,(nn)`'s own low
-  // and high bytes plus `LD A,(nn)`. Every one of these needs RAM's own
-  // `oe` regardless of which specific address mux override (below)
-  // actually supplies the address that phase.
-  const ramOeStage14 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 850 });
-  wire(parent, ramOeStage13.out, ramOeStage14.a);
-  tieToLabel('LDABC_NOW', ramOeStage14.b, { x: pos.x + 9500, y: pos.y - 850 });
-  const ramOeStage15 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 900 });
-  wire(parent, ramOeStage14.out, ramOeStage15.a);
-  tieToLabel('LDADE_NOW', ramOeStage15.b, { x: pos.x + 9500, y: pos.y - 900 });
-  const ramOeStage16 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 950 });
-  wire(parent, ramOeStage15.out, ramOeStage16.a);
-  tieToLabel('NN_READ_LOW_NOW', ramOeStage16.b, { x: pos.x + 9500, y: pos.y - 950 });
-  const ramOeStage17 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1000 });
-  wire(parent, ramOeStage16.out, ramOeStage17.a);
-  tieToLabel('NN_READ_HIGH_NOW', ramOeStage17.b, { x: pos.x + 9500, y: pos.y - 1000 });
-  const ramOeStage18 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1050 });
-  wire(parent, ramOeStage17.out, ramOeStage18.a);
-  tieToLabel('LDHLNN_LOW_NOW', ramOeStage18.b, { x: pos.x + 9500, y: pos.y - 1050 });
-  const ramOeStage19 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1100 });
-  wire(parent, ramOeStage18.out, ramOeStage19.a);
-  tieToLabel('LDHLNN_HIGH_NOW', ramOeStage19.b, { x: pos.x + 9500, y: pos.y - 1100 });
-  const ramOeStage20 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1150 });
-  wire(parent, ramOeStage19.out, ramOeStage20.a);
-  tieToLabel('LDANN_NOW', ramOeStage20.b, { x: pos.x + 9500, y: pos.y - 1150 });
-  // INC (HL)/DEC (HL)'s own read, CB BIT (HL), and SET/RES (HL) reads —
-  // side-fold so this OE stage does not grow sequential ORs (same lesson
-  // as EDNN vs RRD on the final OE chain). Keep both original terms on
-  // the first OR's a/b; never leave an OR input floating (found live:
-  // dangling `hlMemReads.b` stuck the fold high → addr forever = HL →
-  // every immediate read returned RAM[0]/opcode).
   // INC (HL)/DEC (HL), BIT (HL), SET/RES (HL), CBROT (HL) reads — side-fold
-  // so this OE stage does not grow sequential ORs. Pair the four terms as
-  // two ORs then one merge (never leave an OR input floating).
+  // so the main OE OR does not grow sequential stages. Pair the four terms
+  // as two ORs then one merge (never leave an OR input floating — found live:
+  // dangling `.b` stuck the fold high → addr forever = HL → every immediate
+  // read returned RAM[0]/opcode).
   const hlMemReads = buildOr(parent, { x: pos.x + 9550, y: pos.y - 1200 });
   tieToLabel('HLMEM_READ_NOW', hlMemReads.a, { x: pos.x + 9450, y: pos.y - 1200 });
   tieToLabel('BIT_HL_READ_NOW', hlMemReads.b, { x: pos.x + 9450, y: pos.y - 1220 });
@@ -7689,77 +7600,24 @@ function buildZ80CpuInner(
   const hlMemReadsAny = buildOr(parent, { x: pos.x + 9490, y: pos.y - 1220 });
   wire(parent, hlMemReads.out, hlMemReadsAny.a);
   wire(parent, hlMemReads2.out, hlMemReadsAny.b);
-  const ramOeStage21 = buildOr(parent, { x: pos.x + 9600, y: pos.y - 1200 });
-  wire(parent, ramOeStage20.out, ramOeStage21.a);
-  wire(parent, hlMemReadsAny.out, ramOeStage21.b);
-  const ramOe = buildOr(parent, { x: pos.x + 9650, y: pos.y - 150 });
-  wire(parent, ramOeStage21.out, ramOe.a);
-  wire(parent, readNow.out, ramOe.b);
-  // EX (SP),HL's own two reads (see "x=11: EX (SP),HL" below) — a
-  // twenty-third widening. DD/FD EX (SP),IX/IY side-folded then merged.
-  const ramOeStage22 = buildOr(parent, { x: pos.x + 9700, y: pos.y - 100 });
-  wire(parent, ramOe.out, ramOeStage22.a);
+  // EX (SP),HL / IX / IY reads — side-folded then merged into two terms.
   const exSpReadLowAny = buildOr(parent, { x: pos.x + 9650, y: pos.y - 100 });
   tieToLabel('EXSPHL_READ_LOW_NOW', exSpReadLowAny.a, { x: pos.x + 9550, y: pos.y - 100 });
   tieToLabel('EXSPIX_READ_LOW_NOW', exSpReadLowAny.b, { x: pos.x + 9550, y: pos.y - 80 });
   const exSpReadLowAny2 = buildOr(parent, { x: pos.x + 9680, y: pos.y - 90 });
   wire(parent, exSpReadLowAny.out, exSpReadLowAny2.a);
   tieToLabel('EXSPIY_READ_LOW_NOW', exSpReadLowAny2.b, { x: pos.x + 9580, y: pos.y - 70 });
-  wire(parent, exSpReadLowAny2.out, ramOeStage22.b);
-  const ramOeStage23 = buildOr(parent, { x: pos.x + 9750, y: pos.y - 50 });
-  wire(parent, ramOeStage22.out, ramOeStage23.a);
   const exSpReadHighAny = buildOr(parent, { x: pos.x + 9700, y: pos.y - 50 });
   tieToLabel('EXSPHL_READ_HIGH_NOW', exSpReadHighAny.a, { x: pos.x + 9600, y: pos.y - 50 });
   tieToLabel('EXSPIX_READ_HIGH_NOW', exSpReadHighAny.b, { x: pos.x + 9600, y: pos.y - 30 });
   const exSpReadHighAny2 = buildOr(parent, { x: pos.x + 9730, y: pos.y - 40 });
   wire(parent, exSpReadHighAny.out, exSpReadHighAny2.a);
   tieToLabel('EXSPIY_READ_HIGH_NOW', exSpReadHighAny2.b, { x: pos.x + 9630, y: pos.y - 20 });
-  wire(parent, exSpReadHighAny2.out, ramOeStage23.b);
-  // ALU op A,n's own immediate-byte read (see "x=11: ALU op A,n" above) —
-  // a twenty-fourth widening, PC already the default read address, no new
-  // address-mux term needed.
-  const ramOeStage24 = buildOr(parent, { x: pos.x + 9800, y: pos.y - 25 });
-  wire(parent, ramOeStage23.out, ramOeStage24.a);
-  tieToLabel('ALUIMM8_READ_NOW', ramOeStage24.b, { x: pos.x + 9700, y: pos.y - 25 });
-  // IN A,(n)/OUT (n),A's own immediate-byte read (see "x=11: IN A,(n) /
-  // OUT (n),A" above) — a twenty-fifth widening, same "PC already the
-  // default read address" reasoning.
-  const ramOeStage25 = buildOr(parent, { x: pos.x + 9850, y: pos.y + 0 });
-  wire(parent, ramOeStage24.out, ramOeStage25.a);
-  tieToLabel('IOIMM_READ_NOW', ramOeStage25.b, { x: pos.x + 9750, y: pos.y + 0 });
-  // CB/ED/DD/FD's own second-byte read (see "CB/ED/DD/FD prefix bytes"
-  // above) — a twenty-sixth widening, same "PC already the default read
-  // address" reasoning every immediate-reading feature above already
-  // established.
-  const ramOeStage26 = buildOr(parent, { x: pos.x + 9900, y: pos.y + 25 });
-  wire(parent, ramOeStage25.out, ramOeStage26.a);
-  tieToLabel('PREFIX_READ_NOW', ramOeStage26.b, { x: pos.x + 9800, y: pos.y + 25 });
-  // LDI's own read from (HL) (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above) —
-  // a twenty-seventh term.
-  const ramOeFinal = buildOr(parent, { x: pos.x + 9950, y: pos.y + 50 });
-  wire(parent, ramOeStage26.out, ramOeFinal.a);
-  tieToLabel('LDBLOCK_READ_NOW', ramOeFinal.b, { x: pos.x + 9850, y: pos.y + 50 });
-  // CPI/CPD/CPIR/CPDR's own read from (HL) (see "x=10, z=1:
-  // CPI/CPD/CPIR/CPDR" above) — a twenty-eighth and final term.
-  const ramOeFinal2 = buildOr(parent, { x: pos.x + 10000, y: pos.y + 75 });
-  wire(parent, ramOeFinal.out, ramOeFinal2.a);
-  tieToLabel('CPBLOCK_READ_NOW', ramOeFinal2.b, { x: pos.x + 9900, y: pos.y + 75 });
-  // OUTI/OUTD/OTIR/OTDR's own read of (HL) (see "x=10, z=3:
-  // OUTI/OUTD/OTIR/OTDR" above) — a twenty-ninth and final term. `INI`'s
-  // own family needs no equivalent term here — it never reads RAM at
-  // all, only writes it.
-  const ramOeFinal3 = buildOr(parent, { x: pos.x + 10050, y: pos.y + 100 });
-  wire(parent, ramOeFinal2.out, ramOeFinal3.a);
-  tieToLabel('OUTBLOCK_READ_NOW', ramOeFinal3.b, { x: pos.x + 9950, y: pos.y + 100 });
-  // ED LD (nn),dd reads (see "x=01, z=3") — four terms folded into a
-  // side tree, then merged *before* RRD/RLD. Found live chasing the
-  // RRD regression after this instruction landed: each sequential `OR`
-  // on the path from `RRDRLD_READ_NOW` to `ram.oe` is a NOR+NOT pair,
-  // and two or more stages *after* RRD delayed OE enough that the
-  // PHASE4 bus fight (RAM starting to drive while something else was
-  // still releasing) cascaded into VCC/GND contention that froze the
-  // ring counter at PHASE4. Side-folding EDNN and keeping RRD as the
-  // final term restores the pre-EDNN path depth for RRD.
+  // ED LD (nn),dd reads — four terms folded into a side tree, then merged
+  // *before* RRD/RLD. Found live chasing the RRD regression: each sequential
+  // OR after RRD delayed OE enough that the PHASE4 bus fight cascaded into
+  // VCC/GND contention that froze the ring at PHASE4. Side-folding EDNN and
+  // keeping RRD as the *final* OE term restores the pre-EDNN path depth.
   const edNnOeImm = buildOr(parent, { x: pos.x + 10100, y: pos.y + 150 });
   tieToLabel('EDNN_IMM_LOW_NOW', edNnOeImm.a, { x: pos.x + 10000, y: pos.y + 150 });
   tieToLabel('EDNN_IMM_HIGH_NOW', edNnOeImm.b, { x: pos.x + 10000, y: pos.y + 170 });
@@ -7769,11 +7627,7 @@ function buildZ80CpuInner(
   const edNnOeAny = buildOr(parent, { x: pos.x + 10150, y: pos.y + 175 });
   wire(parent, edNnOeImm.out, edNnOeAny.a);
   wire(parent, edNnOeData.out, edNnOeAny.b);
-  const ramOeFinal4 = buildOr(parent, { x: pos.x + 10200, y: pos.y + 125 });
-  wire(parent, ramOeFinal3.out, ramOeFinal4.a);
-  wire(parent, edNnOeAny.out, ramOeFinal4.b);
-  // LD IX,nn / LD IY,nn's PC-relative immediate reads (see "DD: IX" /
-  // "FD: IY") — side-folded like EDNN so RRD stays the final OE term.
+  // LD IX,nn / LD IY,nn's PC-relative immediate reads — side-folded like EDNN.
   const ldIxNnOe = buildOr(parent, { x: pos.x + 10250, y: pos.y + 150 });
   tieToLabel('LDIXNN_LOW_NOW', ldIxNnOe.a, { x: pos.x + 10150, y: pos.y + 150 });
   tieToLabel('LDIXNN_HIGH_NOW', ldIxNnOe.b, { x: pos.x + 10150, y: pos.y + 170 });
@@ -7783,9 +7637,6 @@ function buildZ80CpuInner(
   const ldIxIyNnOe = buildOr(parent, { x: pos.x + 10300, y: pos.y + 170 });
   wire(parent, ldIxNnOe.out, ldIxIyNnOe.a);
   wire(parent, ldIyNnOe.out, ldIxIyNnOe.b);
-  const ramOeFinal4b = buildOr(parent, { x: pos.x + 10350, y: pos.y + 140 });
-  wire(parent, ramOeFinal4.out, ramOeFinal4b.a);
-  wire(parent, ldIxIyNnOe.out, ramOeFinal4b.b);
   // DD/FD (IX+d)/(IY+d) mem reads — side-folded before RRD (same depth rule).
   const ddDispOe = buildOr(parent, { x: pos.x + 10400, y: pos.y + 160 });
   tieToLabel('DDDISP_READ_NOW', ddDispOe.a, { x: pos.x + 10300, y: pos.y + 160 });
@@ -7838,20 +7689,54 @@ function buildZ80CpuInner(
   const ddFdDispOe = buildOr(parent, { x: pos.x + 10650, y: pos.y + 180 });
   wire(parent, ddMemOeAny2.out, ddFdDispOe.a);
   wire(parent, fdMemOeAny2.out, ddFdDispOe.b);
-  const ramOeFinal4c = buildOr(parent, { x: pos.x + 10650, y: pos.y + 150 });
-  wire(parent, ramOeFinal4b.out, ramOeFinal4c.a);
-  wire(parent, ddFdDispOe.out, ramOeFinal4c.b);
   // DD/FD HL8 LD IXH/IXL,n — PHASE4 immediate read @ PC.
   const ddFdHl8ImmOe = buildOr(parent, { x: pos.x + 10650, y: pos.y + 170 });
   tieToLabel('DDIX_HL8_IMM_READ_NOW', ddFdHl8ImmOe.a, { x: pos.x + 10550, y: pos.y + 170 });
   tieToLabel('FDIY_HL8_IMM_READ_NOW', ddFdHl8ImmOe.b, { x: pos.x + 10550, y: pos.y + 190 });
-  const ramOeFinal4d = buildOr(parent, { x: pos.x + 10700, y: pos.y + 160 });
-  wire(parent, ramOeFinal4c.out, ramOeFinal4d.a);
-  wire(parent, ddFdHl8ImmOe.out, ramOeFinal4d.b);
-  const ramOeFinal5 = buildOr(parent, { x: pos.x + 10750, y: pos.y + 125 });
-  wire(parent, ramOeFinal4d.out, ramOeFinal5.a);
-  tieToLabel('RRDRLD_READ_NOW', ramOeFinal5.b, { x: pos.x + 10650, y: pos.y + 125 });
-  wire(parent, ramOeFinal5.out, ram.pins.oe!);
+  // RAM OE OR — sequential left-associated OR of every read enable (same
+  // order as the former ramOeStage…ramOeFinal5 chain). Side-folds above feed
+  // as single inputs; RRDRLD_READ_NOW is deliberately the *last* term so OE
+  // path depth for RRD/RLD stays unchanged.
+  const ramOeOrDef = getOrNChip(library, 36, 'RAM_OE_OR');
+  const ramOeOr = makeChipInstance(parent, ramOeOrDef, { x: pos.x + 9600, y: pos.y - 400 });
+  const ramOeIn = (idx: number) => ramOeOr.pins[ramOeOrDef.ports[idx]!]!;
+  wire(parent, fetchRead.out, ramOeIn(0));
+  wire(parent, hlNow.out, ramOeIn(1));
+  tieToLabel('LDIMM8_READ_NOW', ramOeIn(2), { x: pos.x + 9500, y: pos.y - 250 });
+  tieToLabel('LDDDNN_LOW_NOW', ramOeIn(3), { x: pos.x + 9500, y: pos.y - 300 });
+  tieToLabel('LDDDNN_HIGH_NOW', ramOeIn(4), { x: pos.x + 9500, y: pos.y - 350 });
+  tieToLabel('JP_READ_LOW_NOW', ramOeIn(5), { x: pos.x + 9500, y: pos.y - 400 });
+  tieToLabel('JP_READ_HIGH_NOW', ramOeIn(6), { x: pos.x + 9500, y: pos.y - 450 });
+  tieToLabel('CALL_READ_LOW_NOW', ramOeIn(7), { x: pos.x + 9500, y: pos.y - 500 });
+  tieToLabel('CALL_READ_HIGH_NOW', ramOeIn(8), { x: pos.x + 9500, y: pos.y - 550 });
+  tieToLabel('JPCC_READ_LOW_NOW', ramOeIn(9), { x: pos.x + 9500, y: pos.y - 600 });
+  tieToLabel('JPCC_READ_HIGH_NOW', ramOeIn(10), { x: pos.x + 9500, y: pos.y - 650 });
+  tieToLabel('CALLCC_READ_LOW_NOW', ramOeIn(11), { x: pos.x + 9500, y: pos.y - 700 });
+  tieToLabel('CALLCC_READ_HIGH_NOW', ramOeIn(12), { x: pos.x + 9500, y: pos.y - 750 });
+  tieToLabel('JR_READ_NOW', ramOeIn(13), { x: pos.x + 9500, y: pos.y - 800 });
+  tieToLabel('LDABC_NOW', ramOeIn(14), { x: pos.x + 9500, y: pos.y - 850 });
+  tieToLabel('LDADE_NOW', ramOeIn(15), { x: pos.x + 9500, y: pos.y - 900 });
+  tieToLabel('NN_READ_LOW_NOW', ramOeIn(16), { x: pos.x + 9500, y: pos.y - 950 });
+  tieToLabel('NN_READ_HIGH_NOW', ramOeIn(17), { x: pos.x + 9500, y: pos.y - 1000 });
+  tieToLabel('LDHLNN_LOW_NOW', ramOeIn(18), { x: pos.x + 9500, y: pos.y - 1050 });
+  tieToLabel('LDHLNN_HIGH_NOW', ramOeIn(19), { x: pos.x + 9500, y: pos.y - 1100 });
+  tieToLabel('LDANN_NOW', ramOeIn(20), { x: pos.x + 9500, y: pos.y - 1150 });
+  wire(parent, hlMemReadsAny.out, ramOeIn(21));
+  wire(parent, readNow.out, ramOeIn(22));
+  wire(parent, exSpReadLowAny2.out, ramOeIn(23));
+  wire(parent, exSpReadHighAny2.out, ramOeIn(24));
+  tieToLabel('ALUIMM8_READ_NOW', ramOeIn(25), { x: pos.x + 9700, y: pos.y - 25 });
+  tieToLabel('IOIMM_READ_NOW', ramOeIn(26), { x: pos.x + 9750, y: pos.y + 0 });
+  tieToLabel('PREFIX_READ_NOW', ramOeIn(27), { x: pos.x + 9800, y: pos.y + 25 });
+  tieToLabel('LDBLOCK_READ_NOW', ramOeIn(28), { x: pos.x + 9850, y: pos.y + 50 });
+  tieToLabel('CPBLOCK_READ_NOW', ramOeIn(29), { x: pos.x + 9900, y: pos.y + 75 });
+  tieToLabel('OUTBLOCK_READ_NOW', ramOeIn(30), { x: pos.x + 9950, y: pos.y + 100 });
+  wire(parent, edNnOeAny.out, ramOeIn(31));
+  wire(parent, ldIxIyNnOe.out, ramOeIn(32));
+  wire(parent, ddFdDispOe.out, ramOeIn(33));
+  wire(parent, ddFdHl8ImmOe.out, ramOeIn(34));
+  tieToLabel('RRDRLD_READ_NOW', ramOeIn(35), { x: pos.x + 10650, y: pos.y + 125 });
+  wire(parent, ramOeOr.pins[ramOeOrDef.ports[36]!]!, ram.pins.oe!);
 
   // SP's own +-1 adder: a *second* buildAlu instance (width addrBits, not
   // 8), permanently in ADD mode, b fanned from spWantDec to every bit —
