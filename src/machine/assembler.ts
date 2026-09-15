@@ -2,22 +2,26 @@
  * Mini Z80 assembler for the machine panel — subset of opcodes this sim
  * actually runs. Two-pass with labels. Not a full commercial Z80ASM.
  *
- * Numbers: 0xNN, NNh, $NN, decimal, 'A'. Labels: `name:` then JR/JP/CALL/DW name.
+ * Numbers: 0xNN, NNh, $NN, decimal, 'A'. `$` alone = current logical PC.
+ * Labels: `name:` then JR/JP/CALL/DW name.
  * Directives: DB/DEFB, DW/DEFW, EQU/DEFL name,value (or `name: EQU value`),
- * ORG n (mid-stream PC; output is contiguous from assemble origin to max PC
- * with 0x00 in gaps), INCLUDE "path" (via opts.readFile), MACRO name args… / ENDM,
+ * ORG n (mid-stream physical PC; output is contiguous from assemble origin to
+ * max PC with 0x00 in gaps), PHASE n / DEPHASE (Z80ASM-style: labels and `$`
+ * use a logical PC while bytes still emit at the physical PC; DEPHASE sets
+ * logical = physical), INCLUDE "path" (via opts.readFile), MACRO name args… /
+ * ENDM (macros may invoke other macros; cycles rejected; nesting ≤ 32),
  * REPT n / ENDR.
- * Expressions in immediates/EQU: `FOO+1`, `FOO-1`, `HIGH FOO` / `LOW FOO`
- * (or HIGH(FOO)/LOW(FOO)), parentheses for + -. Labels/EQU resolve in pass 2
- * where needed; EQU define-time uses only previously defined EQU/labels.
+ * Expressions in immediates/EQU: `+ - * /` (integers; `*` `/` before `+ -`),
+ * `HIGH FOO` / `LOW FOO` (or HIGH(FOO)/LOW(FOO)), parentheses. Labels/EQU
+ * resolve in pass 2 where needed; EQU define-time uses only previously
+ * defined EQU/labels.
  * Comments: `; ...` or `// ...`.
  * Index: IX/IY, (IX+d)/(IY+d), IXH/IXL/IYH/IYL remap, DD/FD CB on (IX+d).
  * CB bit/rot (incl. SLL) and common ED (blocks, ADC/SBC HL, NEG, IM, RETI, …).
  *
- * Commercial gaps (intentionally not here): nested macros, local labels,
- * PHASE/relocatable objects, * / in expressions, full undocumented DD/FD CB
- * z≠6 dest remap, every ED corner (IM vectors, I/O block flag quirks),
- * listing pagination / cross-ref.
+ * Commercial gaps (intentionally not here): local labels, relocatable object
+ * files / ASEG, full undocumented DD/FD CB z≠6 dest remap, every ED corner
+ * (IM vectors, I/O block flag quirks), listing pagination / cross-ref.
  */
 
 export interface AssembleOptions {
@@ -87,9 +91,26 @@ type DbPart = { kind: 'str'; data: number[] } | { kind: 'expr'; expr: string };
 type Emit =
   | { kind: 'bytes'; data: number[]; text: string; line: number; addr: number }
   | { kind: 'db'; parts: DbPart[]; text: string; line: number; addr: number }
-  | { kind: 'rel'; op: number; target: string; text: string; line: number; addr: number }
+  | {
+      kind: 'rel';
+      op: number;
+      target: string;
+      text: string;
+      line: number;
+      addr: number;
+      /** Logical PC at emit (PHASE); used for relative displacement. */
+      logicalAddr: number;
+    }
   | { kind: 'abs'; opcode: number[]; target: string; text: string; line: number; addr: number }
-  | { kind: 'imm8'; opcode: number[]; expr: string; text: string; line: number; addr: number };
+  | {
+      kind: 'imm8';
+      opcode: number[];
+      expr: string;
+      text: string;
+      line: number;
+      addr: number;
+      logicalAddr: number;
+    };
 
 interface LineTok {
   lineNo: number;
@@ -122,7 +143,11 @@ export function assemble(source: string, origin = 0, opts: AssembleOptions = {})
   const equ = new Map<string, number>();
   const emits: Emit[] = [];
   const baseOrigin = origin & 0xffff;
-  let pc = baseOrigin;
+  /** Physical emit cursor (where bytes land in the output image). */
+  let physPc = baseOrigin;
+  /** Logical PC for labels / `$` (PHASE overlay; equals physPc outside PHASE). */
+  let logPc = baseOrigin;
+  let inPhase = false;
 
   let lines: LineTok[];
   try {
@@ -141,7 +166,7 @@ export function assemble(source: string, origin = 0, opts: AssembleOptions = {})
     const mn = ln.mnemonic?.toLowerCase();
     if (mn === 'equ' || mn === 'defl') {
       try {
-        defineEqu(ln, equ, labels);
+        defineEqu(ln, equ, labels, logPc);
       } catch (e) {
         errors.push(`L${ln.lineNo}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -150,24 +175,47 @@ export function assemble(source: string, origin = 0, opts: AssembleOptions = {})
     if (mn === 'org') {
       try {
         if (ln.args.length !== 1) throw new Error('ORG needs address');
-        const n = evalExpr(ln.args[0]!, equ, labels);
+        const n = evalExpr(ln.args[0]!, equ, labels, logPc);
         if (n < baseOrigin) throw new Error(`ORG ${n} is before assemble origin ${baseOrigin}`);
-        pc = n & 0xffff;
+        physPc = n & 0xffff;
+        if (!inPhase) logPc = physPc;
       } catch (e) {
         errors.push(`L${ln.lineNo}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      continue;
+    }
+    if (mn === 'phase') {
+      try {
+        if (ln.args.length !== 1) throw new Error('PHASE needs address');
+        const n = evalExpr(ln.args[0]!, equ, labels, logPc);
+        logPc = n & 0xffff;
+        inPhase = true;
+      } catch (e) {
+        errors.push(`L${ln.lineNo}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      continue;
+    }
+    if (mn === 'dephase') {
+      if (ln.args.length !== 0) {
+        errors.push(`L${ln.lineNo}: DEPHASE takes no arguments`);
+      } else {
+        logPc = physPc;
+        inPhase = false;
       }
       continue;
     }
     if (ln.label) {
       const key = ln.label.toLowerCase();
       if (labels.has(key) || equ.has(key)) errors.push(`L${ln.lineNo}: duplicate label '${ln.label}'`);
-      else labels.set(key, pc);
+      else labels.set(key, logPc);
     }
     if (!ln.mnemonic) continue;
     try {
-      const emit = encode(ln, equ, labels, pc);
+      const emit = encode(ln, equ, labels, physPc, logPc);
       emits.push(emit);
-      pc = (pc + emitSize(emit)) & 0xffff;
+      const sz = emitSize(emit);
+      physPc = (physPc + sz) & 0xffff;
+      logPc = (logPc + sz) & 0xffff;
     } catch (e) {
       errors.push(`L${ln.lineNo}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -178,7 +226,7 @@ export function assemble(source: string, origin = 0, opts: AssembleOptions = {})
     const end = em.addr + emitSize(em);
     if (end > maxPc) maxPc = end;
   }
-  if (pc > maxPc) maxPc = pc;
+  if (physPc > maxPc) maxPc = physPc;
 
   const span = Math.max(0, Math.min(0x10000, maxPc) - baseOrigin);
   const out = new Uint8Array(span);
@@ -292,7 +340,7 @@ function expandMacrosAndRept(lines: LineTok[], errors: string[]): LineTok[] {
 
   const equ = new Map<string, number>();
   const labels = new Map<string, number>();
-  return expandBody(stripped, macros, equ, labels, errors, 0);
+  return expandBody(stripped, macros, equ, labels, errors, 0, []);
 }
 
 function parseMacroDef(
@@ -323,6 +371,8 @@ function parseMacroDef(
   throw new Error('MACRO without ENDM');
 }
 
+const MACRO_EXPAND_MAX_DEPTH = 32;
+
 function expandBody(
   lines: LineTok[],
   macros: Map<string, MacroDef>,
@@ -330,8 +380,11 @@ function expandBody(
   labels: Map<string, number>,
   errors: string[],
   depth: number,
+  expanding: string[],
 ): LineTok[] {
-  if (depth > 64) throw new Error('macro/REPT expansion too deep');
+  if (depth > MACRO_EXPAND_MAX_DEPTH) {
+    throw new Error(`macro/REPT expansion too deep (max ${MACRO_EXPAND_MAX_DEPTH})`);
+  }
   const out: LineTok[] = [];
   for (let i = 0; i < lines.length; ) {
     const ln = lines[i]!;
@@ -343,7 +396,7 @@ function expandBody(
         const n = evalExpr(ln.args[0]!, equ, labels);
         if (n < 0 || n > 4096) throw new Error(`REPT count out of range (${n})`);
         const { body, next } = collectUntil(lines, i + 1, 'endr', 'rept');
-        const expandedBody = expandBody(body, macros, equ, labels, errors, depth + 1);
+        const expandedBody = expandBody(body, macros, equ, labels, errors, depth + 1, expanding);
         for (let r = 0; r < n; r++) out.push(...cloneLines(expandedBody));
         i = next;
       } catch (e) {
@@ -366,12 +419,23 @@ function expandBody(
 
     if (mn && macros.has(mn)) {
       try {
+        if (expanding.includes(mn)) {
+          throw new Error(`recursive MACRO '${mn}' (${[...expanding, mn].join(' → ')})`);
+        }
         const def = macros.get(mn)!;
         if (ln.args.length !== def.args.length) {
           throw new Error(`MACRO ${mn} expects ${def.args.length} arg(s), got ${ln.args.length}`);
         }
         const subst = substituteMacro(def, ln.args, ln.lineNo);
-        const expanded = expandBody(subst, macros, equ, labels, errors, depth + 1);
+        const expanded = expandBody(
+          subst,
+          macros,
+          equ,
+          labels,
+          errors,
+          depth + 1,
+          [...expanding, mn],
+        );
         if (ln.label && expanded.length > 0) {
           expanded[0] = { ...expanded[0]!, label: expanded[0]!.label ?? ln.label };
         } else if (ln.label) {
@@ -454,7 +518,12 @@ function cloneLines(lines: LineTok[]): LineTok[] {
 }
 
 /** EQU/DEFL name,value — or `name: EQU value` (label is the symbol). */
-function defineEqu(ln: LineTok, equ: Map<string, number>, labels: Map<string, number>): void {
+function defineEqu(
+  ln: LineTok,
+  equ: Map<string, number>,
+  labels: Map<string, number>,
+  here?: number,
+): void {
   let name: string;
   let valArg: string;
   if (ln.label && ln.args.length === 1) {
@@ -467,7 +536,7 @@ function defineEqu(ln: LineTok, equ: Map<string, number>, labels: Map<string, nu
     throw new Error('EQU/DEFL needs name,value (or name: EQU value)');
   }
   if (!/^[A-Za-z_][\w]*$/.test(name)) throw new Error(`bad EQU name '${name}'`);
-  const n = evalExpr(valArg, equ, labels);
+  const n = evalExpr(valArg, equ, labels, here);
   const key = name.toLowerCase();
   if (equ.has(key) || labels.has(key)) throw new Error(`duplicate EQU '${name}'`);
   equ.set(key, n & 0xffff);
@@ -502,7 +571,7 @@ function materialize(em: Emit, labels: Map<string, number>, equ: Map<string, num
   }
   if (em.kind === 'rel') {
     const target = evalExpr(em.target, equ, labels);
-    const next = (em.addr + 2) & 0xffff;
+    const next = (em.logicalAddr + 2) & 0xffff;
     let disp = target - next;
     if (disp < -128 || disp > 127) {
       throw new Error(`relative jump out of range to '${em.target}' (${disp})`);
@@ -511,7 +580,7 @@ function materialize(em: Emit, labels: Map<string, number>, equ: Map<string, num
     return [em.op, disp & 0xff];
   }
   if (em.kind === 'imm8') {
-    const n = evalExpr(em.expr, equ, labels);
+    const n = evalExpr(em.expr, equ, labels, em.logicalAddr);
     if (n < 0 || n > 0xff) throw new Error(`imm8 out of range '${em.expr}' (${n})`);
     return [...em.opcode, n & 0xff];
   }
@@ -520,9 +589,15 @@ function materialize(em: Emit, labels: Map<string, number>, equ: Map<string, num
 }
 
 /**
- * Evaluate an expression: literals, labels/EQU, + -, HIGH/LOW, parentheses.
+ * Evaluate an expression: literals, labels/EQU, `$` (logical PC), + - * /,
+ * HIGH/LOW, parentheses. Integers only; `*` `/` bind tighter than `+` `-`.
  */
-function evalExpr(src: string, equ: Map<string, number>, labels: Map<string, number>): number {
+function evalExpr(
+  src: string,
+  equ: Map<string, number>,
+  labels: Map<string, number>,
+  here?: number,
+): number {
   const s = src.trim();
   if (!s) throw new Error('empty expression');
   let i = 0;
@@ -582,6 +657,16 @@ function evalExpr(src: string, equ: Map<string, number>, labels: Map<string, num
       }
     }
 
+    // Bare `$` = current logical PC; `$NN` remains hex immediate.
+    if (peek() === '$') {
+      const hexAfter = /^\$[0-9a-fA-F]+/i.exec(s.slice(i));
+      if (!hexAfter) {
+        i++;
+        if (here === undefined) throw new Error("'$' requires a current PC");
+        return here & 0xffff;
+      }
+    }
+
     const numMatch =
       /^(0x[0-9a-fA-F]+|\$[0-9a-fA-F]+|[0-9a-fA-F]+h|[0-9]+)/i.exec(s.slice(i));
     if (numMatch) {
@@ -620,18 +705,39 @@ function evalExpr(src: string, equ: Map<string, number>, labels: Map<string, num
     return parsePrimary();
   }
 
-  function parseAdd(): number {
+  function parseMul(): number {
     let v = parseUnary();
+    for (;;) {
+      skipWs();
+      if (peek() === '*') {
+        i++;
+        v = (v * parseUnary()) & 0xffff;
+        continue;
+      }
+      if (peek() === '/') {
+        i++;
+        const d = parseUnary();
+        if (d === 0) throw new Error('division by zero');
+        v = (Math.trunc(v / d) & 0xffff);
+        continue;
+      }
+      break;
+    }
+    return v & 0xffff;
+  }
+
+  function parseAdd(): number {
+    let v = parseMul();
     for (;;) {
       skipWs();
       if (peek() === '+') {
         i++;
-        v = (v + parseUnary()) & 0xffff;
+        v = (v + parseMul()) & 0xffff;
         continue;
       }
       if (peek() === '-') {
         i++;
-        v = (v - parseUnary()) & 0xffff;
+        v = (v - parseMul()) & 0xffff;
         continue;
       }
       break;
@@ -654,9 +760,10 @@ function tryEvalExpr(
   src: string,
   equ: Map<string, number>,
   labels: Map<string, number>,
+  here?: number,
 ): number | null {
   try {
-    return evalExpr(src, equ, labels);
+    return evalExpr(src, equ, labels, here);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (/unknown symbol/i.test(msg)) return null;
@@ -729,12 +836,13 @@ function encode(
   equ: Map<string, number>,
   labels: Map<string, number>,
   addr: number,
+  logicalAddr: number,
 ): Emit {
   const m = ln.mnemonic!;
   const a = ln.args;
   const text = ln.raw;
   const line = ln.lineNo;
-  const imm = (s: string) => tryEvalExpr(s, equ, labels);
+  const imm = (s: string) => tryEvalExpr(s, equ, labels, logicalAddr);
 
   if (m === 'db' || m === 'defb') {
     const parts: DbPart[] = [];
@@ -861,15 +969,25 @@ function encode(
 
   if (m === 'djnz') {
     if (a.length !== 1) throw new Error('DJNZ target');
-    return { kind: 'rel', op: 0x10, target: a[0]!, text, line, addr };
+    return { kind: 'rel', op: 0x10, target: a[0]!, text, line, addr, logicalAddr };
   }
 
   if (m === 'jr') {
-    if (a.length === 1) return { kind: 'rel', op: 0x18, target: a[0]!, text, line, addr };
+    if (a.length === 1) {
+      return { kind: 'rel', op: 0x18, target: a[0]!, text, line, addr, logicalAddr };
+    }
     if (a.length === 2) {
       const cc = JR_CC[norm(a[0]!)];
       if (cc === undefined) throw new Error('JR cc must be NZ/Z/NC/C');
-      return { kind: 'rel', op: 0x20 | (cc << 3), target: a[1]!, text, line, addr };
+      return {
+        kind: 'rel',
+        op: 0x20 | (cc << 3),
+        target: a[1]!,
+        text,
+        line,
+        addr,
+        logicalAddr,
+      };
     }
     throw new Error('JR syntax');
   }
@@ -902,7 +1020,17 @@ function encode(
 
   if (m === 'in') {
     if (a.length === 2 && norm(a[0]!) === 'a' && isParen(a[1]!)) {
-      return emitImm8([0xdb], stripParens(a[1]!), text, line, addr, equ, labels, 'bad IN port');
+      return emitImm8(
+        [0xdb],
+        stripParens(a[1]!),
+        text,
+        line,
+        addr,
+        equ,
+        labels,
+        'bad IN port',
+        logicalAddr,
+      );
     }
     if (a.length === 2 && isParen(a[1]!) && norm(stripParens(a[1]!)) === 'c') {
       const r = parseR8(a[0]!);
@@ -913,7 +1041,17 @@ function encode(
   }
   if (m === 'out') {
     if (a.length === 2 && isParen(a[0]!) && norm(a[1]!) === 'a') {
-      return emitImm8([0xd3], stripParens(a[0]!), text, line, addr, equ, labels, 'bad OUT port');
+      return emitImm8(
+        [0xd3],
+        stripParens(a[0]!),
+        text,
+        line,
+        addr,
+        equ,
+        labels,
+        'bad OUT port',
+        logicalAddr,
+      );
     }
     if (a.length === 2 && isParen(a[0]!) && norm(stripParens(a[0]!)) === 'c') {
       const r = parseR8(a[1]!);
@@ -966,7 +1104,17 @@ function encode(
     if (half) return immBytes([half.pref, 0x80 | (y << 3) | half.r], text, line, addr);
     const r = parseR8(op);
     if (r !== null) return immBytes([0x80 | (y << 3) | r], text, line, addr);
-    return emitImm8([0xc6 | (y << 3)], op, text, line, addr, equ, labels, `bad ${m.toUpperCase()} operand`);
+    return emitImm8(
+      [0xc6 | (y << 3)],
+      op,
+      text,
+      line,
+      addr,
+      equ,
+      labels,
+      `bad ${m.toUpperCase()} operand`,
+      logicalAddr,
+    );
   }
 
   if (m === 'inc' || m === 'dec') {
@@ -988,7 +1136,7 @@ function encode(
 
   if (m === 'ld') {
     if (a.length !== 2) throw new Error('LD needs two operands');
-    return encodeLd(a[0]!, a[1]!, text, line, equ, labels, addr);
+    return encodeLd(a[0]!, a[1]!, text, line, equ, labels, addr, logicalAddr);
   }
 
   throw new Error(`unsupported mnemonic '${m}'`);
@@ -1003,13 +1151,14 @@ function emitImm8(
   equ: Map<string, number>,
   labels: Map<string, number>,
   rangeErr: string,
+  here?: number,
 ): Emit {
-  const n = tryEvalExpr(expr, equ, labels);
+  const n = tryEvalExpr(expr, equ, labels, here);
   if (n !== null) {
     if (n < 0 || n > 0xff) throw new Error(rangeErr);
     return immBytes([...opcode, n], text, line, addr);
   }
-  return { kind: 'imm8', opcode, expr, text, line, addr };
+  return { kind: 'imm8', opcode, expr, text, line, addr, logicalAddr: here ?? addr };
 }
 
 function encodeCbOp(opBase: number, operand: string, text: string, line: number, addr: number): Emit {
@@ -1030,10 +1179,11 @@ function encodeLd(
   equ: Map<string, number>,
   labels: Map<string, number>,
   addr: number,
+  logicalAddr: number,
 ): Emit {
   const d = norm(dst);
   const s = norm(src);
-  const imm = (x: string) => tryEvalExpr(x, equ, labels);
+  const imm = (x: string) => tryEvalExpr(x, equ, labels, logicalAddr);
 
   if (d === 'a' && s === 'i') return immBytes([0xed, 0x57], text, line, addr);
   if (d === 'a' && s === 'r') return immBytes([0xed, 0x5f], text, line, addr);
@@ -1105,6 +1255,7 @@ function encodeLd(
         text,
         line,
         addr,
+        logicalAddr,
       };
     }
     const r = parseR8(src);
@@ -1123,7 +1274,7 @@ function encodeLd(
     const n = imm(src);
     if (n !== null && n <= 0xff) return immBytes([0x36, n], text, line, addr);
     if (n === null && looksLikeExpr(src) && parseR8(src) === null) {
-      return { kind: 'imm8', opcode: [0x36], expr: src, text, line, addr };
+      return { kind: 'imm8', opcode: [0x36], expr: src, text, line, addr, logicalAddr };
     }
     const r = parseR8(src);
     if (r !== null && r !== HLMEM) return immBytes([0x70 | r], text, line, addr);
@@ -1144,7 +1295,15 @@ function encodeLd(
       const n = imm(src);
       if (n !== null && n <= 0xff) return immBytes([pref, 0x06 | (dh.r << 3), n], text, line, addr);
       if (n === null && looksLikeExpr(src) && parseR8(src) === null) {
-        return { kind: 'imm8', opcode: [pref, 0x06 | (dh.r << 3)], expr: src, text, line, addr };
+        return {
+          kind: 'imm8',
+          opcode: [pref, 0x06 | (dh.r << 3)],
+          expr: src,
+          text,
+          line,
+          addr,
+          logicalAddr,
+        };
       }
       const rs = parseR8(src);
       if (rs !== null && rs !== HLMEM) return immBytes([pref, 0x40 | (dh.r << 3) | rs], text, line, addr);
@@ -1161,7 +1320,7 @@ function encodeLd(
     const n = imm(src);
     if (n !== null && n <= 0xff) return immBytes([0x06 | (rd << 3), n], text, line, addr);
     if (n === null && looksLikeExpr(src) && parseR8(src) === null) {
-      return { kind: 'imm8', opcode: [0x06 | (rd << 3)], expr: src, text, line, addr };
+      return { kind: 'imm8', opcode: [0x06 | (rd << 3)], expr: src, text, line, addr, logicalAddr };
     }
     const rs = parseR8(src);
     if (rs !== null) return immBytes([0x40 | (rd << 3) | rs], text, line, addr);
@@ -1174,9 +1333,10 @@ function encodeLd(
 function looksLikeExpr(s: string): boolean {
   const t = s.trim();
   if (!t) return false;
+  if (t === '$') return true;
   if (/^[A-Za-z_][\w]*$/.test(t)) return true;
   if (/^(HIGH|LOW)\b/i.test(t)) return true;
-  if (/[+\-]/.test(t)) return true;
+  if (/[+\-*/]/.test(t)) return true;
   if (t.startsWith('(') && t.endsWith(')')) return true;
   return parseImm(t) !== null;
 }
@@ -1256,7 +1416,7 @@ function isAbsMem(s: string): boolean {
   // Allow expressions / symbols inside absolute memory operands.
   if (parseImm(inner) !== null) return true;
   if (/^[A-Za-z_][\w]*$/.test(inner.trim())) return true;
-  if (/[+\-]|(HIGH|LOW)\b/i.test(inner)) return true;
+  if (/[+\-*/]|(HIGH|LOW)\b|\$/i.test(inner)) return true;
   return false;
 }
 

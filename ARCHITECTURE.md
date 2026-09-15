@@ -1026,30 +1026,36 @@ prefix, so multiple folded chips no longer short `CLK`/`BUS*` nets. Dive-in
 still shows the full transistor guts. Unit tests continue to use the
 unfolded `buildZ80Cpu`.
 
-Cold `flatten()` of a folded 12-bit Z80 (~222k components) is ~1.4s after
-fast component clone + ChipDef expand cache (`hierarchy.ts`); previously
-~4s via `structuredClone`. Soft still defers flatten entirely.
+Cold `flatten()` of a folded 12-bit Z80 (~127k components after shared-rail
+place; was ~222k with per-transistor power Labels) is ~1.2s after fast
+component clone + ChipDef expand cache (`hierarchy.ts`); previously ~4s via
+`structuredClone`. Soft still defers flatten entirely.
 
-**Place/fold latency (addrBits=12, `scripts/bench-flatten.mts`):** build
-~210ms (still dominated by `makeChipInstance` / gate-builder loops — no
-easy win without changing how the flat composite is constructed), fold
-~300ms after fixing `Circuit.computeNets` net-name assignment from
-O(groups×labels) (~1.5s fold) to O(groups+labels), plus fold batching
-(`addRawComponent`/`addRawWire`, no wire-array copy, nets before bump).
-Flatten unchanged ~1.4s.
+**Place/fold latency (addrBits=12, `scripts/bench-flatten.mts` /
+`scripts/bench-build.mts`):** build ~100–175ms (was ~210–250ms) after
+`tiePowerRail`/`railPin` reuse one Source (or Label) per rail per circuit
+instead of a stub Label per transistor, cached chip pin dy layout, batched
+structure-version bumps during `buildZ80Cpu`, leaner transistor/label/chip
+factories, and reusing seeded stdcell defs (`ChipLibrary.findByName`) for
+MUX2/TRI_BUF/HALF_ADDER. Still dominated by gate-builder transistor
+construction. Fold ~250–300ms after fixing `Circuit.computeNets` net-name
+assignment from O(groups×labels) (~1.5s fold) to O(groups+labels), plus fold
+batching (`addRawComponent`/`addRawWire`, no wire-array copy, nets before
+bump). Flatten ~1.2s (fewer power stubs in the expanded netlist).
 
 Gate-path keyboard clear-on-read: when RAM OE samples `KEY_DATA` (0xF01),
 the solver clears `KEY_STATUS` (0xF00) — same contract as soft
 `SoftMemHooks`.
 
 Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
-pos?)`, etc.); power is always `tiePowerRail`.
+pos?)`, etc.); power is always `tiePowerRail` (reuses the circuit's Source
+pins when present).
 
 ### Explicitly later
 
-Nested macros; `*` `/` in asm expressions; PHASE/reloc objects; still-faster
-Gates place if buildZ80 construction is rewritten. Soft↔gate parity covers a
-tiny shared suite (`test/soft-gate-parity.test.ts`); widen as needed.
+Still-faster Gates place if buildZ80 is rewritten away from per-gate
+transistors; soft↔gate parity for ED/DD needs a multi-phase harness
+(prefixed ops often exceed one 10-phase `runInstruction`).
 
 ## Decode and execute: a tiny working CPU
 

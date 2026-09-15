@@ -58,7 +58,7 @@ const registerBitDefs = new WeakMap<ChipLibrary, ChipDef>();
 function getRegisterBitChip(library: ChipLibrary): ChipDef {
   let def = registerBitDefs.get(library);
   if (!def) {
-    def = makeRegisterBitChip(library);
+    def = library.findByName('REG_BIT') ?? makeRegisterBitChip(library);
     registerBitDefs.set(library, def);
   }
   return def;
@@ -281,7 +281,8 @@ const halfAdderDefs = new WeakMap<ChipLibrary, ChipDef>();
 function getHalfAdderChip(library: ChipLibrary): ChipDef {
   let def = halfAdderDefs.get(library);
   if (!def) {
-    def = makeHalfAdderChip(library);
+    // Prefer seedStandardCells()'s HALF_ADDER when present — same ports/order.
+    def = library.findByName('HALF_ADDER') ?? makeHalfAdderChip(library);
     halfAdderDefs.set(library, def);
   }
   return def;
@@ -290,7 +291,7 @@ const mux2Defs = new WeakMap<ChipLibrary, ChipDef>();
 function getMux2Chip(library: ChipLibrary): ChipDef {
   let def = mux2Defs.get(library);
   if (!def) {
-    def = makeMux2Chip(library);
+    def = library.findByName('MUX2') ?? makeMux2Chip(library);
     mux2Defs.set(library, def);
   }
   return def;
@@ -465,7 +466,7 @@ const triBufDefs = new WeakMap<ChipLibrary, ChipDef>();
 function getTriBufChip(library: ChipLibrary): ChipDef {
   let def = triBufDefs.get(library);
   if (!def) {
-    def = makeTriBufChip(library);
+    def = library.findByName('TRI_BUF') ?? makeTriBufChip(library);
     triBufDefs.set(library, def);
   }
   return def;
@@ -1947,10 +1948,24 @@ export function buildZ80Cpu(
   program?: Uint8Array,
   pos: Point = { x: 0, y: 0 },
 ): Z80Cpu {
+  parent.beginBatch();
+  try {
+    return buildZ80CpuInner(parent, library, addrBits, program, pos);
+  } finally {
+    parent.endBatch();
+  }
+}
+
+function buildZ80CpuInner(
+  parent: Circuit,
+  library: ChipLibrary,
+  addrBits: number,
+  program: Uint8Array | undefined,
+  pos: Point,
+): Z80Cpu {
   // One Source pair drives the global VCC/GND rails. Gate primitives attach
-  // power through local Label("VCC"|"GND") stubs (tiePowerRail in library.ts)
-  // — same computeNets join as these Sources, without cross-canvas power
-  // wires. Extra cluster Sources used to shorten those wires are obsolete.
+  // power through tiePowerRail (library.ts), which reuses these Source pins
+  // instead of allocating a Label stub per transistor.
   const vcc = makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 400 }).pins.out;
   const gnd = makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 360 }).pins.out;
   // Alias names kept so existing buildAnd/Or/... call sites that still pass

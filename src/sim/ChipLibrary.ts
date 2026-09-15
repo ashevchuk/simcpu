@@ -44,6 +44,14 @@ export class ChipLibrary {
     return [...this.defs.values()];
   }
 
+  /** First registered def with this exact name, if any — used to reuse seeded stdcells. */
+  findByName(name: string): ChipDef | undefined {
+    for (const def of this.defs.values()) {
+      if (def.name === name) return def;
+    }
+    return undefined;
+  }
+
   remove(id: string): void {
     this.defs.delete(id);
     bumpStructureVersion();

@@ -3,13 +3,22 @@ import { createSoftZ80, softRun, type SoftZ80State } from '../src/machine/softZ8
 import { makeZ80Harness, type Z80Harness } from './z80Harness.js';
 
 /**
- * Soft vs gate register/RAM parity for a tiny shared opcode suite.
+ * Soft vs gate register/RAM parity for a shared unprefixed (+ CB) suite.
  *
  * Flag mask excludes:
  * - X (bit 3) / Y (bit 5): undocumented; soft never writes them, gate often
  *   copies them from the result byte.
  * - P/V (bit 2): soft ALU/INC/DEC uses parity; gate uses signed overflow for
  *   arithmetic. Documented bits S/Z/H/N/C are compared.
+ *
+ * Cases intentionally omitted here (use dedicated z80cpu-* tests):
+ * - CALL/RET / PUSH/POP stack traffic — soft pushes 2 bytes; some gate paths
+ *   need more than one 10-phase `runInstruction` per soft step for multi-byte
+ *   stack ops under addrBits=7.
+ * - ED/DD/FD — prefixed ops often need >10 FSM phases per instruction; soft
+ *   counts one softStep. Keep those in z80cpu-ldi / z80cpu-dd-ix etc.
+ *
+ * Covered: LD/ALU/JR/INC/CB RLC/XOR/OR/CP/abs LD.
  */
 const FLAG_MASK = 0xd3; // S Z - H - - N C  (exclude Y=0x20, X=0x08, P/V=0x04)
 
@@ -85,7 +94,6 @@ function runBoth(program: Uint8Array, ramAddrs: number[], maxSteps = 16) {
 
 describe('softZ80 vs buildZ80Cpu parity', () => {
   it('LD A,n / ADD A,n / HALT', () => {
-    // LD A,2 / ADD A,3 / HALT — result 5 (P/V excluded from FLAG_MASK)
     const program = new Uint8Array([0x3e, 0x02, 0xc6, 0x03, 0x76]);
     const { soft, gate } = runBoth(program, []);
     expectParity('LD/ADD', soft, gate);
@@ -93,7 +101,6 @@ describe('softZ80 vs buildZ80Cpu parity', () => {
   });
 
   it('LD HL,nn / LD (HL),A / HALT', () => {
-    // LD A,0xAB / LD HL,0x10 / LD (HL),A / HALT
     const program = new Uint8Array([0x3e, 0xab, 0x21, 0x10, 0x00, 0x77, 0x76]);
     const { soft, gate } = runBoth(program, [0x10]);
     expectParity('LD (HL),A', soft, gate);
@@ -102,7 +109,6 @@ describe('softZ80 vs buildZ80Cpu parity', () => {
   });
 
   it('JR relative skip / HALT', () => {
-    // JR +2 / NOP / NOP / LD A,0x42 / HALT
     const program = new Uint8Array([0x18, 0x02, 0x00, 0x00, 0x3e, 0x42, 0x76]);
     const { soft, gate } = runBoth(program, []);
     expectParity('JR', soft, gate);
@@ -110,7 +116,6 @@ describe('softZ80 vs buildZ80Cpu parity', () => {
   });
 
   it('simple DEC A / JR NZ loop / HALT', () => {
-    // LD A,2 / DEC A / JR NZ,-3 / HALT  → A=0 after two DECs
     const program = new Uint8Array([0x3e, 0x02, 0x3d, 0x20, 0xfd, 0x76]);
     const { soft, gate, steps } = runBoth(program, [], 16);
     expect(steps).toBeGreaterThan(3);
@@ -119,11 +124,64 @@ describe('softZ80 vs buildZ80Cpu parity', () => {
   });
 
   it('CB RLC A / HALT', () => {
-    // LD A,0x81 / RLC A / HALT → A=0x03, C=1; both paths use parity for P
     const program = new Uint8Array([0x3e, 0x81, 0xcb, 0x07, 0x76]);
     const { soft, gate } = runBoth(program, []);
     expectParity('RLC A', soft, gate);
     expect(soft.a).toBe(0x03);
     expect(soft.f & 0x01).toBe(0x01);
+  });
+
+  it('LD BC,nn / INC BC / HALT', () => {
+    const program = new Uint8Array([0x01, 0x34, 0x12, 0x03, 0x76]);
+    const { soft, gate } = runBoth(program, []);
+    expectParity('INC BC', soft, gate);
+    expect(soft.bc).toBe(0x1235);
+  });
+
+  it('XOR A / OR n / HALT', () => {
+    const program = new Uint8Array([0xaf, 0xf6, 0x0f, 0x76]);
+    const { soft, gate } = runBoth(program, []);
+    expectParity('XOR/OR', soft, gate);
+    expect(soft.a).toBe(0x0f);
+  });
+
+  it('CP n / HALT', () => {
+    const program = new Uint8Array([0x3e, 0x05, 0xfe, 0x06, 0x76]);
+    const { soft, gate } = runBoth(program, []);
+    expectParity('CP', soft, gate);
+    expect(soft.a).toBe(0x05);
+    expect(soft.f & 0x40).toBe(0);
+    expect(soft.f & 0x01).toBe(0x01);
+    expect(soft.f & 0x02).toBe(0x02);
+  });
+
+  it('LD A,(nn) / LD (nn),A / HALT', () => {
+    const program = new Uint8Array([0x3e, 0xab, 0x32, 0x40, 0x00, 0xaf, 0x3a, 0x40, 0x00, 0x76]);
+    const { soft, gate } = runBoth(program, [0x40]);
+    expectParity('LD (nn),A / LD A,(nn)', soft, gate);
+    expect(soft.a).toBe(0xab);
+    expect(soft.ram[0]).toBe(0xab);
+  });
+
+  it('AND n / XOR n / HALT', () => {
+    // LD A,0xF0 / AND 0x3C / XOR 0x0F / HALT → A=0x3F
+    const program = new Uint8Array([0x3e, 0xf0, 0xe6, 0x3c, 0xee, 0x0f, 0x76]);
+    const { soft, gate } = runBoth(program, []);
+    expectParity('AND/XOR', soft, gate);
+    expect(soft.a).toBe(0x3f);
+  });
+
+  it('LD DE,nn / DEC DE / HALT', () => {
+    const program = new Uint8Array([0x11, 0x00, 0x10, 0x1b, 0x76]);
+    const { soft, gate } = runBoth(program, []);
+    expectParity('DEC DE', soft, gate);
+    expect(soft.de).toBe(0x0fff);
+  });
+
+  it('SCF / CCF / HALT', () => {
+    const program = new Uint8Array([0x37, 0x3f, 0x76]);
+    const { soft, gate } = runBoth(program, []);
+    expectParity('SCF/CCF', soft, gate);
+    expect(soft.f & 0x01).toBe(0);
   });
 });
