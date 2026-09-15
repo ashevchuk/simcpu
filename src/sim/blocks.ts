@@ -395,6 +395,175 @@ function makeZ80GatePlacer(library: ChipLibrary): CircuitGatePlacer {
   };
 }
 
+/**
+ * One address-bit of the Z80 RAM address mux cascade (same sequential
+ * left-associated MUX2 override order as the former inline forEach):
+ * PC → HL → SP(write) → SP(read) → BC → DE → nn → nn+1 → EX(SP) low/high →
+ * LDI HL/DE → CPI HL → INI HL → OUTI HL → RRD/RLD HL → ED PC+1 → IX+d → IY+d.
+ * RRD/RLD select is OR'd inside the chip (two sel ports).
+ *
+ * Ports (foldExposing order):
+ *   sels: selHl, selStackWrite, selRead, selBc, selDe, selNnLow, selNnHigh,
+ *         selExSpHlLow, selExSpHlHigh, selLdBlockRead, selLdBlockWrite,
+ *         selCpBlockRead, selInBlockWrite, selOutBlockRead,
+ *         selRrdRldRead, selRrdRldWrite, selEdNnPcPlus1, selIxDisp, selIyDisp
+ *   data: pc, hl, bc, de, sp, nn, nnPlus1, spPlus1, pcPlus1, ixDisp, iyDisp
+ *   out
+ */
+function makeRamAddrBitChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const muxDef = getMux2Chip(library);
+  const placeMux = (x: number, y: number) => {
+    const inst = makeChipInstance(scratch, muxDef, { x, y });
+    return {
+      sel: inst.pins[muxDef.ports[0]!]!,
+      in0: inst.pins[muxDef.ports[1]!]!,
+      in1: inst.pins[muxDef.ports[2]!]!,
+      out: inst.pins[muxDef.ports[3]!]!,
+    };
+  };
+
+  const hlMux = placeMux(0, 0);
+  const writeMux = placeMux(200, 0);
+  wire(scratch, hlMux.out, writeMux.in0);
+  const readMux = placeMux(400, 0);
+  wire(scratch, writeMux.out, readMux.in0);
+  const bcMux = placeMux(600, 0);
+  wire(scratch, readMux.out, bcMux.in0);
+  const deMux = placeMux(800, 0);
+  wire(scratch, bcMux.out, deMux.in0);
+  const nnLowMux = placeMux(1000, 0);
+  wire(scratch, deMux.out, nnLowMux.in0);
+  const nnHighMux = placeMux(1200, 0);
+  wire(scratch, nnLowMux.out, nnHighMux.in0);
+  const exSpHlLowMux = placeMux(1400, 0);
+  wire(scratch, nnHighMux.out, exSpHlLowMux.in0);
+  const exSpHlHighMux = placeMux(1600, 0);
+  wire(scratch, exSpHlLowMux.out, exSpHlHighMux.in0);
+  const ldBlockReadMux = placeMux(1800, 0);
+  wire(scratch, exSpHlHighMux.out, ldBlockReadMux.in0);
+  const ldBlockWriteMux = placeMux(2000, 0);
+  wire(scratch, ldBlockReadMux.out, ldBlockWriteMux.in0);
+  const cpBlockReadMux = placeMux(2200, 0);
+  wire(scratch, ldBlockWriteMux.out, cpBlockReadMux.in0);
+  const inBlockWriteMux = placeMux(2400, 0);
+  wire(scratch, cpBlockReadMux.out, inBlockWriteMux.in0);
+  const outBlockReadMux = placeMux(2600, 0);
+  wire(scratch, inBlockWriteMux.out, outBlockReadMux.in0);
+
+  // RRD/RLD sel OR — inside the chip so topology matches the former local OR.
+  const rrdRldAddrNow = buildOr(scratch, { x: 2700, y: -40 });
+  const rrdRldAddrMux = placeMux(2800, 0);
+  wire(scratch, rrdRldAddrNow.out, rrdRldAddrMux.sel);
+  wire(scratch, outBlockReadMux.out, rrdRldAddrMux.in0);
+
+  const edNnPcPlus1Mux = placeMux(3000, 0);
+  wire(scratch, rrdRldAddrMux.out, edNnPcPlus1Mux.in0);
+  const ixDispAddrMux = placeMux(3200, 0);
+  wire(scratch, edNnPcPlus1Mux.out, ixDispAddrMux.in0);
+  const iyDispAddrMux = placeMux(3400, 0);
+  wire(scratch, ixDispAddrMux.out, iyDispAddrMux.in0);
+
+  // Shared data overrides fan out from one exposed pin each (same nets as
+  // the former multi-wire of the same register bit into several mux in1s).
+  wire(scratch, hlMux.in1, ldBlockReadMux.in1);
+  wire(scratch, hlMux.in1, cpBlockReadMux.in1);
+  wire(scratch, hlMux.in1, inBlockWriteMux.in1);
+  wire(scratch, hlMux.in1, outBlockReadMux.in1);
+  wire(scratch, hlMux.in1, rrdRldAddrMux.in1);
+  wire(scratch, deMux.in1, ldBlockWriteMux.in1);
+  wire(scratch, writeMux.in1, readMux.in1);
+  wire(scratch, writeMux.in1, exSpHlLowMux.in1);
+
+  return foldExposing(scratch, 'RAM_ADDR_BIT', library, [
+    { pin: hlMux.sel, isOutput: false }, // selHl
+    { pin: writeMux.sel, isOutput: false }, // selStackWrite
+    { pin: readMux.sel, isOutput: false }, // selRead
+    { pin: bcMux.sel, isOutput: false }, // selBc
+    { pin: deMux.sel, isOutput: false }, // selDe
+    { pin: nnLowMux.sel, isOutput: false }, // selNnLow
+    { pin: nnHighMux.sel, isOutput: false }, // selNnHigh
+    { pin: exSpHlLowMux.sel, isOutput: false }, // selExSpHlLow
+    { pin: exSpHlHighMux.sel, isOutput: false }, // selExSpHlHigh
+    { pin: ldBlockReadMux.sel, isOutput: false }, // selLdBlockRead
+    { pin: ldBlockWriteMux.sel, isOutput: false }, // selLdBlockWrite
+    { pin: cpBlockReadMux.sel, isOutput: false }, // selCpBlockRead
+    { pin: inBlockWriteMux.sel, isOutput: false }, // selInBlockWrite
+    { pin: outBlockReadMux.sel, isOutput: false }, // selOutBlockRead
+    { pin: rrdRldAddrNow.a, isOutput: false }, // selRrdRldRead
+    { pin: rrdRldAddrNow.b, isOutput: false }, // selRrdRldWrite
+    { pin: edNnPcPlus1Mux.sel, isOutput: false }, // selEdNnPcPlus1
+    { pin: ixDispAddrMux.sel, isOutput: false }, // selIxDisp
+    { pin: iyDispAddrMux.sel, isOutput: false }, // selIyDisp
+    { pin: hlMux.in0, isOutput: false }, // pc
+    { pin: hlMux.in1, isOutput: false }, // hl
+    { pin: bcMux.in1, isOutput: false }, // bc
+    { pin: deMux.in1, isOutput: false }, // de
+    { pin: writeMux.in1, isOutput: false }, // sp
+    { pin: nnLowMux.in1, isOutput: false }, // nn
+    { pin: nnHighMux.in1, isOutput: false }, // nnPlus1
+    { pin: exSpHlHighMux.in1, isOutput: false }, // spPlus1
+    { pin: edNnPcPlus1Mux.in1, isOutput: false }, // pcPlus1
+    { pin: ixDispAddrMux.in1, isOutput: false }, // ixDisp
+    { pin: iyDispAddrMux.in1, isOutput: false }, // iyDisp
+    { pin: iyDispAddrMux.out, isOutput: true }, // out
+  ]);
+}
+
+const ramAddrBitDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getRamAddrBitChip(library: ChipLibrary): ChipDef {
+  let def = ramAddrBitDefs.get(library);
+  if (!def) {
+    def = makeRamAddrBitChip(library);
+    ramAddrBitDefs.set(library, def);
+  }
+  return def;
+}
+
+/**
+ * Sequential left-associated OR of `n` inputs (n>=2). Ports: i0..i{n-1}, out.
+ * Scratch uses nested OR stdcell instances (no gate placer on the scratch).
+ */
+function makeOrNChip(library: ChipLibrary, n: number, name: string): ChipDef {
+  if (n < 2) throw new Error(`makeOrNChip: n must be >= 2, got ${n}`);
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const orDef = getNamedGateChip(library, orChipDefs, 'OR', (lib) =>
+    makeTwoInputGateChip(lib, 'OR', buildOr),
+  );
+  const inputs: Pin[] = [];
+  let stage = placeTwoInputChip(scratch, orDef, { x: 0, y: 0 });
+  inputs.push(stage.a, stage.b);
+  for (let i = 2; i < n; i++) {
+    const next = placeTwoInputChip(scratch, orDef, { x: (i - 1) * 200, y: 0 });
+    wire(scratch, stage.out, next.a);
+    inputs.push(next.b);
+    stage = next;
+  }
+  return foldExposing(scratch, name, library, [
+    ...inputs.map((pin) => ({ pin, isOutput: false })),
+    { pin: stage.out, isOutput: true },
+  ]);
+}
+
+const orNDefs = new WeakMap<ChipLibrary, Map<number, ChipDef>>();
+function getOrNChip(library: ChipLibrary, n: number, name = `OR_N_${n}`): ChipDef {
+  let byN = orNDefs.get(library);
+  if (!byN) {
+    byN = new Map();
+    orNDefs.set(library, byN);
+  }
+  let def = byN.get(n);
+  if (!def) {
+    def = makeOrNChip(library, n, name);
+    byN.set(n, def);
+  }
+  return def;
+}
+
 export interface ProgramCounter {
   d: Pin[];
   load: Pin;
@@ -7873,6 +8042,9 @@ function buildZ80CpuInner(
   tieToLabel('OUTBLOCK_COMMIT_NOW', outBlockRepeatNow.b, { x: pos.x - 800, y: pos.y - 5320 });
   tieToLabel('OUTBLOCK_REPEAT_NOW', outBlockRepeatNow.out, { x: pos.x - 650, y: pos.y - 5300 }); // anchor — pc's own mux chain (far) reads this
 
+  // One RAM_ADDR_BIT chip per address pin — same MUX cascade + RRD/RLD OR
+  // as the former inline forEach; labels stay on the parent.
+  const ramAddrBitDef = getRamAddrBitChip(library);
   ramAddrPins(ram).forEach((p, i) => {
     // 8-bit register pairs: low byte for bits 0..7, high byte for 8+.
     const hlBit =
@@ -7882,122 +8054,41 @@ function buildZ80CpuInner(
     const deBit =
       i < 8 ? rE.q[i]! : rD.q[i - 8] ?? railPin(parent, 'GND', { x: pos.x + 1500, y: pos.y - 300 - i * 100 });
 
-    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
-    wire(parent, addrIsHl.out, mux.pins[muxDef.ports[0]!]!);
-    wire(parent, pc.q[i]!, mux.pins[muxDef.ports[1]!]!);
-    wire(parent, hlBit, mux.pins[muxDef.ports[2]!]!);
-
-    const writeMux = makeChipInstance(parent, muxDef, { x: pos.x + 900, y: pos.y - 300 - i * 100 });
-    tieToLabel('STACK_WRITE_NOW', writeMux.pins[muxDef.ports[0]!]!, { x: pos.x + 800, y: pos.y - 320 - i * 100 });
-    wire(parent, mux.pins[muxDef.ports[3]!]!, writeMux.pins[muxDef.ports[1]!]!);
-    tieToLabel(`SP_Q${i}`, writeMux.pins[muxDef.ports[2]!]!, { x: pos.x + 800, y: pos.y - 280 - i * 100 });
-
-    const readMux = makeChipInstance(parent, muxDef, { x: pos.x + 1100, y: pos.y - 300 - i * 100 });
-    tieToLabel('READ_NOW', readMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1000, y: pos.y - 320 - i * 100 });
-    wire(parent, writeMux.pins[muxDef.ports[3]!]!, readMux.pins[muxDef.ports[1]!]!);
-    tieToLabel(`SP_Q${i}`, readMux.pins[muxDef.ports[2]!]!, { x: pos.x + 1000, y: pos.y - 280 - i * 100 });
-
-    // Indirect loads' own four address sources (see "x=00: indirect loads
-    // through (BC)/(DE)/(nn)" above) — four more override layers, the
-    // identical shape `writeMux`/`readMux` above already established:
-    // `BC`/`DE` for the register-indirect opcodes (low/high byte split when
-    // addrBits > 8), then `nnAddr` and `nnAddr + 1` for the absolute-
-    // indirect ones.
-    const bcMux = makeChipInstance(parent, muxDef, { x: pos.x + 1300, y: pos.y - 300 - i * 100 });
-    tieToLabel('LDBC_ADDR_NOW', bcMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1200, y: pos.y - 320 - i * 100 });
-    wire(parent, readMux.pins[muxDef.ports[3]!]!, bcMux.pins[muxDef.ports[1]!]!);
-    wire(parent, bcBit, bcMux.pins[muxDef.ports[2]!]!);
-
-    const deMux = makeChipInstance(parent, muxDef, { x: pos.x + 1500, y: pos.y - 300 - i * 100 });
-    tieToLabel('LDDE_ADDR_NOW', deMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1400, y: pos.y - 320 - i * 100 });
-    wire(parent, bcMux.pins[muxDef.ports[3]!]!, deMux.pins[muxDef.ports[1]!]!);
-    wire(parent, deBit, deMux.pins[muxDef.ports[2]!]!);
-
-    const nnLowMux = makeChipInstance(parent, muxDef, { x: pos.x + 1700, y: pos.y - 300 - i * 100 });
-    tieToLabel('NN_DATA_ADDR_NOW', nnLowMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1600, y: pos.y - 320 - i * 100 });
-    wire(parent, deMux.pins[muxDef.ports[3]!]!, nnLowMux.pins[muxDef.ports[1]!]!);
-    wire(parent, nnAddr.q[i]!, nnLowMux.pins[muxDef.ports[2]!]!);
-
-    const nnHighMux = makeChipInstance(parent, muxDef, { x: pos.x + 1900, y: pos.y - 300 - i * 100 });
-    tieToLabel('NN_DATA_ADDR_PLUS_ONE_NOW', nnHighMux.pins[muxDef.ports[0]!]!, { x: pos.x + 1800, y: pos.y - 320 - i * 100 });
-    wire(parent, nnLowMux.pins[muxDef.ports[3]!]!, nnHighMux.pins[muxDef.ports[1]!]!);
-    wire(parent, nnAddrPlusOne.out[i]!, nnHighMux.pins[muxDef.ports[2]!]!);
-
-    // EX (SP),HL (see "x=11: EX (SP),HL" below) — two more override layers,
-    // the identical shape every earlier address source above already
-    // established: `SP` itself during its own low-byte read/write phases
-    // (reusing the already-published `SP_Q{i}` label PUSH/POP's own
-    // `writeMux`/`readMux` above already read), `SP + 1` during its own
-    // high-byte phases (a *dedicated* adder, `exSpHlPlusOne` below — not
-    // `spAdder`, which this opcode never actually commits into `SP`
-    // itself, only taps for an address).
-    const exSpHlLowMux = makeChipInstance(parent, muxDef, { x: pos.x + 2100, y: pos.y - 300 - i * 100 });
-    tieToLabel('EXSPHL_LOW_ADDR_NOW', exSpHlLowMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2000, y: pos.y - 320 - i * 100 });
-    wire(parent, nnHighMux.pins[muxDef.ports[3]!]!, exSpHlLowMux.pins[muxDef.ports[1]!]!);
-    tieToLabel(`SP_Q${i}`, exSpHlLowMux.pins[muxDef.ports[2]!]!, { x: pos.x + 2000, y: pos.y - 280 - i * 100 });
-
-    const exSpHlHighMux = makeChipInstance(parent, muxDef, { x: pos.x + 2300, y: pos.y - 300 - i * 100 });
-    tieToLabel('EXSPHL_HIGH_ADDR_NOW', exSpHlHighMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2200, y: pos.y - 320 - i * 100 });
-    wire(parent, exSpHlLowMux.pins[muxDef.ports[3]!]!, exSpHlHighMux.pins[muxDef.ports[1]!]!);
-    tieToLabel(`SPPLUS1_${i}`, exSpHlHighMux.pins[muxDef.ports[2]!]!, { x: pos.x + 2200, y: pos.y - 280 - i * 100 });
-
-    // LDI — HL during read, DE during write (full pair width when addrBits > 8).
-    const ldBlockReadMux = makeChipInstance(parent, muxDef, { x: pos.x + 2500, y: pos.y - 300 - i * 100 });
-    tieToLabel('LDBLOCK_READ_NOW', ldBlockReadMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2400, y: pos.y - 320 - i * 100 });
-    wire(parent, exSpHlHighMux.pins[muxDef.ports[3]!]!, ldBlockReadMux.pins[muxDef.ports[1]!]!);
-    wire(parent, hlBit, ldBlockReadMux.pins[muxDef.ports[2]!]!);
-
-    const ldBlockWriteMux = makeChipInstance(parent, muxDef, { x: pos.x + 2700, y: pos.y - 300 - i * 100 });
-    tieToLabel('LDBLOCK_WRITE_NOW', ldBlockWriteMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2600, y: pos.y - 320 - i * 100 });
-    wire(parent, ldBlockReadMux.pins[muxDef.ports[3]!]!, ldBlockWriteMux.pins[muxDef.ports[1]!]!);
-    wire(parent, deBit, ldBlockWriteMux.pins[muxDef.ports[2]!]!);
-
-    // CPI/CPD/CPIR/CPDR — HL read address.
-    const cpBlockReadMux = makeChipInstance(parent, muxDef, { x: pos.x + 2900, y: pos.y - 300 - i * 100 });
-    tieToLabel('CPBLOCK_READ_NOW', cpBlockReadMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2800, y: pos.y - 320 - i * 100 });
-    wire(parent, ldBlockWriteMux.pins[muxDef.ports[3]!]!, cpBlockReadMux.pins[muxDef.ports[1]!]!);
-    wire(parent, hlBit, cpBlockReadMux.pins[muxDef.ports[2]!]!);
-
-    // INI — HL write-to-RAM address.
-    const inBlockWriteMux = makeChipInstance(parent, muxDef, { x: pos.x + 3100, y: pos.y - 300 - i * 100 });
-    tieToLabel('INBLOCK_WRITE_NOW', inBlockWriteMux.pins[muxDef.ports[0]!]!, { x: pos.x + 3000, y: pos.y - 320 - i * 100 });
-    wire(parent, cpBlockReadMux.pins[muxDef.ports[3]!]!, inBlockWriteMux.pins[muxDef.ports[1]!]!);
-    wire(parent, hlBit, inBlockWriteMux.pins[muxDef.ports[2]!]!);
-
-    // OUTI/OUTD/OTIR/OTDR — HL read-from-RAM address.
-    const outBlockReadMux = makeChipInstance(parent, muxDef, { x: pos.x + 3300, y: pos.y - 300 - i * 100 });
-    tieToLabel('OUTBLOCK_READ_NOW', outBlockReadMux.pins[muxDef.ports[0]!]!, { x: pos.x + 3200, y: pos.y - 320 - i * 100 });
-    wire(parent, inBlockWriteMux.pins[muxDef.ports[3]!]!, outBlockReadMux.pins[muxDef.ports[1]!]!);
-    wire(parent, hlBit, outBlockReadMux.pins[muxDef.ports[2]!]!);
-
-    // RRD/RLD — HL for both read and write phases.
-    const rrdRldAddrNow = buildOr(parent, { x: pos.x + 3400, y: pos.y - 340 - i * 100 });
-    tieToLabel('RRDRLD_READ_NOW', rrdRldAddrNow.a, { x: pos.x + 3350, y: pos.y - 340 - i * 100 });
-    tieToLabel('RRDRLD_WRITE_NOW', rrdRldAddrNow.b, { x: pos.x + 3350, y: pos.y - 360 - i * 100 });
-    const rrdRldAddrMux = makeChipInstance(parent, muxDef, { x: pos.x + 3500, y: pos.y - 300 - i * 100 });
-    wire(parent, rrdRldAddrNow.out, rrdRldAddrMux.pins[muxDef.ports[0]!]!);
-    wire(parent, outBlockReadMux.pins[muxDef.ports[3]!]!, rrdRldAddrMux.pins[muxDef.ports[1]!]!);
-    wire(parent, hlBit, rrdRldAddrMux.pins[muxDef.ports[2]!]!);
-
-    // ED LD (nn),dd (see "x=01, z=3") — PC+1 during the high-immediate
-    // read: both imm bytes are read without an intervening PC advance, so
-    // PHASE5 addresses `PC+1` while PHASE4 still used bare `PC`.
-    const edNnPcPlus1Mux = makeChipInstance(parent, muxDef, { x: pos.x + 3700, y: pos.y - 300 - i * 100 });
-    tieToLabel('EDNN_IMM_HIGH_NOW', edNnPcPlus1Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 3600, y: pos.y - 320 - i * 100 });
-    wire(parent, rrdRldAddrMux.pins[muxDef.ports[3]!]!, edNnPcPlus1Mux.pins[muxDef.ports[1]!]!);
-    tieToLabel(`PCPLUS1_${i}`, edNnPcPlus1Mux.pins[muxDef.ports[2]!]!, { x: pos.x + 3600, y: pos.y - 280 - i * 100 });
-
-    // (IX+d)/(IY+d) — phase-scoped addr only during mem R/W (not d/n @ PC).
-    const ixDispAddrMux = makeChipInstance(parent, muxDef, { x: pos.x + 3900, y: pos.y - 300 - i * 100 });
-    tieToLabel('IXDISP_ADDR_NOW', ixDispAddrMux.pins[muxDef.ports[0]!]!, { x: pos.x + 3800, y: pos.y - 320 - i * 100 });
-    wire(parent, edNnPcPlus1Mux.pins[muxDef.ports[3]!]!, ixDispAddrMux.pins[muxDef.ports[1]!]!);
-    tieToLabel(`IXDISPADD${i}`, ixDispAddrMux.pins[muxDef.ports[2]!]!, { x: pos.x + 3800, y: pos.y - 280 - i * 100 });
-
-    const iyDispAddrMux = makeChipInstance(parent, muxDef, { x: pos.x + 4100, y: pos.y - 300 - i * 100 });
-    tieToLabel('IYDISP_ADDR_NOW', iyDispAddrMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4000, y: pos.y - 320 - i * 100 });
-    wire(parent, ixDispAddrMux.pins[muxDef.ports[3]!]!, iyDispAddrMux.pins[muxDef.ports[1]!]!);
-    tieToLabel(`IYDISPADD${i}`, iyDispAddrMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4000, y: pos.y - 280 - i * 100 });
-    wire(parent, iyDispAddrMux.pins[muxDef.ports[3]!]!, p);
+    const bit = makeChipInstance(parent, ramAddrBitDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
+    const port = (idx: number) => bit.pins[ramAddrBitDef.ports[idx]!]!;
+    // sels (see makeRamAddrBitChip port order)
+    wire(parent, addrIsHl.out, port(0));
+    tieToLabel('STACK_WRITE_NOW', port(1), { x: pos.x + 800, y: pos.y - 320 - i * 100 });
+    tieToLabel('READ_NOW', port(2), { x: pos.x + 1000, y: pos.y - 320 - i * 100 });
+    tieToLabel('LDBC_ADDR_NOW', port(3), { x: pos.x + 1200, y: pos.y - 320 - i * 100 });
+    tieToLabel('LDDE_ADDR_NOW', port(4), { x: pos.x + 1400, y: pos.y - 320 - i * 100 });
+    tieToLabel('NN_DATA_ADDR_NOW', port(5), { x: pos.x + 1600, y: pos.y - 320 - i * 100 });
+    tieToLabel('NN_DATA_ADDR_PLUS_ONE_NOW', port(6), { x: pos.x + 1800, y: pos.y - 320 - i * 100 });
+    tieToLabel('EXSPHL_LOW_ADDR_NOW', port(7), { x: pos.x + 2000, y: pos.y - 320 - i * 100 });
+    tieToLabel('EXSPHL_HIGH_ADDR_NOW', port(8), { x: pos.x + 2200, y: pos.y - 320 - i * 100 });
+    tieToLabel('LDBLOCK_READ_NOW', port(9), { x: pos.x + 2400, y: pos.y - 320 - i * 100 });
+    tieToLabel('LDBLOCK_WRITE_NOW', port(10), { x: pos.x + 2600, y: pos.y - 320 - i * 100 });
+    tieToLabel('CPBLOCK_READ_NOW', port(11), { x: pos.x + 2800, y: pos.y - 320 - i * 100 });
+    tieToLabel('INBLOCK_WRITE_NOW', port(12), { x: pos.x + 3000, y: pos.y - 320 - i * 100 });
+    tieToLabel('OUTBLOCK_READ_NOW', port(13), { x: pos.x + 3200, y: pos.y - 320 - i * 100 });
+    tieToLabel('RRDRLD_READ_NOW', port(14), { x: pos.x + 3350, y: pos.y - 340 - i * 100 });
+    tieToLabel('RRDRLD_WRITE_NOW', port(15), { x: pos.x + 3350, y: pos.y - 360 - i * 100 });
+    tieToLabel('EDNN_IMM_HIGH_NOW', port(16), { x: pos.x + 3600, y: pos.y - 320 - i * 100 });
+    tieToLabel('IXDISP_ADDR_NOW', port(17), { x: pos.x + 3800, y: pos.y - 320 - i * 100 });
+    tieToLabel('IYDISP_ADDR_NOW', port(18), { x: pos.x + 4000, y: pos.y - 320 - i * 100 });
+    // data
+    wire(parent, pc.q[i]!, port(19));
+    wire(parent, hlBit, port(20));
+    wire(parent, bcBit, port(21));
+    wire(parent, deBit, port(22));
+    tieToLabel(`SP_Q${i}`, port(23), { x: pos.x + 800, y: pos.y - 280 - i * 100 });
+    wire(parent, nnAddr.q[i]!, port(24));
+    wire(parent, nnAddrPlusOne.out[i]!, port(25));
+    tieToLabel(`SPPLUS1_${i}`, port(26), { x: pos.x + 2200, y: pos.y - 280 - i * 100 });
+    tieToLabel(`PCPLUS1_${i}`, port(27), { x: pos.x + 3600, y: pos.y - 280 - i * 100 });
+    tieToLabel(`IXDISPADD${i}`, port(28), { x: pos.x + 3800, y: pos.y - 280 - i * 100 });
+    tieToLabel(`IYDISPADD${i}`, port(29), { x: pos.x + 4000, y: pos.y - 280 - i * 100 });
+    wire(parent, port(30), p);
   });
 
   // PC+1 ripple incrementer for ED LD (nn),dd's high-immediate address
@@ -8036,128 +8127,8 @@ function buildZ80CpuInner(
   const phase1Advance = buildAnd(parent, { x: pos.x - 350, y: pos.y - 250 });
   tieToLabel('PHASE1', phase1Advance.a, { x: pos.x - 450, y: pos.y - 250 });
   tieToLabel('NOT_INT_SERVING', phase1Advance.b, { x: pos.x - 450, y: pos.y - 230 });
-  const pcHold = buildOr(parent, { x: pos.x - 300, y: pos.y - 250 });
-  wire(parent, phase1Advance.out, pcHold.a);
-  tieToLabel('LDIMM8_ADVANCE_NOW', pcHold.b, { x: pos.x - 400, y: pos.y - 220 });
-  // LD dd,nn (see "x=00, z=1: LD dd,nn" above) needs PC to advance a
-  // *third* and *fourth* time in one instruction — past the low immediate
-  // byte, then past the high one — same OR-widening shape LDIMM8_ADVANCE_NOW
-  // just established, twice more.
-  const pcHoldStage2 = buildOr(parent, { x: pos.x - 300, y: pos.y - 300 });
-  wire(parent, pcHold.out, pcHoldStage2.a);
-  tieToLabel('LDDDNN_LOW_ADVANCE_NOW', pcHoldStage2.b, { x: pos.x - 400, y: pos.y - 300 });
-  const pcHoldStage3 = buildOr(parent, { x: pos.x - 300, y: pos.y - 350 });
-  wire(parent, pcHoldStage2.out, pcHoldStage3.a);
-  tieToLabel('LDDDNN_HIGH_ADVANCE_NOW', pcHoldStage3.b, { x: pos.x - 400, y: pos.y - 350 });
-  // JP nn's own PHASE3 advance (see "x=11: JP nn" above) — deliberately
-  // NOT joined by a PHASE5 term the way LD dd,nn's own high-byte advance
-  // is: JP nn's PHASE5 overwrites PC with the jump target (via `jpMux`
-  // below) instead of advancing it, so PHASE5 must stay OUT of `pcHold`
-  // for this instruction, unlike LD dd,nn's.
-  const pcHoldStage4 = buildOr(parent, { x: pos.x - 300, y: pos.y - 400 });
-  wire(parent, pcHoldStage3.out, pcHoldStage4.a);
-  tieToLabel('JP_ADVANCE_NOW', pcHoldStage4.b, { x: pos.x - 400, y: pos.y - 400 });
-  // CALL nn's own two advances (see "x=11: CALL nn" above) — PHASE6
-  // (`CALL_PUSH_NOW`) and PHASE7 (`CALL_JUMP_NOW`) deliberately stay OUT
-  // of this chain, the identical reasoning JP nn's own PHASE5 exclusion
-  // already established: PHASE7 overwrites PC via `callMux` instead of
-  // advancing it, and PHASE6 doesn't touch PC at all (it writes RAM at
-  // `SP`, not PC).
-  const pcHoldStage5 = buildOr(parent, { x: pos.x - 300, y: pos.y - 450 });
-  wire(parent, pcHoldStage4.out, pcHoldStage5.a);
-  tieToLabel('CALL_ADVANCE_LOW_NOW', pcHoldStage5.b, { x: pos.x - 400, y: pos.y - 450 });
-  const pcHoldStage6 = buildOr(parent, { x: pos.x - 300, y: pos.y - 500 });
-  wire(parent, pcHoldStage5.out, pcHoldStage6.a);
-  tieToLabel('CALL_ADVANCE_HIGH_NOW', pcHoldStage6.b, { x: pos.x - 400, y: pos.y - 500 });
-  // JP cc,nn's own PHASE3 advance (unconditional — both branches need it)
-  // and its own PHASE5 *fall-through* advance (see "x=11: JP cc,nn"
-  // above) — `JPCC_JUMP_NOW` (the condition-true branch, same PHASE5)
-  // deliberately stays OUT of this chain, identical to `JP nn`'s own
-  // PHASE5 exclusion: that branch overwrites `PC` via `jpCcMux` instead.
-  const pcHoldStage7 = buildOr(parent, { x: pos.x - 300, y: pos.y - 550 });
-  wire(parent, pcHoldStage6.out, pcHoldStage7.a);
-  tieToLabel('JPCC_ADVANCE_LOW_NOW', pcHoldStage7.b, { x: pos.x - 400, y: pos.y - 550 });
-  const pcHoldStage8 = buildOr(parent, { x: pos.x - 300, y: pos.y - 600 });
-  wire(parent, pcHoldStage7.out, pcHoldStage8.a);
-  tieToLabel('JPCC_FALLTHROUGH_NOW', pcHoldStage8.b, { x: pos.x - 400, y: pos.y - 600 });
-  // CALL cc,nn's own two advances (see "x=11: CALL cc,nn" above) — both
-  // unconditional, exactly like CALL nn's own PHASE3/PHASE5 advances:
-  // PC must end up past this instruction's own 3 bytes whether the call
-  // fires or not, since that address is either the fall-through target or
-  // the very return address about to be pushed. `CALLCC_PUSH_NOW`
-  // (PHASE6) and `CALLCC_JUMP_NOW` (PHASE7) stay OUT of this chain, the
-  // identical reasoning `CALL nn`'s own PHASE6/PHASE7 exclusion already
-  // established.
-  const pcHoldStage9 = buildOr(parent, { x: pos.x - 300, y: pos.y - 650 });
-  wire(parent, pcHoldStage8.out, pcHoldStage9.a);
-  tieToLabel('CALLCC_ADVANCE_LOW_NOW', pcHoldStage9.b, { x: pos.x - 400, y: pos.y - 650 });
-  const pcHoldStage10 = buildOr(parent, { x: pos.x - 300, y: pos.y - 700 });
-  wire(parent, pcHoldStage9.out, pcHoldStage10.a);
-  tieToLabel('CALLCC_ADVANCE_HIGH_NOW', pcHoldStage10.b, { x: pos.x - 400, y: pos.y - 700 });
-  // JR cc's own single advance (see "x=00: JR cc,e" above) — unconditional,
-  // the identical "both branches need PC past this instruction's own
-  // bytes" reasoning `CALL cc,nn`'s own advances used, just one term
-  // instead of two since this opcode only has one operand byte.
-  // `JR_JUMP_NOW` (`PHASE4`) stays out of this chain, the same exclusion
-  // every other conditional jump/call in this file already established.
-  const pcHoldStage11 = buildOr(parent, { x: pos.x - 300, y: pos.y - 750 });
-  wire(parent, pcHoldStage10.out, pcHoldStage11.a);
-  tieToLabel('JR_ADVANCE_NOW', pcHoldStage11.b, { x: pos.x - 400, y: pos.y - 750 });
-  // The indirect-load group's own two advances (see "x=00: indirect loads
-  // through (BC)/(DE)/(nn)" above) — both unconditional, `LD dd,nn`'s own
-  // 4-phase shape. `y=0..3`'s own single-byte opcodes need no widening at
-  // all here (PHASE1's own default increment already covers them);
-  // `PHASE6`/`PHASE7`'s own commits never touch PC either way, so neither
-  // needs excluding the way a jump's own commit phase would.
-  const pcHoldStage12 = buildOr(parent, { x: pos.x - 300, y: pos.y - 800 });
-  wire(parent, pcHoldStage11.out, pcHoldStage12.a);
-  tieToLabel('NN_ADVANCE_LOW_NOW', pcHoldStage12.b, { x: pos.x - 400, y: pos.y - 800 });
-  const pcHoldStage13 = buildOr(parent, { x: pos.x - 300, y: pos.y - 850 });
-  wire(parent, pcHoldStage12.out, pcHoldStage13.a);
-  tieToLabel('NN_ADVANCE_HIGH_NOW', pcHoldStage13.b, { x: pos.x - 400, y: pos.y - 850 });
-  // ALU op A,n's own second advance, past its own immediate byte (see
-  // "x=11: ALU op A,n" above) — the identical shape LDIMM8_ADVANCE_NOW
-  // already established for LD r,n's own immediate byte.
-  const pcHoldStage14 = buildOr(parent, { x: pos.x - 300, y: pos.y - 900 });
-  wire(parent, pcHoldStage13.out, pcHoldStage14.a);
-  tieToLabel('ALUIMM8_ADVANCE_NOW', pcHoldStage14.b, { x: pos.x - 400, y: pos.y - 900 });
-  // IN A,(n)/OUT (n),A's own second advance, past their own immediate byte
-  // (see "x=11: IN A,(n) / OUT (n),A" above).
-  const pcHoldStage15 = buildOr(parent, { x: pos.x - 300, y: pos.y - 950 });
-  wire(parent, pcHoldStage14.out, pcHoldStage15.a);
-  tieToLabel('IOIMM_ADVANCE_NOW', pcHoldStage15.b, { x: pos.x - 400, y: pos.y - 950 });
-  // CB/ED/DD/FD's own second advance, past the real opcode byte their own
-  // prefix byte was standing in front of (see "CB/ED/DD/FD prefix bytes"
-  // above) — `PREFIX_ADVANCE_NOW` (the latch ANDed with PHASE3), not the
-  // bare latch itself, which stays high for the rest of the instruction
-  // and would otherwise re-fire this same advance every phase after.
-  const pcHoldFinal = buildOr(parent, { x: pos.x - 300, y: pos.y - 1000 });
-  wire(parent, pcHoldStage15.out, pcHoldFinal.a);
-  tieToLabel('PREFIX_ADVANCE_NOW', pcHoldFinal.b, { x: pos.x - 400, y: pos.y - 1000 });
-  // ED LD (nn),dd's two advances (see "x=01, z=3"): PHASE5 (after the
-  // PC+1 high-immediate read) and PHASE6 (past the instruction, same
-  // edge as the data-low transfer).
-  const pcHoldFinal2 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1050 });
-  wire(parent, pcHoldFinal.out, pcHoldFinal2.a);
-  tieToLabel('EDNN_IMM_HIGH_NOW', pcHoldFinal2.b, { x: pos.x - 400, y: pos.y - 1050 });
-  const pcHoldFinal3 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1100 });
-  wire(parent, pcHoldFinal2.out, pcHoldFinal3.a);
-  tieToLabel('EDNN_DATA_LOW_NOW', pcHoldFinal3.b, { x: pos.x - 400, y: pos.y - 1100 });
-  // LD IX,nn / LD IY,nn's advances past the immediate bytes (see "DD: IX" /
-  // "FD: IY").
-  const pcHoldFinal4 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1150 });
-  wire(parent, pcHoldFinal3.out, pcHoldFinal4.a);
-  tieToLabel('LDIXNN_LOW_ADVANCE_NOW', pcHoldFinal4.b, { x: pos.x - 400, y: pos.y - 1150 });
-  const pcHoldFinal5 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1200 });
-  wire(parent, pcHoldFinal4.out, pcHoldFinal5.a);
-  tieToLabel('LDIXNN_HIGH_ADVANCE_NOW', pcHoldFinal5.b, { x: pos.x - 400, y: pos.y - 1200 });
-  const pcHoldFinal6 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1250 });
-  wire(parent, pcHoldFinal5.out, pcHoldFinal6.a);
-  tieToLabel('LDIYNN_LOW_ADVANCE_NOW', pcHoldFinal6.b, { x: pos.x - 400, y: pos.y - 1250 });
-  const pcHoldFinal7 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1300 });
-  wire(parent, pcHoldFinal6.out, pcHoldFinal7.a);
-  tieToLabel('LDIYNN_HIGH_ADVANCE_NOW', pcHoldFinal7.b, { x: pos.x - 400, y: pos.y - 1300 });
   // DD/FD (IX+d)/(IY+d) advances — past d (PHASE5) and past n (PHASE7).
+  // Pair ORs stay outside PC_HOLD_OR; their combined out is the last term.
   const ddFdDispAdv = buildOr(parent, { x: pos.x - 250, y: pos.y - 1320 });
   tieToLabel('DDDISP_ADVANCE_NOW', ddFdDispAdv.a, { x: pos.x - 350, y: pos.y - 1320 });
   tieToLabel('FDDISP_ADVANCE_NOW', ddFdDispAdv.b, { x: pos.x - 350, y: pos.y - 1340 });
@@ -8179,11 +8150,39 @@ function buildZ80CpuInner(
   const ddFdPcAdvAny3 = buildOr(parent, { x: pos.x - 100, y: pos.y - 1380 });
   wire(parent, ddFdPcAdvAny2.out, ddFdPcAdvAny3.a);
   wire(parent, ddFdHl8ImmAdv.out, ddFdPcAdvAny3.b);
-  const pcHoldFinal8 = buildOr(parent, { x: pos.x - 300, y: pos.y - 1350 });
-  wire(parent, pcHoldFinal7.out, pcHoldFinal8.a);
-  wire(parent, ddFdPcAdvAny3.out, pcHoldFinal8.b);
+  // PC hold OR — sequential left-associated OR of every advance term
+  // (same order as the former pcHold…pcHoldFinal8 chain). Labels stay on
+  // the parent; DD/FD pair reduction is the last input.
+  const pcHoldOrDef = getOrNChip(library, 24, 'PC_HOLD_OR');
+  const pcHoldOr = makeChipInstance(parent, pcHoldOrDef, { x: pos.x - 300, y: pos.y - 700 });
+  const pcHoldIn = (idx: number) => pcHoldOr.pins[pcHoldOrDef.ports[idx]!]!;
+  wire(parent, phase1Advance.out, pcHoldIn(0));
+  tieToLabel('LDIMM8_ADVANCE_NOW', pcHoldIn(1), { x: pos.x - 400, y: pos.y - 220 });
+  tieToLabel('LDDDNN_LOW_ADVANCE_NOW', pcHoldIn(2), { x: pos.x - 400, y: pos.y - 300 });
+  tieToLabel('LDDDNN_HIGH_ADVANCE_NOW', pcHoldIn(3), { x: pos.x - 400, y: pos.y - 350 });
+  tieToLabel('JP_ADVANCE_NOW', pcHoldIn(4), { x: pos.x - 400, y: pos.y - 400 });
+  tieToLabel('CALL_ADVANCE_LOW_NOW', pcHoldIn(5), { x: pos.x - 400, y: pos.y - 450 });
+  tieToLabel('CALL_ADVANCE_HIGH_NOW', pcHoldIn(6), { x: pos.x - 400, y: pos.y - 500 });
+  tieToLabel('JPCC_ADVANCE_LOW_NOW', pcHoldIn(7), { x: pos.x - 400, y: pos.y - 550 });
+  tieToLabel('JPCC_FALLTHROUGH_NOW', pcHoldIn(8), { x: pos.x - 400, y: pos.y - 600 });
+  tieToLabel('CALLCC_ADVANCE_LOW_NOW', pcHoldIn(9), { x: pos.x - 400, y: pos.y - 650 });
+  tieToLabel('CALLCC_ADVANCE_HIGH_NOW', pcHoldIn(10), { x: pos.x - 400, y: pos.y - 700 });
+  tieToLabel('JR_ADVANCE_NOW', pcHoldIn(11), { x: pos.x - 400, y: pos.y - 750 });
+  tieToLabel('NN_ADVANCE_LOW_NOW', pcHoldIn(12), { x: pos.x - 400, y: pos.y - 800 });
+  tieToLabel('NN_ADVANCE_HIGH_NOW', pcHoldIn(13), { x: pos.x - 400, y: pos.y - 850 });
+  tieToLabel('ALUIMM8_ADVANCE_NOW', pcHoldIn(14), { x: pos.x - 400, y: pos.y - 900 });
+  tieToLabel('IOIMM_ADVANCE_NOW', pcHoldIn(15), { x: pos.x - 400, y: pos.y - 950 });
+  tieToLabel('PREFIX_ADVANCE_NOW', pcHoldIn(16), { x: pos.x - 400, y: pos.y - 1000 });
+  tieToLabel('EDNN_IMM_HIGH_NOW', pcHoldIn(17), { x: pos.x - 400, y: pos.y - 1050 });
+  tieToLabel('EDNN_DATA_LOW_NOW', pcHoldIn(18), { x: pos.x - 400, y: pos.y - 1100 });
+  tieToLabel('LDIXNN_LOW_ADVANCE_NOW', pcHoldIn(19), { x: pos.x - 400, y: pos.y - 1150 });
+  tieToLabel('LDIXNN_HIGH_ADVANCE_NOW', pcHoldIn(20), { x: pos.x - 400, y: pos.y - 1200 });
+  tieToLabel('LDIYNN_LOW_ADVANCE_NOW', pcHoldIn(21), { x: pos.x - 400, y: pos.y - 1250 });
+  tieToLabel('LDIYNN_HIGH_ADVANCE_NOW', pcHoldIn(22), { x: pos.x - 400, y: pos.y - 1300 });
+  wire(parent, ddFdPcAdvAny3.out, pcHoldIn(23));
+  const pcHoldFinal8Out = pcHoldOr.pins[pcHoldOrDef.ports[24]!]!;
   const notPhase1 = buildNot(parent, { x: pos.x - 200, y: pos.y - 200 });
-  wire(parent, pcHoldFinal8.out, notPhase1.in);
+  wire(parent, pcHoldFinal8Out, notPhase1.in);
   wire(parent, notPhase1.out, pc.load);
 
   // JP nn's own target: a dedicated `addrBits`-wide holding register, not
