@@ -1,6 +1,6 @@
 import { Circuit, currentStructureVersion } from './Circuit.js';
 import { KEY_DATA, KEY_STATUS } from '../machine/memoryMap.js';
-import type { Level, NetMap, RamComponent, SimState } from './types.js';
+import type { Level, NetMap, RamComponent, RomComponent, SimState } from './types.js';
 
 /**
  * Switch-level relaxation solver.
@@ -72,10 +72,11 @@ import type { Level, NetMap, RamComponent, SimState } from './types.js';
 type TransistorIdx = { isN: boolean; gate: number; drain: number; source: number };
 type RamIdx = {
   oe: number;
+  /** -1 for ROM (no write enable — reads whenever OE=1). */
   we: number;
   addr: number[];
   data: number[];
-  ram: RamComponent;
+  mem: RamComponent | RomComponent;
 };
 
 type StepStructureCache = {
@@ -126,7 +127,7 @@ function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache 
   const driverPins: { netIdx: number; comp: { value: 0 | 1 } }[] = [];
 
   for (const c of circuit.components.values()) {
-    if (c.kind === 'source' || c.kind === 'input') {
+    if (c.kind === 'source' || c.kind === 'input' || c.kind === 'button' || c.kind === 'clock') {
       const net = netMap.netOf.get(c.pins.out.id);
       if (!net) continue;
       const i = indexOf.get(net);
@@ -166,7 +167,33 @@ function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache 
         }
         data.push(idx);
       }
-      if (ok) ramIdx.push({ oe, we, addr, data, ram: c });
+      if (ok) ramIdx.push({ oe, we, addr, data, mem: c });
+    } else if (c.kind === 'rom') {
+      const oeNet = netMap.netOf.get(c.pins.oe!.id);
+      const oe = oeNet !== undefined ? indexOf.get(oeNet) : undefined;
+      if (oe === undefined) continue;
+      const addr: number[] = [];
+      const data: number[] = [];
+      let ok = true;
+      for (let i = 0; i < c.addrBits; i++) {
+        const net = netMap.netOf.get(c.pins[`addr${i}`]!.id);
+        const idx = net !== undefined ? indexOf.get(net) : undefined;
+        if (idx === undefined) {
+          ok = false;
+          break;
+        }
+        addr.push(idx);
+      }
+      for (let i = 0; i < c.dataBits; i++) {
+        const net = netMap.netOf.get(c.pins[`data${i}`]!.id);
+        const idx = net !== undefined ? indexOf.get(net) : undefined;
+        if (idx === undefined) {
+          ok = false;
+          break;
+        }
+        data.push(idx);
+      }
+      if (ok) ramIdx.push({ oe, we: -1, addr, data, mem: c });
     }
   }
 
@@ -285,7 +312,8 @@ export function step(
     ramMask.fill(0);
     for (const r of ramIdx) {
       if (cur[r.oe] !== 1) continue;
-      if (cur[r.we] === 1) continue;
+      // RAM suppresses OE drive while WE is asserted; ROM has we === -1.
+      if (r.we >= 0 && cur[r.we] === 1) continue;
       let addr = 0;
       let resolved = true;
       for (let i = 0; i < r.addr.length; i++) {
@@ -297,7 +325,7 @@ export function step(
         if (lvl === 1) addr |= 1 << i;
       }
       if (!resolved) continue;
-      const byte = r.ram.bytes[addr] ?? 0;
+      const byte = r.mem.bytes[addr] ?? 0;
       for (let i = 0; i < r.data.length; i++) {
         const bit = ((byte >> i) & 1) as 0 | 1;
         ramMask[r.data[i]!]! |= bit === 1 ? 2 : 1;

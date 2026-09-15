@@ -142,12 +142,11 @@ src/ui/         Canvas editor — thin layer on top of src/sim, swappable.
                    a LevelResolver callback (see "Rendering a nested level"
                    below) — chip instances and port boundary markers
                    included, with hover/selection glow and an adaptive
-                   (zoom-aware) dot grid. A transistor is drawn as a small
-                   MOSFET glyph (gate plate + channel with a gap, plus a
-                   type arrow) rather than a bare colored box, with G/D/S
-                   labels beside each pin — the color-coded border and the
-                   N/P letter are still there too, so type is legible at a
-                   glance from any one of three independent visual cues.
+                   (zoom-aware) dot grid. Transistors render as classic
+                   enhancement MOSFET symbols (gate plate, channel fingers,
+                   PMOS gate bubble, source-side type arrow). Wires draw as
+                   rounded orthogonal polylines (HVH legs + curved corners)
+                   so CMOS guts read like a schematic rather than spaghetti.
   MachinePanel.ts Soft text TTY: samples `ram.bytes[FB_BASE..]`, injects
                    keys, Run/Pause/Step/Reboot/speed, host Cmd + Load hex
                    + mini assembler — see "Memory-mapped TTY (behavioral)".
@@ -171,7 +170,7 @@ src/machine/    Soft machine map over RamComponent (not transistor devices).
 src/main.ts     Bootstraps a Circuit + Editor + ChipLibrary + Camera, seeds a
                 demo, owns the hierarchy navigation stack (dive in/out,
                 breadcrumb, chip palette, auto-center on dive — see below),
-                pan/zoom input (wheel, space/middle-drag, a dedicated pan
+                pan/zoom input (wheel, space/right-drag, a dedicated pan
                 tool, on-screen zoom controls), per-tool keyboard shortcuts
                 (built from each toolbar button's own `data-key` in
                 index.html, so the key and its on-screen hint can't drift
@@ -419,7 +418,7 @@ by `-camera.x, -camera.y`) before `Renderer.draw()` draws a single thing.
   under the cursor fixed on screen — the standard "zoom toward the mouse"
   feel, not zoom-from-corner.
 - **Pan** has three equivalent triggers — a dedicated `pan` tool, holding
-  Space, or a middle-click drag — all funneled through one `panDrag` state
+  Space, or a right-click drag — all funneled through one `panDrag` state
   in `main.ts` so `Editor` never has to know panning exists.
 - **Auto-center on dive in/out** (`enterLevel()` in `main.ts`) calls
   `camera.centerOn(centroidOfComponents, 1)` every time the navigation stack
@@ -4835,10 +4834,12 @@ section's own success story.
   `dec.x`). `DI`/`EI` (`x=11, z=3, y=6/7`) now drive real `IFF1`/`IFF2`
   flip-flops as part of the thin IM1 IRQ layer (see "Thin IM1 IRQ" above) —
   no longer the permanent gap this paragraph once described. Remaining IRQ
-  gaps are deliberate: no INTACK cycle, no IM0/IM2, no NMI/`RETN`, no
-  one-instruction EI delay, no `R` auto-increment on `M1`, and no
-  `P/V←IFF2` on `LD A,I`/`LD A,R`. `HALT` (`0x76`) stays inert (no "stop
-  clocking" concept — see "x=01: LD r,r'" above). `H` (half-carry) and the two undocumented flag bits are real
+  gaps are deliberate on the *gate* CPU: no INTACK cycle, no IM0/IM2, no
+  NMI/`RETN`, no one-instruction EI delay, no `R` auto-increment on `M1`,
+  and no `P/V←IFF2` on `LD A,I`/`LD A,R`. Soft Run now *does* honour the
+  one-instruction EI delay (`SoftZ80State.eiDelay`). `HALT` (`0x76`) stops
+  Soft Run; the gate CPU still leaves it inert (no "stop clocking" concept
+  — see "x=01: LD r,r'" above). `H` (half-carry) and the two undocumented flag bits are real
   now for the `x=10`/`x=11` ALU group, `INC r`/`DEC r`, and `DAA` itself
   (see "Closing the half-carry gap" above) — `ADD HL,rr` and the
   `RLCA`/`RRCA`/`RLA`/`RRA`/`CPL`/`SCF`/`CCF` group still leave them

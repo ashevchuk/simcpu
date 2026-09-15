@@ -1,12 +1,24 @@
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import type { Z80Cpu } from '../sim/blocks.js';
-import { makeInput, wire } from '../sim/library.js';
+import { makeInput, makeLabel, wire } from '../sim/library.js';
 import type { InputComponent, Pin, RamComponent } from '../sim/types.js';
 import { createSoftDevices, type SoftDevices } from './softDevices.js';
 import { createSoftZ80, softRun, softStep, type SoftMemHooks, type SoftZ80State } from './softZ80.js';
 
 type TickFn = () => void;
+
+/**
+ * Connect two pins via same-named local labels (short stubs) instead of a
+ * drawn point-to-point wire — keeps the top-level canvas readable after
+ * the Z80 folds into one chip while Inputs stay outside.
+ */
+function tieByLabel(circuit: Circuit, name: string, a: Pin, b: Pin): void {
+  const la = makeLabel(circuit, name, { x: a.pos.x + 8, y: a.pos.y });
+  wire(circuit, a, la.pins.net);
+  const lb = makeLabel(circuit, name, { x: b.pos.x + 8, y: b.pos.y });
+  wire(circuit, b, lb.pins.net);
+}
 
 /**
  * Run modes:
@@ -106,6 +118,10 @@ export class MachineRunner {
   /**
    * Wire clocks/reset/FSM seed/lean register zero-seeds beside the CPU.
    * Call `boot()` once afterward before Run/Step.
+   *
+   * Inputs sit in a compact grid next to RAM (not thousands of units away).
+   * Connections use net labels so the post-fold top view does not grow a
+   * "noodle" of Input→chip-port wires across the canvas.
    */
   attach(circuit: Circuit, _library: ChipLibrary, cpu: Z80Cpu, tick: TickFn): void {
     this.detach();
@@ -114,51 +130,58 @@ export class MachineRunner {
     this.ram = cpu.ram;
     this.tick = tick;
 
-    const base = { x: cpu.ram.pos.x - 200, y: cpu.ram.pos.y - 12000 };
+    // Beside RAM / the eventual folded chip — old `y - 12000` parked seeds
+    // far above the sprawling flat composite and became the visible spaghetti
+    // once everything folded into one Z80CPU box.
+    const base = { x: cpu.ram.pos.x - 360, y: cpu.ram.pos.y - 40 };
     let row = 0;
     const place = (value: 0 | 1): InputComponent => {
       const inp = makeInput(circuit, value, {
-        x: base.x + (row % 8) * 50,
-        y: base.y + Math.floor(row / 8) * 36,
+        x: base.x + (row % 6) * 44,
+        y: base.y + Math.floor(row / 6) * 32,
       });
       row++;
       this.inputIds.push(inp.id);
       return inp;
     };
+    let tieN = 0;
+    const tie = (inp: InputComponent, pin: Pin, hint: string) => {
+      tieByLabel(circuit, `RUN_${hint}_${tieN++}`, inp.pins.out, pin);
+    };
 
     this.reset = place(1);
-    wire(circuit, this.reset.pins.out, cpu.reset);
+    tie(this.reset, cpu.reset, 'RESET');
     this.aReset = place(1);
-    wire(circuit, this.aReset.pins.out, cpu.aReset);
+    tie(this.aReset, cpu.aReset, 'ARESET');
     this.dataClk = place(0);
-    wire(circuit, this.dataClk.pins.out, cpu.clk);
+    tie(this.dataClk, cpu.clk, 'CLK');
     this.phaseClk = place(0);
-    wire(circuit, this.phaseClk.pins.out, cpu.phaseClk);
+    tie(this.phaseClk, cpu.phaseClk, 'PCLK');
     this.fsmLoad = place(1);
-    wire(circuit, this.fsmLoad.pins.out, cpu.fsmLoad);
+    tie(this.fsmLoad, cpu.fsmLoad, 'FSMLOAD');
     for (let i = 0; i < cpu.fsmD.length; i++) {
       const d = place(i === 0 ? 1 : 0);
-      wire(circuit, d.pins.out, cpu.fsmD[i]!);
+      tie(d, cpu.fsmD[i]!, `FSMD${i}`);
     }
 
     this.seedWes = [];
-    const seedReg = (reg: { we: Pin; d: Pin[] }, width = 8) => {
+    const seedReg = (reg: { we: Pin; d: Pin[] }, tag: string, width = 8) => {
       const we = place(1);
-      wire(circuit, we.pins.out, reg.we);
+      tie(we, reg.we, `${tag}_WE`);
       this.seedWes.push(we);
       for (let i = 0; i < width; i++) {
         const bit = place(0);
-        wire(circuit, bit.pins.out, reg.d[i]!);
+        tie(bit, reg.d[i]!, `${tag}${i}`);
       }
     };
 
-    seedReg(cpu.rB);
-    seedReg(cpu.rC);
-    seedReg(cpu.rD);
-    seedReg(cpu.rE);
-    seedReg(cpu.rH);
-    seedReg(cpu.rL);
-    seedReg(cpu.sp, cpu.sp.d.length);
+    seedReg(cpu.rB, 'B');
+    seedReg(cpu.rC, 'C');
+    seedReg(cpu.rD, 'D');
+    seedReg(cpu.rE, 'E');
+    seedReg(cpu.rH, 'H');
+    seedReg(cpu.rL, 'L');
+    seedReg(cpu.sp, 'SP', cpu.sp.d.length);
 
     this.booted = false;
     this.running = false;

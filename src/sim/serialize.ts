@@ -21,18 +21,63 @@
 //   yet to collide with.
 
 import { ChipLibrary, type ChipDef } from './ChipLibrary.js';
-import { Circuit, nextId, noteUsedId } from './Circuit.js';
-import type { ChipInstanceComponent, Component, Pin, RamComponent, Wire } from './types.js';
+import { bumpStructureVersion, Circuit, nextId, noteUsedId } from './Circuit.js';
+import type {
+  ChipInstanceComponent,
+  ClockComponent,
+  Component,
+  Level,
+  Pin,
+  RamComponent,
+  RomComponent,
+  Wire,
+} from './types.js';
 
-/** Every Component variant, except RamComponent's `bytes` is a plain number array instead of a Uint8Array — see the file header for why. */
-type SerializedComponent = Exclude<Component, RamComponent> | (Omit<RamComponent, 'bytes'> & { bytes: number[] });
+/** Every Component variant, except memory `bytes` is a plain number array instead of a Uint8Array — see the file header for why. */
+type SerializedComponent =
+  | Exclude<Component, RamComponent | RomComponent>
+  | (Omit<RamComponent, 'bytes'> & { bytes: number[] })
+  | (Omit<RomComponent, 'bytes'> & { bytes: number[] });
 
 function toSerializedComponent(c: Component): SerializedComponent {
-  return c.kind === 'ram' ? { ...c, bytes: Array.from(c.bytes) } : c;
+  return c.kind === 'ram' || c.kind === 'rom' ? { ...c, bytes: Array.from(c.bytes) } : c;
 }
 
 function fromSerializedComponent(c: SerializedComponent): Component {
-  return c.kind === 'ram' ? { ...c, bytes: Uint8Array.from(c.bytes) } : c;
+  if (c.kind === 'ram' || c.kind === 'rom') {
+    return { ...c, bytes: Uint8Array.from(c.bytes) };
+  }
+  if (c.kind === 'clock') {
+    const raw = c as ClockComponent & {
+      mode?: ClockComponent['mode'];
+      holdFrames?: number;
+      lastTrig?: Level;
+      pins: { out: Pin; trig?: Pin };
+    };
+    const trig =
+      raw.pins.trig ??
+      ({
+        id: `${raw.id}:trig`,
+        componentId: raw.id,
+        name: 'trig',
+        pos: { x: raw.pos.x - 18, y: raw.pos.y },
+      } satisfies Pin);
+    return {
+      id: raw.id,
+      kind: 'clock',
+      mode: raw.mode ?? 'continuous',
+      value: raw.value,
+      running: raw.running,
+      periodFrames: raw.periodFrames,
+      dutyFrames: raw.dutyFrames,
+      phase: raw.phase,
+      holdFrames: raw.holdFrames ?? 0,
+      lastTrig: raw.lastTrig ?? 0,
+      pos: raw.pos,
+      pins: { out: raw.pins.out, trig },
+    };
+  }
+  return c as Component;
 }
 
 export interface SerializedCircuit {
@@ -68,8 +113,38 @@ export interface SerializedChipBundle {
 function serializeCircuit(circuit: Circuit): SerializedCircuit {
   return {
     components: [...circuit.components.values()].map(toSerializedComponent),
-    wires: [...circuit.wires.values()],
+    wires: [...circuit.wires.values()].map((w) =>
+      w.waypoints ? { ...w, waypoints: w.waypoints.map((p) => ({ ...p })) } : { ...w },
+    ),
   };
+}
+
+/** Deep-ish snapshot of a circuit for undo / clipboard restore. */
+export type CircuitSnapshot = SerializedCircuit;
+
+export function captureCircuit(circuit: Circuit): CircuitSnapshot {
+  return serializeCircuit(circuit);
+}
+
+/** Replace `circuit`'s contents with a snapshot (keeps the same Circuit object). */
+export function restoreCircuit(circuit: Circuit, snap: CircuitSnapshot): void {
+  circuit.components.clear();
+  circuit.wires.clear();
+  for (const sc of snap.components) {
+    const c = fromSerializedComponent(structuredClone(sc));
+    circuit.addRawComponent(c);
+    noteUsedId(c.id);
+    for (const p of Object.values(c.pins) as Pin[]) noteUsedId(p.id);
+  }
+  for (const w of snap.wires) {
+    circuit.addRawWire(
+      w.waypoints
+        ? { ...w, waypoints: w.waypoints.map((p) => ({ ...p })) }
+        : { id: w.id, a: w.a, b: w.b },
+    );
+    noteUsedId(w.id);
+  }
+  bumpStructureVersion();
 }
 
 function serializeChipDefPlain(def: ChipDef): SerializedChipDef {
@@ -134,11 +209,17 @@ const ID_PREFIX: Record<Component['kind'], string> = {
   transistor: 't',
   source: 'src',
   input: 'in',
+  button: 'btn',
+  led: 'led',
+  clock: 'clk',
+  analyzer: 'la',
+  tty: 'tty',
   probe: 'probe',
   label: 'lbl',
   port: 'port',
   chip: 'chip',
   ram: 'ram',
+  rom: 'rom',
 };
 
 /**

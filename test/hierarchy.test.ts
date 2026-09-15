@@ -43,7 +43,7 @@ function makeNandChip(library: ChipLibrary): ChipDef {
     { pin: nand.a, isOutput: false },
     { pin: nand.b, isOutput: false },
     { pin: nand.out, isOutput: true },
-  ]);
+  ], { labelize: false });
 }
 
 function makeNotChip(library: ChipLibrary): ChipDef {
@@ -54,7 +54,7 @@ function makeNotChip(library: ChipLibrary): ChipDef {
   return foldExposing(scratch, 'NOT', library, [
     { pin: notGate.in, isOutput: false },
     { pin: notGate.out, isOutput: true },
-  ]);
+  ], { labelize: false });
 }
 
 describe('fold + flatten a NAND into a reusable chip', () => {
@@ -155,7 +155,7 @@ describe('flatten namespaces non-global labels per chip instance', () => {
       { pin: nand.a, isOutput: false },
       { pin: nand.b, isOutput: false },
       { pin: nand.out, isOutput: true },
-    ]);
+    ], { labelize: false });
 
     const parent = new Circuit();
     makeChipInstance(parent, def, { x: 0, y: 0 });

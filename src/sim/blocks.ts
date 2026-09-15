@@ -39,6 +39,7 @@ import {
   type TwoInputGate,
 } from './library.js';
 import { buildRegisterBit } from './sequential.js';
+import { compactCircuitLayout, replaceLongWiresWithLabels, tiePinToNet, tidyLibraryCircuit } from './labelWires.js';
 import type { Pin, Point, RamComponent } from './types.js';
 
 /** Fold buildRegisterBit() into a reusable 1-bit register chip. Ports, in order: d, we, clk, q, qn. */
@@ -303,19 +304,19 @@ function getMux2Chip(library: ChipLibrary): ChipDef {
   return def;
 }
 
-/** Fold a 1-input gate (NOT) — ports in order: in, out → p0, p1 after fold. */
+/** Fold a 1-input gate (NOT) — CMOS primitive: keep schematic wires. */
 function makeNotChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
   makeSource(scratch, 1);
   makeSource(scratch, 0);
   const g = buildNot(scratch);
   return foldExposing(scratch, 'NOT', library, [
-    { pin: g.in, isOutput: false },
-    { pin: g.out, isOutput: true },
-  ]);
+    { pin: g.in, isOutput: false, portName: 'in' },
+    { pin: g.out, isOutput: true, portName: 'out' },
+  ], { labelize: false });
 }
 
-/** Fold a 2-input gate — ports in order: a, b, out → p0, p1, p2 after fold. */
+/** Fold a 2-input gate. NAND/NOR keep wires; AND/OR/XOR labelize interconnects. */
 function makeTwoInputGateChip(
   library: ChipLibrary,
   name: string,
@@ -325,11 +326,12 @@ function makeTwoInputGateChip(
   makeSource(scratch, 1);
   makeSource(scratch, 0);
   const g = build(scratch);
+  const labelize = name !== 'NAND' && name !== 'NOR';
   return foldExposing(scratch, name, library, [
-    { pin: g.a, isOutput: false },
-    { pin: g.b, isOutput: false },
-    { pin: g.out, isOutput: true },
-  ]);
+    { pin: g.a, isOutput: false, portName: 'a' },
+    { pin: g.b, isOutput: false, portName: 'b' },
+    { pin: g.out, isOutput: true, portName: 'out' },
+  ], { labelize });
 }
 
 const notChipDefs = new WeakMap<ChipLibrary, ChipDef>();
@@ -746,23 +748,12 @@ export interface StubRom {
 }
 
 /**
- * A fixed, hand-authored "ROM": `words[i]` (one bit array per word, LSB
- * first) is what reading address `i` returns. There is no storage here at
- * all — every bit is wired straight from a constant `makeSource`, and there
- * is no write port. This is deliberately a stub, not small real memory:
- * building even a writable few words from `buildRegister` would still not
- * be the representation real RAM needs at a realistic address-space scale
- * (see ARCHITECTURE.md's "Known simplifications") — that's a separate,
- * later problem. This slice's job is proving the *bus and control-FSM
- * handshake* actually works, with a memory-shaped thing to fetch from.
+ * Fixed hand-authored "ROM": `words[i]` (LSB-first bit array) is what reading
+ * address `i` returns. No storage — each bit is a constant Source through a
+ * TRI_BUF gated by (decoded word select) AND `oe`.
  *
- * `words.length` must be a power of two (`addr` is `log2(words.length)`
- * bits wide). Every word gets its own bank of `buildTriStateBuffer`
- * instances, one per data bit, each gated by (this word's decoded address
- * line) AND `oe`; every word's bank drives the same shared `data` bus. At
- * most one word is ever selected at a time — the decoder's whole job — so
- * the bus never sees the two-driver contention `buildTriStateBuffer`'s own
- * tests deliberately provoke.
+ * Layout uses net labels for decoder/OE/data fanout (no wire spaghetti).
+ * Stdcell chips (AND/NOT via placer) keep the parent readable when diving.
  */
 export function buildStubRom(parent: Circuit, library: ChipLibrary, words: (0 | 1)[][], pos: Point = { x: 0, y: 0 }): StubRom {
   const wordCount = words.length;
@@ -771,35 +762,60 @@ export function buildStubRom(parent: Circuit, library: ChipLibrary, words: (0 | 
   const dataBits = words[0]?.length ?? 0;
   if (!words.every((w) => w.length === dataBits)) throw new Error('buildStubRom: every word must be the same width');
 
-  makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 }); // rail driver
+  makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 });
   makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 80 });
-  const dec = buildDecoder(parent, addrBits, { x: pos.x, y: pos.y });
 
-  const bufDef = getTriBufChip(library);
-  const bufRowStep = chipInstanceHeight(bufDef.ports.length) + 10;
+  // Place AND/NOT as library chips so Stub ROM isn't a transistor carpet.
+  setCircuitGatePlacer(parent, makeZ80GatePlacer(library));
+  let oe: Pin | undefined;
   const data: Pin[] = [];
-  let oe: Pin | undefined; // the first AND gate's `.b` becomes the shared, externally-driven oe handle
+  try {
+    const dec = buildDecoder(parent, addrBits, { x: pos.x, y: pos.y });
 
-  for (let bit = 0; bit < dataBits; bit++) {
-    let bus: Pin | undefined;
+    // Name each decoder line once — every word's select AND ties to the same label.
     for (let w = 0; w < wordCount; w++) {
-      const row = w * dataBits + bit;
-      const gate = buildAnd(parent, { x: pos.x + 800, y: pos.y + row * 100 }); // selected & oe
-      wire(parent, gate.a, dec.lines[w]!);
-      if (!oe) oe = gate.b;
-      else wire(parent, oe, gate.b);
-      const bitValue = makeSource(parent, words[w]![bit]!, { x: pos.x + 1050, y: pos.y + row * 100 - 20 }).pins.out;
-      const buf = makeChipInstance(parent, bufDef, { x: pos.x + 1150, y: pos.y + row * bufRowStep });
-      wire(parent, buf.pins[bufDef.ports[0]!]!, bitValue); // a = this word's fixed bit
-      wire(parent, buf.pins[bufDef.ports[1]!]!, gate.out); // en = selected & oe
-      const bufOut = buf.pins[bufDef.ports[2]!]!;
-      if (!bus) bus = bufOut;
-      else wire(parent, bus, bufOut);
+      tiePinToNet(parent, `STUB_DEC${w}`, dec.lines[w]!);
     }
-    data.push(bus!);
-  }
 
-  return { addr: dec.addr, oe: oe!, data };
+    const bufDef = getTriBufChip(library);
+    const bufRowStep = chipInstanceHeight(bufDef.ports.length) + 10;
+
+    for (let bit = 0; bit < dataBits; bit++) {
+      let dataAnchor: Pin | undefined;
+      for (let w = 0; w < wordCount; w++) {
+        const row = w * dataBits + bit;
+        const gate = buildAnd(parent, { x: pos.x + 800, y: pos.y + row * 100 });
+        tiePinToNet(parent, `STUB_DEC${w}`, gate.a);
+        if (!oe) {
+          oe = gate.b;
+          tiePinToNet(parent, 'STUB_OE', oe);
+        } else {
+          tiePinToNet(parent, 'STUB_OE', gate.b);
+        }
+        const bitValue = makeSource(parent, words[w]![bit]!, {
+          x: pos.x + 1050,
+          y: pos.y + row * 100 - 20,
+        }).pins.out;
+        const buf = makeChipInstance(parent, bufDef, {
+          x: pos.x + 1150,
+          y: pos.y + row * bufRowStep,
+        });
+        wire(parent, buf.pins[bufDef.ports[0]!]!, bitValue);
+        wire(parent, buf.pins[bufDef.ports[1]!]!, gate.out);
+        const bufOut = buf.pins[bufDef.ports[2]!]!;
+        tiePinToNet(parent, `STUB_DATA${bit}`, bufOut);
+        if (!dataAnchor) dataAnchor = bufOut;
+      }
+      data.push(dataAnchor!);
+    }
+
+    // Catch any leftover long legs from the decoder tree.
+    tidyLibraryCircuit(parent);
+
+    return { addr: dec.addr, oe: oe!, data };
+  } finally {
+    setCircuitGatePlacer(parent, null);
+  }
 }
 
 export interface MinimalCpu {
@@ -2311,36 +2327,34 @@ function buildZ80CpuInner(
   const muxDef = getMux2Chip(library);
   const bufDef = getTriBufChip(library);
 
-  // This composite is dense enough (100+ internal wire() calls, several
+  // This composite is dense enough (100+ internal connections, several
   // signals fanned out across the whole coordinate space — CLK to 11
   // registers, the shared bus, both decoder outputs, both EXEC phase
   // bits, SP's own value) that drawing every one of them as a literal
   // point-to-point line makes the canvas unreadable, not just cluttered.
-  // `tieToLabel` ties a pin to a net *label* instead of a wire — same
-  // net (see Circuit.computeNets()'s "same-named label" tie, same
-  // mechanism the UI's own `label` tool already exposes), no line drawn.
-  // Used below only for signals with genuinely long-distance or
-  // multi-destination fanout; adjacent gates a few hundred units apart
-  // stay plain `wire()` calls — labeling *everything* would just trade
-  // one kind of clutter for another. Safe here specifically because
-  // `buildZ80Cpu` is called once per placement, not folded into a chip
-  // def instantiated multiple times — flatten() namespaces component
-  // *ids* per instance but not a label's own `name` string (see
-  // Circuit.ts), so reusing these names *inside* a multiply-instantiated
-  // chip def would wrongly tie separate instances' nets together. Two
-  // `buildZ80Cpu`s placed in the same project and using these same
-  // names would collide the same way — a real, documented limitation,
-  // not a hidden one.
-  // One Label per net name — computeNets already joins same-named labels;
-  // reusing the first pin avoids thousands of duplicate Label stubs.
-  const labelAnchors = new Map<string, Pin>();
-  const tieToLabel = (name: string, p: Pin, labelPos: Point): void => {
-    let anchor = labelAnchors.get(name);
-    if (!anchor) {
-      anchor = makeLabel(parent, name, labelPos).pins.net;
-      labelAnchors.set(name, anchor);
-    }
-    wire(parent, p, anchor);
+  // `tieToLabel` drops a *local* net label beside the pin — same net via
+  // Circuit.computeNets()'s "same-named label" tie (same mechanism the
+  // UI's own `label` tool already exposes), short stub only. A previous
+  // optimisation reused one Label pin as an anchor and wired every far
+  // fanout to it — that quietly recreated the long-wire spaghetti this
+  // helper exists to kill. Used below for signals with genuinely
+  // long-distance or multi-destination fanout; adjacent gates a few
+  // dozen units apart stay plain `wire()` calls. A final
+  // `replaceLongWiresWithLabels` pass after the whole CPU is built
+  // catches anything that slipped through. Safe here specifically
+  // because `buildZ80Cpu` is called once per placement, not folded into
+  // a chip def instantiated multiple times — flatten() namespaces
+  // component *ids* per instance but not a label's own `name` string
+  // (see Circuit.ts), so reusing these names *inside* a
+  // multiply-instantiated chip def would wrongly tie separate
+  // instances' nets together. Two `buildZ80Cpu`s placed in the same
+  // project and using these same names would collide the same way — a
+  // real, documented limitation, not a hidden one.
+  const tieToLabel = (name: string, p: Pin, _labelPos?: Point): void => {
+    // Always beside `p` — callers used to pass a shared cluster coordinate
+    // that left a long stub from a far pin to that one spot.
+    const lbl = makeLabel(parent, name, { x: p.pos.x + 8, y: p.pos.y });
+    wire(parent, p, lbl.pins.net);
   };
   tieToLabel('CPU_RESET', pc.reset, { x: pos.x - 50, y: pos.y - 80 }); // anchor — IFF/IM1 power-on clear (far)
 
@@ -10887,6 +10901,20 @@ function buildZ80CpuInner(
   const ioWriteFinal2 = buildOr(parent, { x: pos.x + 13550, y: pos.y - 2100 });
   wire(parent, ioWriteFinal.out, ioWriteFinal2.a);
   tieToLabel('OUTRC_NOW', ioWriteFinal2.b, { x: pos.x + 13450, y: pos.y - 2100 });
+
+  // Kill remaining long-distance point-to-point wires (gate→gate, leftover
+  // single-anchor label stubs, etc.). Stdcell ChipDefs (NOT/NAND/…) keep
+  // their own short transistor wires — this only touches the parent
+  // circuit where gates are already chip instances. Compact first so
+  // pin/label geometry is final, then convert anything still long (a
+  // pre-compact pass left a few dozen chip↔label stubs that only
+  // exceeded the threshold after other pins on tall chips settled).
+  compactCircuitLayout(parent, 0.55);
+  // Threshold 24: keep only pin→label stubs; convert the ~40–80 unit
+  // chip↔chip bundles (RAM_ADDR_BIT / RAM_OE_OR fans, AND chains) that
+  // still read as "noodles" when zoomed out.
+  replaceLongWiresWithLabels(parent, 24);
+  replaceLongWiresWithLabels(parent, 24);
 
   return {
     clk: pc.clk,

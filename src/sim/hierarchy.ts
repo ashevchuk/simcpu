@@ -1,7 +1,17 @@
 import type { ChipDef, ChipLibrary } from './ChipLibrary.js';
 import { bumpStructureVersion, Circuit, currentStructureVersion, GLOBAL_NET_NAMES, nextId } from './Circuit.js';
 import { makeChipInstance, makeInput, makePort, makeProbe, makeSource } from './library.js';
-import type { ChipInstanceComponent, Component, InputComponent, Pin, Point, SourceComponent } from './types.js';
+import { tidyLibraryCircuit } from './labelWires.js';
+import type {
+  ButtonComponent,
+  ChipInstanceComponent,
+  ClockComponent,
+  Component,
+  InputComponent,
+  Pin,
+  Point,
+  SourceComponent,
+} from './types.js';
 
 export interface FoldResult {
   def: ChipDef;
@@ -25,7 +35,8 @@ export function foldExposing(
   scratch: Circuit,
   name: string,
   library: ChipLibrary,
-  exposedPins: { pin: Pin; isOutput: boolean }[],
+  exposedPins: { pin: Pin; isOutput: boolean; portName?: string }[],
+  opts?: { labelize?: boolean },
 ): ChipDef {
   const stubIds = new Set<string>();
   for (const { pin, isOutput } of exposedPins) {
@@ -41,7 +52,112 @@ export function foldExposing(
   }
   const guts = new Set<string>();
   for (const id of scratch.components.keys()) if (!stubIds.has(id)) guts.add(id);
-  return fold(scratch, guts, name, library, { x: 0, y: 0 }).def;
+  const def = fold(scratch, guts, name, library, { x: 0, y: 0 }).def;
+
+  // Give ports readable names (in/out/a/b/…) instead of p0/p1 from fold().
+  const nets = def.circuit.computeNets();
+  let inIdx = 0;
+  let outIdx = 0;
+  const inputCount = exposedPins.filter((e) => !e.isOutput).length;
+  const outputCount = exposedPins.filter((e) => e.isOutput).length;
+  for (const exp of exposedPins) {
+    let want = exp.portName;
+    if (!want) {
+      if (exp.isOutput) {
+        want = outputCount <= 1 ? 'out' : `out${outIdx}`;
+        outIdx++;
+      } else {
+        want = inputCount <= 1 ? 'in' : (['a', 'b', 'c', 'd', 'e', 'f'][inIdx] ?? `in${inIdx}`);
+        inIdx++;
+      }
+    }
+    const net = nets.netOf.get(exp.pin.id);
+    if (!net) continue;
+    for (const c of def.circuit.components.values()) {
+      if (c.kind !== 'port') continue;
+      if (nets.netOf.get(c.pins.io.id) !== net) continue;
+      if (c.name === want) break;
+      const idx = def.ports.indexOf(c.name);
+      if (idx >= 0) def.ports[idx] = want;
+      c.name = want;
+      break;
+    }
+  }
+
+  // Mid/high library cells: replace interconnect spaghetti with net labels.
+  // CMOS primitives (NOT/NAND/NOR) pass labelize:false so G/D/S wires stay.
+  if (opts?.labelize !== false) {
+    tidyLibraryCircuit(def.circuit);
+  } else {
+    layoutCmosPrimitivePorts(def);
+  }
+  return def;
+}
+
+/**
+ * Park boundary ports around a CMOS transistor schematic like a real sheet:
+ * inputs on the left next to their gate nets, output on the right of the
+ * drain bus. Tuck folded-in rail Sources onto the VCC/GND lines so they
+ * don't sit at the origin.
+ */
+function layoutCmosPrimitivePorts(def: ChipDef): void {
+  const transistors = [...def.circuit.components.values()].filter((c) => c.kind === 'transistor');
+  if (transistors.length === 0) return;
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const t of transistors) {
+    minX = Math.min(minX, t.pos.x);
+    maxX = Math.max(maxX, t.pos.x);
+    minY = Math.min(minY, t.pos.y);
+    maxY = Math.max(maxY, t.pos.y);
+  }
+  const midX = (minX + maxX) / 2;
+
+  const nets = def.circuit.computeNets();
+  const inputPorts = def.ports.filter((n) => n !== 'out' && !n.startsWith('out'));
+  const outputPorts = def.ports.filter((n) => n === 'out' || n.startsWith('out'));
+
+  const pinOnNet = (netId: string | undefined): Point | undefined => {
+    if (!netId) return undefined;
+    for (const c of def.circuit.components.values()) {
+      if (c.kind === 'port' || c.kind === 'source' || c.kind === 'label') continue;
+      for (const p of Object.values(c.pins) as Pin[]) {
+        if (nets.netOf.get(p.id) === netId) return p.pos;
+      }
+    }
+    return undefined;
+  };
+
+  for (const c of def.circuit.components.values()) {
+    if (c.kind !== 'port') continue;
+    const netId = nets.netOf.get(c.pins.io.id);
+    const target = pinOnNet(netId);
+    const isOut = outputPorts.includes(c.name);
+    if (isOut) {
+      const y = target?.y ?? (minY + maxY) / 2;
+      c.pos = { x: maxX + 72, y };
+    } else {
+      const idx = inputPorts.indexOf(c.name);
+      const y =
+        target?.y ??
+        minY + ((idx >= 0 ? idx : 0) + 0.5) * ((maxY - minY) / Math.max(inputPorts.length, 1));
+      c.pos = { x: minX - 72, y };
+    }
+    c.pins.io.pos = { x: c.pos.x, y: c.pos.y };
+  }
+
+  for (const c of def.circuit.components.values()) {
+    if (c.kind !== 'source') continue;
+    if (c.value === 1) {
+      c.pos = { x: midX, y: minY - 56 };
+    } else {
+      c.pos = { x: midX, y: maxY + 56 };
+    }
+    c.pins.out.pos = { x: c.pos.x, y: c.pos.y + 15 };
+  }
 }
 
 /**
@@ -140,8 +256,8 @@ export function fold(
     // of a folded RAM chip would silently share that one array. Rather than
     // let that footgun through, RAM simply can't be folded — see
     // ARCHITECTURE.md's "Real RAM" for the reasoning.
-    if (parent.components.get(id)?.kind === 'ram') {
-      throw new Error('RAM cannot be folded into a chip — each instance would share the same memory. Wire it directly instead.');
+    if (parent.components.get(id)?.kind === 'ram' || parent.components.get(id)?.kind === 'rom') {
+      throw new Error('RAM/ROM cannot be folded into a chip — each instance would share the same memory. Wire it directly instead.');
     }
   }
 
@@ -245,8 +361,8 @@ interface FlatLevel {
  * rather than serving a stale toggle forever.
  */
 interface LiveValuePair {
-  original: SourceComponent | InputComponent;
-  clone: SourceComponent | InputComponent;
+  original: SourceComponent | InputComponent | ButtonComponent | ClockComponent;
+  clone: SourceComponent | InputComponent | ButtonComponent | ClockComponent;
 }
 
 /**
@@ -307,7 +423,21 @@ export function flatten(top: Circuit, library: ChipLibrary): Circuit {
     // LiveValuePair's own doc comment) — might have, since the caller's
     // very last tick. Cheap regardless: a handful of pairs, not a
     // clone of the whole hierarchy.
-    for (const { original, clone } of cached.liveValuePairs) clone.value = original.value;
+    for (const { original, clone } of cached.liveValuePairs) {
+      clone.value = original.value;
+      if (original.kind === 'clock' && clone.kind === 'clock') {
+        clone.running = original.running;
+        clone.phase = original.phase;
+        clone.holdFrames = original.holdFrames;
+        clone.mode = original.mode;
+        clone.periodFrames = original.periodFrames;
+        clone.dutyFrames = original.dutyFrames;
+      }
+      if (original.kind === 'button' && clone.kind === 'button') {
+        clone.holdFrames = original.holdFrames;
+        clone.mode = original.mode;
+      }
+    }
     return cached.result;
   }
 
@@ -360,6 +490,61 @@ function cloneComponent(c: Component): Component {
       return { id: c.id, kind: 'source', value: c.value, pos, pins: { out: clonePin(c.pins.out) } };
     case 'input':
       return { id: c.id, kind: 'input', value: c.value, pos, pins: { out: clonePin(c.pins.out) } };
+    case 'button':
+      return {
+        id: c.id,
+        kind: 'button',
+        mode: c.mode,
+        value: c.value,
+        holdFrames: c.holdFrames,
+        pulseFrames: c.pulseFrames,
+        pos,
+        pins: { out: clonePin(c.pins.out) },
+      };
+    case 'led':
+      return {
+        id: c.id,
+        kind: 'led',
+        ...(c.label !== undefined ? { label: c.label } : {}),
+        color: c.color,
+        pos,
+        pins: { in: clonePin(c.pins.in) },
+      };
+    case 'clock':
+      return {
+        id: c.id,
+        kind: 'clock',
+        mode: c.mode,
+        value: c.value,
+        running: c.running,
+        periodFrames: c.periodFrames,
+        dutyFrames: c.dutyFrames,
+        phase: c.phase,
+        holdFrames: c.holdFrames,
+        lastTrig: c.lastTrig,
+        pos,
+        pins: { out: clonePin(c.pins.out), trig: clonePin(c.pins.trig) },
+      };
+    case 'analyzer': {
+      const pins: Record<string, Pin> = {};
+      for (const [name, p] of Object.entries(c.pins)) pins[name] = clonePin(p);
+      return {
+        id: c.id,
+        kind: 'analyzer',
+        channelCount: c.channelCount,
+        armed: c.armed,
+        pos,
+        pins,
+      };
+    }
+    case 'tty':
+      return {
+        id: c.id,
+        kind: 'tty',
+        ramId: c.ramId,
+        pos,
+        pins: {},
+      };
     case 'probe':
       return {
         id: c.id,
@@ -377,6 +562,16 @@ function cloneComponent(c: Component): Component {
       return {
         id: c.id,
         kind: 'ram',
+        addrBits: c.addrBits,
+        dataBits: c.dataBits,
+        bytes: c.bytes,
+        pos,
+        pins: clonePinsRecord(c.pins),
+      };
+    case 'rom':
+      return {
+        id: c.id,
+        kind: 'rom',
         addrBits: c.addrBits,
         dataBits: c.dataBits,
         bytes: c.bytes,
@@ -425,7 +620,11 @@ function rebaseFlat(src: FlatLevel, prefix: string): FlatLevel {
     const { original, clone: templateClone } = src.liveValuePairs[i]!;
     liveValuePairs[i] = {
       original,
-      clone: templateToClone.get(templateClone) as SourceComponent | InputComponent,
+      clone: templateToClone.get(templateClone) as
+        | SourceComponent
+        | InputComponent
+        | ButtonComponent
+        | ClockComponent,
     };
   }
   return { components, wires, liveValuePairs };
@@ -444,7 +643,11 @@ function rebaseFlatCopy(src: FlatLevel): FlatLevel {
   const wires = src.wires.map((w) => ({ id: w.id, a: w.a, b: w.b }));
   const liveValuePairs: LiveValuePair[] = src.liveValuePairs.map(({ original, clone: tc }) => ({
     original,
-    clone: templateToClone.get(tc) as SourceComponent | InputComponent,
+    clone: templateToClone.get(tc) as
+      | SourceComponent
+      | InputComponent
+      | ButtonComponent
+      | ClockComponent,
   }));
   return { components, wires, liveValuePairs };
 }
@@ -498,8 +701,11 @@ function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string):
     // RAM `.bytes` is already aliased by cloneComponent. Writes during
     // step() must remain visible after the next flatten — see ARCHITECTURE.md
     // "Real RAM". StructuredClone used to copy the Uint8Array; we never do.
-    if (c.kind === 'source' || c.kind === 'input') {
-      outLiveValuePairs.push({ original: c, clone: clone as SourceComponent | InputComponent });
+    if (c.kind === 'source' || c.kind === 'input' || c.kind === 'button' || c.kind === 'clock') {
+      outLiveValuePairs.push({
+        original: c,
+        clone: clone as SourceComponent | InputComponent | ButtonComponent | ClockComponent,
+      });
     }
     clone.id = nsPrefix + c.id;
     // Named ties (CLK, BUS0, …) would otherwise short across chip instances

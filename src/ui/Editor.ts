@@ -1,26 +1,38 @@
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
-import { Circuit } from '../sim/Circuit.js';
+import { Circuit, nextId } from '../sim/Circuit.js';
 import {
+  makeAnalyzer,
+  makeButton,
   makeChipInstance,
+  makeClock,
   makeInput,
   makeLabel,
+  makeLed,
   makeProbe,
   makeSource,
   makeTransistor,
+  makeTty,
 } from '../sim/library.js';
-import type { Component, Point } from '../sim/types.js';
+import { firePulse } from '../sim/labTick.js';
+import { captureCircuit, type CircuitSnapshot } from '../sim/serialize.js';
+import type { Component, Pin, Point } from '../sim/types.js';
 import { showPrompt } from './Dialog.js';
-import { findComponentNear, findPinNear, findWaypointNear, findWireNear, snap } from './geometry.js';
+import { findComponentNear, findPinNear, findWaypointNear, findWireNear, GRID, snap } from './geometry.js';
 
 export type Tool =
   | { kind: 'select' }
-  | { kind: 'pan' } // dedicated hand tool; space+drag / middle-drag also pan regardless of tool, see main.ts
+  | { kind: 'pan' } // dedicated hand tool; space+drag / right-drag also pan regardless of tool, see main.ts
   | { kind: 'wire' }
   | { kind: 'nmos' }
   | { kind: 'pmos' }
   | { kind: 'vcc' }
   | { kind: 'gnd' }
   | { kind: 'input' }
+  | { kind: 'button' }
+  | { kind: 'led' }
+  | { kind: 'clock' }
+  | { kind: 'analyzer' }
+  | { kind: 'tty' }
   | { kind: 'probe' }
   | { kind: 'label' }
   | { kind: 'place-chip'; defId: string }; // place an instance of an existing ChipDef
@@ -63,6 +75,11 @@ export class Editor {
   hoveredComponentId: string | null = null;
   hoveredPinId: string | null = null;
   hoveredWireId: string | null = null;
+  /** Set by main.ts — push undo checkpoint before mutating edits. */
+  onBeforeEdit: (() => void) | null = null;
+  private clipboard: CircuitSnapshot | null = null;
+  /** True once per drag gesture after the first real move (undo checkpoint). */
+  private dragCheckpointTaken = false;
 
   /** An existing bend point currently being dragged. */
   private dragWaypoint: { wireId: string; index: number } | null = null;
@@ -82,6 +99,10 @@ export class Editor {
     this.circuit = circuit;
   }
 
+  private noteEdit(): void {
+    this.onBeforeEdit?.();
+  }
+
   handleMouseMove(p: Point): void {
     this.mouse = p;
     this.hoveredComponentId = findComponentNear(this.circuit, p)?.id ?? null;
@@ -91,6 +112,7 @@ export class Editor {
 
   handleMouseDown(p: Point): void {
     if (this.tool.kind !== 'select') return;
+    this.dragCheckpointTaken = false;
 
     const hit = findComponentNear(this.circuit, p);
     if (hit) {
@@ -128,6 +150,10 @@ export class Editor {
     if (this.pendingComponentDrag) {
       const { ids, downPoint } = this.pendingComponentDrag;
       if (Math.hypot(p.x - downPoint.x, p.y - downPoint.y) > DRAG_THRESHOLD) {
+        if (!this.dragCheckpointTaken) {
+          this.noteEdit();
+          this.dragCheckpointTaken = true;
+        }
         this.draggingComponents = { ids, lastPoint: downPoint };
         this.pendingComponentDrag = null;
         this.dragging = true;
@@ -147,10 +173,14 @@ export class Editor {
     if (this.pendingWireGrab) {
       const { wireId, insertIndex, downPoint } = this.pendingWireGrab;
       if (Math.hypot(p.x - downPoint.x, p.y - downPoint.y) > DRAG_THRESHOLD) {
+        if (!this.dragCheckpointTaken) {
+          this.noteEdit();
+          this.dragCheckpointTaken = true;
+        }
         const wire = this.circuit.wires.get(wireId);
         if (wire) {
           const waypoints = wire.waypoints ? [...wire.waypoints] : [];
-          waypoints.splice(insertIndex, 0, p);
+          waypoints.splice(insertIndex, 0, snap(p));
           wire.waypoints = waypoints;
         }
         this.dragWaypoint = { wireId, index: insertIndex };
@@ -160,8 +190,12 @@ export class Editor {
       return;
     }
     if (this.dragWaypoint) {
+      if (!this.dragCheckpointTaken) {
+        this.noteEdit();
+        this.dragCheckpointTaken = true;
+      }
       const wire = this.circuit.wires.get(this.dragWaypoint.wireId);
-      if (wire?.waypoints) wire.waypoints[this.dragWaypoint.index] = p;
+      if (wire?.waypoints) wire.waypoints[this.dragWaypoint.index] = snap(p);
       this.dragging = true;
       return;
     }
@@ -239,6 +273,7 @@ export class Editor {
     if (hit) return hit;
     const wp = findWaypointNear(this.circuit, p);
     if (wp) {
+      this.noteEdit();
       const wire = this.circuit.wires.get(wp.wireId);
       if (wire?.waypoints) {
         wire.waypoints.splice(wp.index, 1);
@@ -249,6 +284,8 @@ export class Editor {
   }
 
   handleDelete(): void {
+    if (!this.selectedWireId && this.selectedIds.size === 0) return;
+    this.noteEdit();
     if (this.selectedWireId) {
       this.circuit.removeWire(this.selectedWireId);
       this.selectedWireId = null;
@@ -256,6 +293,84 @@ export class Editor {
     }
     for (const id of this.selectedIds) this.circuit.removeComponent(id);
     this.selectedIds.clear();
+  }
+
+  /** Copy selected components + wires wholly inside the selection. */
+  copySelection(): boolean {
+    if (this.selectedIds.size === 0) return false;
+    const tmp = new Circuit();
+    for (const id of this.selectedIds) {
+      const c = this.circuit.components.get(id);
+      if (c) tmp.addRawComponent(structuredClone(c) as Component);
+    }
+    for (const w of this.circuit.wires.values()) {
+      const aComp = w.a.split(':')[0]!;
+      const bComp = w.b.split(':')[0]!;
+      if (this.selectedIds.has(aComp) && this.selectedIds.has(bComp)) {
+        tmp.addRawWire(
+          w.waypoints
+            ? { id: w.id, a: w.a, b: w.b, waypoints: w.waypoints.map((p) => ({ ...p })) }
+            : { id: w.id, a: w.a, b: w.b },
+        );
+      }
+    }
+    this.clipboard = captureCircuit(tmp);
+    return true;
+  }
+
+  /** Paste clipboard offset by one grid step; selects the new components. */
+  pasteClipboard(): boolean {
+    if (!this.clipboard || this.clipboard.components.length === 0) return false;
+    this.noteEdit();
+    const idMap = new Map<string, string>();
+    const pinMap = new Map<string, string>();
+    const newIds: string[] = [];
+    const dx = GRID * 2;
+    const dy = GRID * 2;
+
+    for (const sc of this.clipboard.components) {
+      const raw = structuredClone(sc) as Component;
+      const prefix =
+        raw.kind === 'transistor'
+          ? 't'
+          : raw.kind === 'source'
+            ? 'src'
+            : raw.kind === 'chip'
+              ? 'chip'
+              : raw.kind.slice(0, 3);
+      const newId = nextId(prefix);
+      idMap.set(raw.id, newId);
+      newIds.push(newId);
+      raw.id = newId;
+      raw.pos = { x: raw.pos.x + dx, y: raw.pos.y + dy };
+      for (const p of Object.values(raw.pins) as Pin[]) {
+        const oldPinId = p.id;
+        const pinName = oldPinId.includes(':') ? oldPinId.slice(oldPinId.indexOf(':') + 1) : p.name;
+        p.id = `${newId}:${pinName}`;
+        p.componentId = newId;
+        p.pos = { x: p.pos.x + dx, y: p.pos.y + dy };
+        pinMap.set(oldPinId, p.id);
+      }
+      if (raw.kind === 'ram' || raw.kind === 'rom') {
+        raw.bytes = Uint8Array.from(raw.bytes);
+      }
+      this.circuit.addComponent(raw);
+    }
+
+    for (const w of this.clipboard.wires) {
+      const a = pinMap.get(w.a);
+      const b = pinMap.get(w.b);
+      if (!a || !b) continue;
+      this.circuit.addWire(
+        a,
+        b,
+        w.waypoints?.map((p) => ({ x: p.x + dx, y: p.y + dy })),
+      );
+    }
+
+    this.selectedIds = new Set(newIds);
+    this.selectedWireId = null;
+    return true;
   }
 
   /** Clears every kind of selection at once (components and the selected wire) — e.g. after clearing the circuit or navigating levels. */
@@ -280,6 +395,17 @@ export class Editor {
       if (hit) {
         this.selectedWireId = null;
         if (hit.kind === 'input') hit.value = hit.value === 1 ? 0 : 1;
+        if (hit.kind === 'button') {
+          if (hit.mode === 'toggle') {
+            hit.value = hit.value === 1 ? 0 : 1;
+          } else {
+            hit.value = 1;
+            hit.holdFrames = Math.max(1, hit.pulseFrames);
+          }
+        }
+        if (hit.kind === 'clock') {
+          firePulse(hit);
+        }
         if (additive) {
           if (this.selectedIds.has(hit.id)) this.selectedIds.delete(hit.id);
           else this.selectedIds.add(hit.id);
@@ -318,6 +444,7 @@ export class Editor {
     }
     if (pin) {
       if (pin.id !== this.wireStartPinId) {
+        this.noteEdit();
         this.circuit.addWire(this.wireStartPinId, pin.id, this.wireWaypoints.length ? [...this.wireWaypoints] : undefined);
       }
       this.cancelWire();
@@ -327,38 +454,63 @@ export class Editor {
   }
 
   private placeAt(p: Point): void {
+    const place = (fn: () => void) => {
+      this.noteEdit();
+      fn();
+    };
     switch (this.tool.kind) {
       case 'nmos':
-        makeTransistor(this.circuit, 'N', p);
+        place(() => makeTransistor(this.circuit, 'N', p));
         break;
       case 'pmos':
-        makeTransistor(this.circuit, 'P', p);
+        place(() => makeTransistor(this.circuit, 'P', p));
         break;
       case 'vcc':
-        makeSource(this.circuit, 1, p);
+        place(() => makeSource(this.circuit, 1, p));
         break;
       case 'gnd':
-        makeSource(this.circuit, 0, p);
+        place(() => makeSource(this.circuit, 0, p));
         break;
       case 'input':
-        makeInput(this.circuit, 0, p);
+        place(() => makeInput(this.circuit, 0, p));
+        break;
+      case 'button':
+        place(() => makeButton(this.circuit, p));
+        break;
+      case 'led':
+        place(() => makeLed(this.circuit, p));
+        break;
+      case 'clock':
+        place(() => makeClock(this.circuit, p));
+        break;
+      case 'analyzer': {
+        void showPrompt('Analyzer channels (1–64):', '8').then((raw) => {
+          if (!raw) return;
+          const n = parseInt(raw, 10);
+          if (!Number.isFinite(n) || n < 1) return;
+          this.noteEdit();
+          makeAnalyzer(this.circuit, n, p);
+        });
+        break;
+      }
+      case 'tty':
+        place(() => makeTty(this.circuit, p));
         break;
       case 'probe':
-        makeProbe(this.circuit, p);
+        place(() => makeProbe(this.circuit, p));
         break;
       case 'label': {
-        // Fire-and-forget: showPrompt() is async (a real DOM dialog, not a
-        // blocking window.prompt()), but placeAt() itself stays synchronous
-        // — nothing here needs to wait for the answer, the label just shows
-        // up once the user answers.
         void showPrompt('Net name:', 'net').then((name) => {
-          if (name) makeLabel(this.circuit, name, p);
+          if (name) {
+            this.noteEdit();
+            makeLabel(this.circuit, name, p);
+          }
         });
         break;
       }
       case 'place-chip': {
         const def = this.library.get(this.tool.defId);
-        makeChipInstance(this.circuit, def, p);
+        place(() => makeChipInstance(this.circuit, def, p));
         break;
       }
     }

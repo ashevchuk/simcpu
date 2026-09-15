@@ -16,11 +16,17 @@ export type ComponentKind =
   | 'transistor'
   | 'source' // fixed driver: VCC (1) or GND (0)
   | 'input' // user-toggleable driver, e.g. a switch
+  | 'button' // lab pushbutton: momentary pulse or toggle
+  | 'led' // lab indicator — sink only, like probe with a glow
+  | 'clock' // configurable pulse generator (continuous or one-shot)
+  | 'analyzer' // multi-channel logic analyzer instrument (sense pins)
+  | 'tty' // machine TTY / soft console instrument (opens dialog)
   | 'probe' // read-only display of a net's value, no electrical effect
   | 'label' // named net tie point (same name => same net, see Circuit)
   | 'port' // a chip's internal boundary marker, see hierarchy.ts fold()
   | 'chip' // an instance of a reusable ChipDef, see ChipLibrary.ts
-  | 'ram'; // behavioral read/write memory — see solver.ts's "RAM" section
+  | 'ram' // behavioral read/write memory — see solver.ts's "RAM" section
+  | 'rom'; // behavioral read-only memory (OE-gated, no write port)
 
 export interface Point {
   x: number;
@@ -62,6 +68,72 @@ export interface InputComponent {
   value: 0 | 1;
   pos: Point;
   pins: { out: Pin };
+}
+
+/** Lab pushbutton. Momentary: click drives 1 for `pulseFrames` ticks then 0. Toggle: click flips `value`. */
+export interface ButtonComponent {
+  id: string;
+  kind: 'button';
+  mode: 'momentary' | 'toggle';
+  value: 0 | 1;
+  /** Remaining high frames while pulsing (momentary). */
+  holdFrames: number;
+  pulseFrames: number;
+  pos: Point;
+  pins: { out: Pin };
+}
+
+/** Lab LED — electrically a probe; drawn as a glowing indicator. */
+export interface LedComponent {
+  id: string;
+  kind: 'led';
+  label?: string;
+  color: string; // CSS color for the "on" glow
+  pos: Point;
+  pins: { in: Pin };
+}
+
+/** Configurable pulse generator — continuous square wave or one-shot pulse. */
+export interface ClockComponent {
+  id: string;
+  kind: 'clock';
+  /** continuous: free-run while `running`; oneshot: fire pulseWidth frames on click/TRIG↑. */
+  mode: 'continuous' | 'oneshot';
+  value: 0 | 1;
+  running: boolean;
+  /** Full period in animation frames (high+low). Min 2. Used in continuous mode. */
+  periodFrames: number;
+  /** Frames spent high (1 .. periodFrames-1 continuous; pulse width in oneshot). */
+  dutyFrames: number;
+  /** Phase counter 0 .. periodFrames-1 (continuous). */
+  phase: number;
+  /** Remaining high frames while emitting a one-shot pulse. */
+  holdFrames: number;
+  /** Last sampled TRIG level — rising-edge detect for oneshot / start. */
+  lastTrig: 0 | 1 | 'Z';
+  pos: Point;
+  pins: { out: Pin; trig: Pin };
+}
+
+/** Multi-channel logic analyzer — each `chN` pin is one sense channel. */
+export interface AnalyzerComponent {
+  id: string;
+  kind: 'analyzer';
+  channelCount: number;
+  armed: boolean;
+  pos: Point;
+  /** ch0 .. ch{channelCount-1} */
+  pins: Record<string, Pin>;
+}
+
+/** Machine TTY / console instrument — dblclick opens the floating console. */
+export interface TtyComponent {
+  id: string;
+  kind: 'tty';
+  /** Linked RAM id (machine map); null until bound. */
+  ramId: string | null;
+  pos: Point;
+  pins: Record<string, Pin>;
 }
 
 export interface ProbeComponent {
@@ -142,15 +214,39 @@ export interface RamComponent {
   pins: Record<string, Pin>;
 }
 
+/**
+ * Behavioral read-only memory — same OE-gated read as RAM, no WE/CLK.
+ * `bytes` is mutable from the MemoryEditor (load/fill) but never from the
+ * solver. Same flatten aliasing rule as RamComponent.
+ */
+export interface RomComponent {
+  id: string;
+  kind: 'rom';
+  addrBits: number;
+  dataBits: number;
+  bytes: Uint8Array;
+  pos: Point;
+  pins: Record<string, Pin>;
+}
+
+/** RAM or ROM — shared by MemoryEditor / pin helpers. */
+export type MemoryComponent = RamComponent | RomComponent;
+
 export type Component =
   | TransistorComponent
   | SourceComponent
   | InputComponent
+  | ButtonComponent
+  | LedComponent
+  | ClockComponent
+  | AnalyzerComponent
+  | TtyComponent
   | ProbeComponent
   | LabelComponent
   | PortComponent
   | ChipInstanceComponent
-  | RamComponent;
+  | RamComponent
+  | RomComponent;
 
 /**
  * A wire directly connects two pins. `waypoints` (if present) are purely

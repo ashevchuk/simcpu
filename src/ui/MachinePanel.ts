@@ -15,6 +15,7 @@ import { assemble, bytesToHexPrompt } from '../machine/assembler.js';
 import { compileBasic } from '../machine/basic.js';
 import { loadHexAt, parseHex, parseHexBlob, runSoftCommand } from '../machine/softConsole.js';
 import { injectKey } from '../machine/tty.js';
+import { FloatingWindow } from './FloatingWindow.js';
 
 const CELL_W = 10;
 const CELL_H = 16;
@@ -23,10 +24,11 @@ const BMP_SCALE = 2;
 const BMP_GAP = 6;
 
 /**
- * Side-panel text TTY + soft command/load console. Run/Pause/Step drive a
- * MachineRunner auto-clock. Not a transistor device.
+ * Floating TTY + soft command/load console. Run/Pause/Step drive a
+ * MachineRunner auto-clock. Opened by dblclick on a TTY component.
  */
 export class MachinePanel {
+  private readonly win: FloatingWindow;
   readonly root: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -49,14 +51,11 @@ export class MachinePanel {
   private readonly bmpTmp: HTMLCanvasElement = document.createElement('canvas');
   private bmpTmpCtx!: CanvasRenderingContext2D;
 
-  constructor(host: HTMLElement) {
-    this.root = host;
-    this.root.classList.add('machine-panel');
+  constructor() {
+    this.win = new FloatingWindow('TTY', 'machine-panel');
+    this.win.setTitle('TTY', '32×8 · 128×64 bmp · asm/basic');
+    this.root = this.win.body;
     this.root.innerHTML = `
-      <div class="machine-panel-header">
-        <span class="machine-panel-title">TTY</span>
-        <span class="machine-panel-meta">32×8 · 128×64 bmp · asm/basic</span>
-      </div>
       <div class="machine-panel-controls">
         <button type="button" data-act="run" title="Auto-clock">Run</button>
         <button type="button" data-act="pause" title="Pause auto-clock">Pause</button>
@@ -145,8 +144,6 @@ JR spin</textarea>
       const prev = this.runner?.speed;
       const v = this.speedSel.value as RunSpeed;
       this.runner?.setSpeed(v);
-      // Soft Run diverges from gate PC/regs — reboot when leaving soft so
-      // transistor mode starts from a known seed instead of a desynced state.
       if (prev === 'soft' && v !== 'soft' && this.runner?.softDesynced) {
         this.runner.reboot();
         this.log('reboot (resync after soft)');
@@ -163,7 +160,6 @@ JR spin</textarea>
     this.root.querySelector('[data-act="asm"]')!.addEventListener('click', () => this.doAssemble(false));
     this.root.querySelector('[data-act="asm-go"]')!.addEventListener('click', () => this.doAssemble(true));
     this.root.querySelector('[data-act="basic"]')!.addEventListener('click', () => this.doBasic());
-    this.setVisible(false);
   }
 
   private panelCssSize(): { cssW: number; cssH: number } {
@@ -291,7 +287,7 @@ JR spin</textarea>
     this.detachRamOnly();
     if (!requiresMachineMap(ram.addrBits)) {
       this.hint.textContent = `Need addrBits ≥ 12 (got ${ram.addrBits}).`;
-      this.setVisible(true);
+      this.win.setVisible(true);
       this.refreshControls();
       return;
     }
@@ -300,7 +296,7 @@ JR spin</textarea>
     this.canvas.addEventListener('keydown', this.keyHandler);
     this.hint.textContent =
       'Soft Run = fast TTY. Gates = real transistors (slow). Asm → Load @ (≥200h).';
-    this.setVisible(true);
+    this.win.setVisible(true);
     this.draw();
     this.refreshControls();
   }
@@ -316,7 +312,7 @@ JR spin</textarea>
   detach(): void {
     this.detachRamOnly();
     this.runner = null;
-    this.setVisible(false);
+    this.win.setVisible(false);
     this.refreshControls();
   }
 
@@ -325,7 +321,7 @@ JR spin</textarea>
   }
 
   setVisible(show: boolean): void {
-    this.root.hidden = !show;
+    this.win.setVisible(show);
   }
 
   refreshControls(): void {

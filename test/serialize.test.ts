@@ -32,7 +32,7 @@ function makeNandChip(library: ChipLibrary) {
     { pin: nand.a, isOutput: false },
     { pin: nand.b, isOutput: false },
     { pin: nand.out, isOutput: true },
-  ]);
+  ], { labelize: false });
 }
 
 function makeNotChip(library: ChipLibrary) {
@@ -43,7 +43,7 @@ function makeNotChip(library: ChipLibrary) {
   return foldExposing(scratch, 'NOT', library, [
     { pin: notGate.in, isOutput: false },
     { pin: notGate.out, isOutput: true },
-  ]);
+  ], { labelize: false });
 }
 
 describe('project serialize/deserialize round-trip', () => {

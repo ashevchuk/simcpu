@@ -27,16 +27,31 @@
       }
       body { display: flex; flex-direction: column; }
 
-      #toolbar, #breadcrumb, #chip-palette {
+      #chrome {
+        flex: 0 0 auto;
+        z-index: 20;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        position: relative;
+      }
+      #menubar, #toolstrip, #breadcrumb {
         display: flex;
-        gap: 6px;
+        gap: 2px;
         align-items: center;
-        padding: 7px 12px;
+        padding: 0 10px;
         background: var(--panel);
         border-bottom: 1px solid var(--border);
-        flex: 0 0 auto;
       }
-      #toolbar { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); z-index: 2; }
+      #menubar {
+        gap: 0;
+        padding: 0 6px;
+        min-height: 30px;
+        background: #12141a;
+      }
+      #toolstrip {
+        gap: 6px;
+        padding: 6px 10px;
+        background: var(--panel);
+      }
 
       button {
         background: var(--panel-2);
@@ -57,8 +72,122 @@
         font-weight: 600;
       }
 
-      #toolbar .group { display: flex; gap: 6px; }
-      #toolbar .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+      .menu {
+        position: relative;
+      }
+      .menu > .menu-trigger {
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        color: var(--text);
+        font: 12.5px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        padding: 6px 11px;
+        letter-spacing: 0.01em;
+      }
+      .menu > .menu-trigger:hover,
+      .menu.open > .menu-trigger {
+        background: #1e2330;
+        border: none;
+        color: var(--text);
+        transform: none;
+      }
+      .menu.open > .menu-trigger {
+        background: #252b3a;
+        color: var(--accent);
+      }
+      .menu > .menu-trigger.active {
+        color: var(--accent);
+      }
+      .menu-panel {
+        display: none;
+        position: absolute;
+        top: calc(100% - 1px);
+        left: 0;
+        min-width: 220px;
+        max-width: 320px;
+        max-height: min(70vh, 520px);
+        overflow: auto;
+        padding: 6px 0;
+        background: #171a22;
+        border: 1px solid #303646;
+        border-radius: 8px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.03);
+        z-index: 40;
+      }
+      .menu.open > .menu-panel { display: block; }
+      .menu-panel.align-right { left: auto; right: 0; }
+      .menu-section {
+        padding: 4px 12px 2px;
+        font: 10px/1.2 ui-monospace, monospace;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #6b7285;
+      }
+      .menu-item {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        column-gap: 10px;
+        width: 100%;
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        color: var(--text);
+        font: 12.5px/1.3 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        padding: 7px 12px 7px 14px;
+        text-align: left;
+        transform: none;
+      }
+      .menu-item:hover {
+        background: #252b3a;
+        border: none;
+        color: var(--text);
+        transform: none;
+      }
+      .menu-item.active {
+        background: rgba(245, 197, 24, 0.14);
+        color: var(--accent);
+        border: none;
+        font-weight: 600;
+      }
+      .menu-item .kbd {
+        margin-left: auto;
+        color: #6b7285;
+        font: 11px ui-monospace, monospace;
+      }
+      .menu-item.active .kbd { color: rgba(245, 197, 24, 0.65); }
+      .menu-item .item-desc {
+        flex: 1 1 100%;
+        display: block;
+        font-size: 11px;
+        color: var(--text-dim);
+        font-weight: 400;
+        margin-top: 2px;
+        line-height: 1.25;
+      }
+      .menu-item.active .item-desc { color: rgba(245, 197, 24, 0.7); }
+      .menu-sep {
+        height: 1px;
+        background: #2a3040;
+        margin: 6px 10px;
+      }
+      .menu-empty {
+        padding: 10px 14px;
+        color: var(--text-dim);
+        font: 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      }
+
+      #toolstrip .group { display: flex; gap: 4px; align-items: center; }
+      #toolstrip .sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+      #toolstrip .tool-label {
+        color: var(--text-dim);
+        font: 11px ui-monospace, monospace;
+        margin-right: 2px;
+      }
+      #active-place-hint .tool-label {
+        color: var(--accent);
+        font-weight: 600;
+      }
       #status {
         margin-left: auto;
         opacity: 0.7;
@@ -67,7 +196,11 @@
         white-space: nowrap;
       }
 
-      #breadcrumb { font: 12px ui-monospace, monospace; padding-block: 5px; }
+      #breadcrumb {
+        font: 12px ui-monospace, monospace;
+        padding-block: 5px;
+        background: var(--panel-2);
+      }
       #breadcrumb button {
         background: none; border: none; padding: 2px 4px;
         color: var(--text-dim);
@@ -76,9 +209,6 @@
       #breadcrumb button:last-child { color: var(--accent); cursor: default; }
       #breadcrumb button:last-child:hover { color: var(--accent); }
       #breadcrumb .crumb-sep { color: #454b5a; }
-
-      #chip-palette { font: 12px ui-monospace, monospace; flex-wrap: wrap; }
-      #chip-palette .hint { color: var(--text-dim); }
 
       #workspace {
         display: flex;
@@ -95,19 +225,33 @@
       }
       #stage > canvas { display: block; width: 100%; height: 100%; }
 
-      #machine-panel {
-        flex: 0 0 auto;
-        width: 400px;
-        max-width: 42vw;
+      /* Instruments use floating windows; legacy side-dock hosts removed. */
+      .la-note { color: var(--text-dim); font: 11px ui-monospace, monospace; margin-bottom: 6px; }
+      .lab-panel-status { color: var(--text-dim); font: 11px ui-monospace, monospace; }
+      .memory-editor-toolbar, .la-toolbar {
         display: flex;
-        flex-direction: column;
-        gap: 8px;
-        padding: 10px 12px;
-        background: var(--panel);
-        border-left: 1px solid var(--border);
-        overflow: auto;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
       }
-      #machine-panel[hidden] { display: none !important; }
+      .memory-editor-toolbar input, .memory-editor-grid {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 4px;
+        font: 12px ui-monospace, monospace;
+      }
+      .memory-editor-grid {
+        width: 100%;
+        min-height: 220px;
+        resize: vertical;
+        padding: 8px;
+        line-height: 1.35;
+      }
+      .la-channels { display: flex; flex-direction: column; gap: 2px; font: 11px ui-monospace, monospace; }
+      .la-channel-row { display: flex; justify-content: space-between; align-items: center; }
+      .la-channel-row button { background: transparent; border: none; color: var(--text-dim); cursor: pointer; }
+      .la-canvas { width: 100%; background: #0e1016; border: 1px solid var(--border); border-radius: 4px; }
       .machine-panel-header {
         display: flex;
         align-items: baseline;
@@ -263,55 +407,152 @@
     </style>
   </head>
   <body>
-    <div id="toolbar">
-      <div class="group">
-        <button data-tool="select" data-key="1" title="Select / move / toggle inputs (1)">select</button>
-        <button data-tool="pan" data-key="2" title="Pan — or hold Space / middle-drag (2)">pan</button>
-        <button data-tool="wire" data-key="3" title="Draw a wire between two pins (3)">wire</button>
+    <div id="chrome">
+      <div id="menubar">
+        <div class="menu" data-menu="file">
+          <button type="button" class="menu-trigger">File</button>
+          <div class="menu-panel">
+            <button type="button" class="menu-item" id="export-project" title="Download the whole project (this circuit + every chip def) as one JSON file">
+              Export project…
+            </button>
+            <button type="button" class="menu-item" id="import-project" title="Replace everything with a project JSON file">
+              Import project…
+            </button>
+            <div class="menu-sep"></div>
+            <button type="button" class="menu-item" id="export-chip" title="Select one chip instance, then download its definition (and every chip it depends on) as a JSON file">
+              Export chip…
+            </button>
+            <button type="button" class="menu-item" id="import-chip" title="Add a chip from a JSON file to this session's palette">
+              Import chip…
+            </button>
+            <div class="menu-sep"></div>
+            <button type="button" class="menu-item" id="clear">Clear circuit…</button>
+          </div>
+        </div>
+
+        <div class="menu" data-menu="place">
+          <button type="button" class="menu-trigger">Place</button>
+          <div class="menu-panel">
+            <div class="menu-section">Transistors</div>
+            <button type="button" class="menu-item" data-tool="nmos" data-key="4" title="Place an N-mos transistor (4)">
+              N-MOS<span class="kbd">4</span>
+            </button>
+            <button type="button" class="menu-item" data-tool="pmos" data-key="5" title="Place a P-mos transistor (5)">
+              P-MOS<span class="kbd">5</span>
+            </button>
+            <div class="menu-sep"></div>
+            <div class="menu-section">Power &amp; I/O</div>
+            <button type="button" class="menu-item" data-tool="vcc" data-key="6" title="Place a VCC source (6)">
+              VCC<span class="kbd">6</span>
+            </button>
+            <button type="button" class="menu-item" data-tool="gnd" data-key="7" title="Place a GND source (7)">
+              GND<span class="kbd">7</span>
+            </button>
+            <button type="button" class="menu-item" data-tool="input" data-key="8" title="Place a toggleable input (8)">
+              Input<span class="kbd">8</span>
+            </button>
+            <button type="button" class="menu-item" data-tool="button" data-key="b" title="Place a pushbutton — click to pulse (B)">
+              Button<span class="kbd">B</span>
+            </button>
+            <button type="button" class="menu-item" data-tool="led" data-key="e" title="Place an LED indicator (E)">
+              LED<span class="kbd">E</span>
+            </button>
+            <button type="button" class="menu-item" data-tool="clock" data-key="k" title="Place a pulse generator — OUT + TRIG (K)">
+              Pulse generator<span class="kbd">K</span>
+            </button>
+            <button type="button" class="menu-item" data-tool="analyzer" title="Place a multi-channel logic analyzer">
+              Logic analyzer…
+            </button>
+            <button type="button" class="menu-item" data-tool="tty" title="Place a TTY / machine console instrument">
+              TTY console
+            </button>
+            <div class="menu-sep"></div>
+            <div class="menu-section">Annotation</div>
+            <button type="button" class="menu-item" data-tool="probe" data-key="9" title="Place a probe (9)">
+              Probe<span class="kbd">9</span>
+            </button>
+            <button type="button" class="menu-item" data-tool="label" data-key="l" title="Place a net label (L)">
+              Net label<span class="kbd">L</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="menu" data-menu="insert">
+          <button type="button" class="menu-trigger">Insert</button>
+          <div class="menu-panel">
+            <div class="menu-section">Building blocks</div>
+            <button type="button" class="menu-item" id="add-register" title="Insert an N-bit register (asks for width)">
+              Register…<span class="item-desc">N-bit latched register</span>
+            </button>
+            <button type="button" class="menu-item" id="add-alu" title="Insert an N-bit ripple-carry ALU (asks for width)">
+              ALU…<span class="item-desc">Ripple-carry arithmetic unit</span>
+            </button>
+            <button type="button" class="menu-item" id="add-pc" title="Insert an N-bit program counter — increments on CLK, loads D when LOAD=1, RESET=1 forces 0 (overrides LOAD) (asks for width)">
+              Program counter…<span class="item-desc">Inc / load / reset</span>
+            </button>
+            <button type="button" class="menu-item" id="add-ir" title="Insert an 8-bit instruction register — latches D on a WE&CLK edge, holds otherwise (fixed width: a Z80 opcode byte)">
+              Instruction register<span class="item-desc">8-bit opcode latch</span>
+            </button>
+            <button type="button" class="menu-item" id="add-fsm" title="Insert an N-phase one-hot control-FSM sequencer — rotates on CLK, loads a seed pattern when LOAD=1 (asks for phase count)">
+              Control FSM…<span class="item-desc">One-hot phase sequencer</span>
+            </button>
+            <div class="menu-sep"></div>
+            <div class="menu-section">Memory</div>
+            <button type="button" class="menu-item" id="add-rom" title="Insert behavioral ROM — OE-gated read from bytes[addr], editable in Memory panel (asks for address bits, optional hex)">
+              ROM…<span class="item-desc">Editable byte array</span>
+            </button>
+            <button type="button" class="menu-item" id="add-stub-rom" title="Insert a fixed-content transistor stub ROM (decoder + tri-state) — no storage (asks for hex bytes)">
+              Stub ROM…<span class="item-desc">Gate-level fixed content</span>
+            </button>
+            <button type="button" class="menu-item" id="add-ram" title="Insert real read/write memory — reads bytes[addr] while OE=1, writes on WE&CLK (asks for address bits)">
+              RAM…<span class="item-desc">Read / write memory</span>
+            </button>
+            <div class="menu-sep"></div>
+            <div class="menu-section">Processors</div>
+            <button type="button" class="menu-item" id="add-cpu" title="Insert a complete tiny CPU — PC+RAM+IR+ACC+ALU sequenced by a FETCH/INCREMENT/DECODE_EXECUTE FSM, running a 2-instruction LDI/ADI program (asks for RAM address bits, then program bytes)">
+              Tiny CPU…<span class="item-desc">Teaching CPU (LDI / ADI)</span>
+            </button>
+            <button type="button" class="menu-item" id="add-z80cpu" title="Insert a Z80-opcode CPU (asks for RAM address bits, then program bytes)">
+              Z80 CPU…<span class="item-desc">Real Z80 opcode subset</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="menu" data-menu="library">
+          <button type="button" class="menu-trigger" id="library-menu-trigger">Library</button>
+          <div class="menu-panel" id="chip-palette">
+            <div class="menu-section">Folded chips</div>
+            <div id="chip-palette-list"><div class="menu-empty">No chips yet — fold a selection (Ctrl+G)</div></div>
+          </div>
+        </div>
+
+        <div class="menu" data-menu="edit">
+          <button type="button" class="menu-trigger">Edit</button>
+          <div class="menu-panel">
+            <button type="button" class="menu-item" id="fold" title="Fold selection into a reusable chip (Ctrl+G)">
+              Fold selection…<span class="kbd">⌃G</span>
+            </button>
+          </div>
+        </div>
       </div>
-      <span class="sep"></span>
-      <div class="group">
-        <button data-tool="nmos" data-key="4" title="Place an N-mos transistor (4)">N-mos</button>
-        <button data-tool="pmos" data-key="5" title="Place a P-mos transistor (5)">P-mos</button>
+
+      <div id="toolstrip">
+        <span class="tool-label">Tools</span>
+        <div class="group">
+          <button data-tool="select" data-key="1" title="Select / move / toggle inputs (1)">select</button>
+          <button data-tool="pan" data-key="2" title="Pan — or hold Space / right-drag (2)">pan</button>
+          <button data-tool="wire" data-key="3" title="Draw a wire between two pins (3)">wire</button>
+        </div>
+        <span class="sep"></span>
+        <div class="group" id="active-place-hint" hidden>
+          <span class="tool-label" id="active-tool-name"></span>
+        </div>
+        <div id="status"></div>
       </div>
-      <span class="sep"></span>
-      <div class="group">
-        <button data-tool="vcc" data-key="6" title="Place a VCC source (6)">VCC</button>
-        <button data-tool="gnd" data-key="7" title="Place a GND source (7)">GND</button>
-        <button data-tool="input" data-key="8" title="Place a toggleable input (8)">input</button>
-        <button data-tool="probe" data-key="9" title="Place a probe (9)">probe</button>
-        <button data-tool="label" data-key="l" title="Place a net label (L)">label</button>
-      </div>
-      <span class="sep"></span>
-      <button id="fold" title="Fold selection into a reusable chip (Ctrl+G)">fold ⌃G</button>
-      <button id="clear">clear</button>
-      <span class="sep"></span>
-      <div class="group">
-        <button id="add-register" title="Insert an N-bit register (asks for width)">+ REG</button>
-        <button id="add-alu" title="Insert an N-bit ripple-carry ALU (asks for width)">+ ALU</button>
-        <button id="add-pc" title="Insert an N-bit program counter — increments on CLK, loads D when LOAD=1, RESET=1 forces 0 (overrides LOAD) (asks for width)">+ PC</button>
-        <button id="add-ir" title="Insert an 8-bit instruction register — latches D on a WE&CLK edge, holds otherwise (fixed width: a Z80 opcode byte)">+ IR</button>
-        <button id="add-fsm" title="Insert an N-phase one-hot control-FSM sequencer — rotates on CLK, loads a seed pattern when LOAD=1 (asks for phase count)">+ FSM</button>
-        <button id="add-rom" title="Insert a fixed-content memory stub, addressed and read through real tri-state bus drivers — no storage, no write port (asks for hex bytes)">+ ROM</button>
-        <button id="add-ram" title="Insert real read/write memory — reads bytes[addr] while OE=1, writes the data bus into bytes[addr] on a WE&CLK rising edge (asks for address bits)">+ RAM</button>
-        <button id="add-cpu" title="Insert a complete tiny CPU — PC+RAM+IR+ACC+ALU sequenced by a FETCH/INCREMENT/DECODE_EXECUTE FSM, running a 2-instruction LDI/ADI program (asks for RAM address bits, then program bytes)">+ CPU</button>
-        <button id="add-z80cpu" title="Insert a CPU decoding and executing REAL Z80 opcodes — x=10 (ADD/ADC/SUB/SBC/AND/XOR/OR/CP A,r — P/V is signed overflow for the first five, parity for the last three; INC r/DEC r always overflow, no parity variant), x=11's ALU op A,n (same eight ops against an immediate byte), x=01 (LD r,r'), x=11's PUSH/POP/RET/RST n/JP nn/CALL nn/JP cc,nn/CALL cc,nn/RET cc/EXX/JP (HL)/LD SP,HL/EX DE,HL/EX (SP),HL/IN A,(n)/OUT (n),A (every non-prefix x=11 opcode real Z80 defines that isn't DI/EI — permanently inert, no interrupt line exists to gate), x=00's NOP/EX AF,AF'/INC/DEC rr (BC/DE/HL/SP), INC/DEC r, LD r,n, LD dd,nn (B/C/D/E/H/L/A, not (HL), for the 8-bit ones; BC/DE/HL/SP for the 16-bit one), ADD HL,rr (BC/DE/HL/SP into HL, carry flag only), JR e/DJNZ e/JR cc,e (JR cc,e tests NZ/Z/NC/C only — real Z80's own limit for this opcode), indirect loads through (BC)/(DE)/(nn) — LD (BC),A/LD A,(BC)/LD (DE),A/LD A,(DE) (single-byte) and LD (nn),HL/LD HL,(nn)/LD (nn),A/LD A,(nn) (3-byte, through a freshly-read absolute address), INC (HL)/DEC (HL)/LD (HL),n (the y=6 slot every other x=00 register group leaves inert, a real RAM read-modify-write through a dedicated holding register), and RLCA/RRCA/RLA/RRA/CPL/SCF/CCF/DAA (single-byte accumulator/flag ops, z=7 — DAA corrects A back into valid packed BCD after an 8-bit add or subtract, reading the real H/C/N flags this simulator now models for the x=10/x=11 ALU group and INC r/DEC r; the other six still leave H and the two undocumented flag bits stale, same as always). JP cc,nn, CALL cc,nn, and RET cc all test NZ/Z/NC/C/PO/PE/P/M off the identical one-hot tree — JP cc,nn either jumps or falls through, CALL cc,nn either pushes-and-calls or falls through, RET cc either pops-and-jumps or falls through, with no extra FSM phases needed on top of JP nn's/CALL nn's/RET's own. The JR family needs real PC-relative arithmetic instead — a signed 8-bit displacement added to PC (needs addrBits >= 8 for correct sign-extension), not a fixed target written into it; DJNZ additionally decrements B and jumps only while it's still nonzero. CALL nn, a taken CALL cc,nn, and a taken RET cc all share the same single stack byte — pushed by the first two, popped by the last (and by plain RET). EX (SP),HL swaps HL with that same top-of-stack pair, a real read-modify-write, not just a register swap. IN A,(n)/OUT (n),A move a byte through this simulator's own invented I/O port — ioPortAddr/ioPortDataOut/ioPortDataIn/ioRead/ioWrite, wired to nothing else on this canvas by default. ED-prefixed LDI/LDD/LDIR/LDDR (0xED 0xA0/0xA8/0xB0/0xB8), CPI/CPD/CPIR/CPDR (0xED 0xA1/0xA9/0xB1/0xB9), INI/IND/INIR/INDR (0xED 0xA2/0xAA/0xB2/0xBA), OUTI/OUTD/OTIR/OTDR (0xED 0xA3/0xAB/0xB3/0xBB), and NEG (0xED 0x44) are this project's first five real CB/ED/DD/FD-table instructions, the first four closing out ED's own block-instruction half (z=0 through z=3) entirely: LDI/LDD/LDIR/LDDR move (DE)&lt;-(HL), then HL/DE both ++ for LDI/LDIR or -- for LDD/LDDR, BC--, N/H reset, P/V&lt;-(BC-1 != 0), S/Z/C untouched; CPI/CPD/CPIR/CPDR compare A-(HL) for flags only (A itself untouched), HL++ for CPI/CPIR or -- for CPD/CPDR, BC--, N set, H a real half-borrow, P/V&lt;-(BC-1 != 0), S/Z off the comparison, C untouched — a genuinely separate, dedicated subtractor, not routed through the x=10 ALU group; INI/IND/INIR/INDR move (HL)&lt;-IN(C) — a byte read from this simulator's own invented I/O port, addressed by C rather than an immediate byte — then HL++ for INI/INIR or -- for IND/INDR, B-- alone (never the BC pair), N&lt;-the transferred byte's own bit 7, Z&lt;-(B==0), the only two flag bits real Z80 documents for this family; OUTI/OUTD/OTIR/OTDR are the exact mirror image, OUT(C)&lt;-(HL) instead, the identical B--/N/Z machinery genuinely shared (decrementing B is the same operation regardless of direction). LDIR/LDDR repeat by landing PC back on their own opcode for as long as BC stays nonzero; CPIR/CPDR repeat the same way but also stop the moment a match is found; INIR/INDR and OTIR/OTDR repeat the same way watching B alone, the simplest of the three conditions and genuinely shared between the two families — no real micro-cycle involved in any of them. NEG is this project's first non-block ED-table opcode: A&lt;-0-A, real two's-complement negation through its own dedicated adder (never routed through the x=10 ALU group, whose own A input can't be forced to a constant 0), every flag bit real and fresh — S/Z off the result, H a real half-borrow, P/V set only when A was 0x80 (the one byte whose negation overflows), N always 1, C set whenever A was nonzero. ADC HL,rr/SBC HL,rr (0xED 0x4A/0x5A/0x6A/0x7A and 0x42/0x52/0x62/0x72) reuse ADD HL,rr's own shared 16-bit adder, widened for a real carry-in and operand invert (the identical x=10 ADC/SBC recipe, just 16 bits wide) — every flag bit real here too, unlike ADD HL,rr's own C-only treatment: S/Z off the 16-bit result, H at the 16-bit nibble boundary, P/V the classic overflow formula at the sign bit, N picks ADC/SBC, C borrow-inverted for SBC, X/Y mirroring the high byte's own bits 3/5. The other three prefix bytes and the rest of ED's own table (RRD/RLD, RETN/RETI, IM, and friends) execute nothing yet, these six instructions close out the block-instruction half of ED's table, add its first two non-block ones, and prove the prefix mechanism itself works end to end for a single-shot instruction, three differently-gated repeats, and two real decode collisions outside the block-instruction shape. The FSM has 8 phases, not 4 — its seed pattern (fsmD) is 8 bits wide, e.g. [1,0,0,0,0,0,0,0]. B/C/D/E/H/L/SP, the shadow register set (A'/F'/B'/C'/D'/E'/H'/L'), CLK, PHASE_CLK, RESET, A_RESET and the FSM seed all need wiring by hand afterwards, same as every other bare-pin composite (asks for RAM address bits, then program bytes)">+ Z80CPU</button>
-      </div>
-      <span class="sep"></span>
-      <div class="group">
-        <button id="export-project" title="Download the whole project (this circuit + every chip def) as one JSON file">export project</button>
-        <button id="import-project" title="Replace everything with a project JSON file">import project</button>
-      </div>
-      <div class="group">
-        <button id="export-chip" title="Select one chip instance, then download its definition (and every chip it depends on) as a JSON file">export chip</button>
-        <button id="import-chip" title="Add a chip from a JSON file to this session's palette">import chip</button>
-      </div>
-      <div id="status"></div>
     </div>
     <input type="file" id="import-project-file" accept="application/json" hidden />
     <input type="file" id="import-chip-file" accept="application/json" hidden />
     <div id="breadcrumb"></div>
-    <div id="chip-palette"><span class="hint">chips:</span></div>
     <div id="workspace">
       <div id="stage">
         <canvas id="canvas"></canvas>
@@ -322,9 +563,8 @@
           <button id="zoom-100" title="Reset to 100%">1:1</button>
           <button id="zoom-fit" title="Fit everything in view">fit</button>
         </div>
-        <div id="hint">1-9/L for tools · drag to move · arrows to nudge · scroll to zoom · space/middle-drag to pan · dblclick a chip to dive in</div>
+        <div id="hint">Place · Insert · dblclick instruments · ⌃Z/Y undo · ⌃C/V copy</div>
       </div>
-      <aside id="machine-panel" hidden></aside>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

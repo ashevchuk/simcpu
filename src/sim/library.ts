@@ -7,17 +7,23 @@
 import type { ChipDef } from './ChipLibrary.js';
 import { Circuit, nextId } from './Circuit.js';
 import type {
+  AnalyzerComponent,
+  ButtonComponent,
   ChipInstanceComponent,
+  ClockComponent,
   InputComponent,
   LabelComponent,
+  LedComponent,
   Pin,
   Point,
   PortComponent,
   ProbeComponent,
   RamComponent,
+  RomComponent,
   SourceComponent,
   TransistorComponent,
   TransistorType,
+  TtyComponent,
 } from './types.js';
 
 function pin(componentId: string, name: string, pos: Point, dx: number, dy: number): Pin {
@@ -70,14 +76,36 @@ function getCircuitRailPin(circuit: Circuit, rail: 'VCC' | 'GND', at: Point): Pi
 
 // Fixed pin offsets from a component's center, shared by the factories below
 // and by the UI (rendering + pin hit-testing use the exact same geometry).
-// v1 has no drag-to-move: a component's pins are fixed at creation time.
+// MOSFET pin placement is CMOS-schematic oriented: N has drain on top /
+// source on bottom; P has source on top / drain on bottom so a stacked
+// inverter's shared drain node lands on one point.
 export const LAYOUT = {
-  transistor: { gate: [-20, 0], drain: [0, -20], source: [0, 20] },
+  /** @deprecated Prefer transistorPins() — kept for call sites that only need gate-left. */
+  transistor: { gate: [-28, 0], drain: [0, -28], source: [0, 28] },
   source: { out: [0, 15] },
   input: { out: [15, 0] },
+  button: { out: [16, 0] },
+  led: { in: [-14, 0] },
+  clock: { out: [18, 0], trig: [-18, 0] },
   probe: { in: [-15, 0] },
   label: { net: [0, 0] },
 } as const;
+
+/** Vertical pitch between stacked CMOS complementary pair centers (drains coincide). */
+export const CMOS_STACK_PITCH = 64;
+/** Horizontal pitch between parallel CMOS columns (NAND/NOR). */
+export const CMOS_COL_PITCH = 80;
+
+export function transistorPinOffsets(type: TransistorType): {
+  gate: [number, number];
+  drain: [number, number];
+  source: [number, number];
+} {
+  if (type === 'P') {
+    return { gate: [-28, 0], source: [0, -28], drain: [0, 28] };
+  }
+  return { gate: [-28, 0], drain: [0, -28], source: [0, 28] };
+}
 
 export function makeTransistor(
   circuit: Circuit,
@@ -87,7 +115,7 @@ export function makeTransistor(
   const id = nextId('t');
   const x = pos.x;
   const y = pos.y;
-  // Inline fixed LAYOUT.transistor offsets — hot path for every gate builder.
+  const off = transistorPinOffsets(type);
   const c: TransistorComponent = {
     id,
     kind: 'transistor',
@@ -95,9 +123,9 @@ export function makeTransistor(
     pos,
     rotation: 0,
     pins: {
-      gate: { id: id + ':gate', componentId: id, name: 'gate', pos: { x: x - 20, y } },
-      drain: { id: id + ':drain', componentId: id, name: 'drain', pos: { x, y: y - 20 } },
-      source: { id: id + ':source', componentId: id, name: 'source', pos: { x, y: y + 20 } },
+      gate: { id: id + ':gate', componentId: id, name: 'gate', pos: { x: x + off.gate[0], y: y + off.gate[1] } },
+      drain: { id: id + ':drain', componentId: id, name: 'drain', pos: { x: x + off.drain[0], y: y + off.drain[1] } },
+      source: { id: id + ':source', componentId: id, name: 'source', pos: { x: x + off.source[0], y: y + off.source[1] } },
     },
   };
   circuit.addComponent(c);
@@ -133,6 +161,123 @@ export function makeInput(
     value,
     pos,
     pins: { out: pin(id, 'out', pos, ...LAYOUT.input.out) },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function makeButton(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  mode: 'momentary' | 'toggle' = 'momentary',
+): ButtonComponent {
+  const id = nextId('btn');
+  const c: ButtonComponent = {
+    id,
+    kind: 'button',
+    mode,
+    value: 0,
+    holdFrames: 0,
+    pulseFrames: 8,
+    pos,
+    pins: { out: pin(id, 'out', pos, ...LAYOUT.button.out) },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function makeLed(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  label?: string,
+  color = '#ff4d4d',
+): LedComponent {
+  const id = nextId('led');
+  const c: LedComponent = {
+    id,
+    kind: 'led',
+    ...(label !== undefined ? { label } : {}),
+    color,
+    pos,
+    pins: { in: pin(id, 'in', pos, ...LAYOUT.led.in) },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function makeClock(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  periodFrames = 30,
+  mode: ClockComponent['mode'] = 'continuous',
+): ClockComponent {
+  const id = nextId('clk');
+  const period = Math.max(2, periodFrames | 0);
+  const duty = Math.max(1, Math.floor(period / 2));
+  const c: ClockComponent = {
+    id,
+    kind: 'clock',
+    mode,
+    value: 0,
+    running: false,
+    periodFrames: period,
+    dutyFrames: duty,
+    phase: 0,
+    holdFrames: 0,
+    lastTrig: 0,
+    pos,
+    pins: {
+      out: pin(id, 'out', pos, ...LAYOUT.clock.out),
+      trig: pin(id, 'trig', pos, ...LAYOUT.clock.trig),
+    },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+/** Multi-channel analyzer — `channelCount` sense inputs ch0..chN-1 stacked on the left. */
+export function makeAnalyzer(
+  circuit: Circuit,
+  channelCount = 4,
+  pos: Point = { x: 0, y: 0 },
+): AnalyzerComponent {
+  const n = Math.max(1, Math.min(64, channelCount | 0));
+  const id = nextId('la');
+  const pins: Record<string, Pin> = {};
+  const mid = (n - 1) / 2;
+  for (let i = 0; i < n; i++) {
+    const name = `ch${i}`;
+    pins[name] = pin(id, name, pos, -28, (i - mid) * 16);
+  }
+  const c: AnalyzerComponent = {
+    id,
+    kind: 'analyzer',
+    channelCount: n,
+    armed: false,
+    pos,
+    pins,
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function analyzerPortCount(c: AnalyzerComponent): number {
+  return c.channelCount;
+}
+
+/** TTY / machine console instrument (no electrical pins). */
+export function makeTty(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  ramId: string | null = null,
+): TtyComponent {
+  const id = nextId('tty');
+  const c: TtyComponent = {
+    id,
+    kind: 'tty',
+    ramId,
+    pos,
+    pins: {},
   };
   circuit.addComponent(c);
   return c;
@@ -183,8 +328,8 @@ export function makeProbe(circuit: Circuit, pos: Point = { x: 0, y: 0 }, label?:
   return c;
 }
 
-export function wire(circuit: Circuit, a: Pin, b: Pin): void {
-  circuit.addWire(a.id, b.id);
+export function wire(circuit: Circuit, a: Pin, b: Pin, waypoints?: Point[]): void {
+  circuit.addWire(a.id, b.id, waypoints);
 }
 
 /** Boundary marker inside a ChipDef's internal circuit — see fold() in hierarchy.ts. */
@@ -195,8 +340,8 @@ export function makePort(circuit: Circuit, name: string, pos: Point = { x: 0, y:
   return c;
 }
 
-/** Fixed visual width of every chip instance box. Height depends on port count — see chipInstanceHeight(). */
-export const CHIP_INSTANCE_WIDTH = 60;
+/** Fixed visual width of every chip / RAM / ROM instance box. Tall enough for pin labels inside. */
+export const CHIP_INSTANCE_WIDTH = 96;
 
 /**
  * Visual height of a chip instance box with `portCount` pins, stacked at
@@ -283,19 +428,55 @@ export function makeRam(
   return c;
 }
 
+/**
+ * Behavioral ROM — OE-gated read, no write port. Same visual pin stack as
+ * RAM minus we/clk. Cannot be folded (shared bytes by reference).
+ */
+export function makeRom(
+  circuit: Circuit,
+  addrBits: number,
+  dataBits = 8,
+  initial?: Uint8Array,
+  pos: Point = { x: 0, y: 0 },
+): RomComponent {
+  if (addrBits < 1) throw new Error('makeRom needs at least one address bit');
+  const id = nextId('rom');
+  const size = 1 << addrBits;
+  const bytes = new Uint8Array(size);
+  if (initial) bytes.set(initial.subarray(0, Math.min(initial.length, size)));
+
+  const portCount = addrBits + dataBits + 1; // + oe
+  const n = portCount;
+  let i = 0;
+  const nextDy = () => (i++ - (n - 1) / 2) * 20;
+
+  const pins: Record<string, Pin> = {};
+  for (let k = 0; k < addrBits; k++) pins[`addr${k}`] = pin(id, `addr${k}`, pos, -40, nextDy());
+  for (let k = 0; k < dataBits; k++) pins[`data${k}`] = pin(id, `data${k}`, pos, -40, nextDy());
+  pins.oe = pin(id, 'oe', pos, -40, nextDy());
+
+  const c: RomComponent = { id, kind: 'rom', addrBits, dataBits, bytes, pos, pins };
+  circuit.addComponent(c);
+  return c;
+}
+
 /** `addr0..addr{N-1}` as an ordered array, LSB first — see RamComponent's doc comment for why `pins` itself stays a flat, unordered Record. */
-export function ramAddrPins(c: RamComponent): Pin[] {
+export function ramAddrPins(c: RamComponent | RomComponent): Pin[] {
   return Array.from({ length: c.addrBits }, (_, i) => c.pins[`addr${i}`]!);
 }
 
 /** `data0..data{M-1}` as an ordered array, LSB first. */
-export function ramDataPins(c: RamComponent): Pin[] {
+export function ramDataPins(c: RamComponent | RomComponent): Pin[] {
   return Array.from({ length: c.dataBits }, (_, i) => c.pins[`data${i}`]!);
 }
 
 /** Total pin count of a RamComponent, for sizing its box the same way chipInstanceHeight() sizes a chip instance's. */
 export function ramPortCount(c: RamComponent): number {
   return c.addrBits + c.dataBits + 3; // + we, oe, clk
+}
+
+export function romPortCount(c: RomComponent): number {
+  return c.addrBits + c.dataBits + 1; // + oe
 }
 
 /** A single input pin exposed as the gate of a CMOS inverter. */
@@ -334,6 +515,12 @@ export function setCircuitGatePlacer(circuit: Circuit, placer: CircuitGatePlacer
   else circuitGatePlacers.delete(circuit);
 }
 
+/** Short local VCC/GND stub via a rail label (joins Source drivers by name). */
+function stubLocalRail(circuit: Circuit, rail: 'VCC' | 'GND', pin: Pin, dy: number): void {
+  const lbl = makeLabel(circuit, rail, { x: pin.pos.x, y: pin.pos.y + dy });
+  wire(circuit, pin, lbl.pins.net);
+}
+
 /** Standard 2-transistor CMOS inverter: PMOS pulls up, NMOS pulls down. */
 export function buildNot(
   circuit: Circuit,
@@ -342,17 +529,28 @@ export function buildNot(
   const placer = circuitGatePlacers.get(circuit);
   if (placer) return placer.not(circuit, pos);
 
+  const stack = CMOS_STACK_PITCH;
   const pmos = makeTransistor(circuit, 'P', pos);
-  const nmos = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
-  // Power via rail labels — see tiePowerRail. Circuit still needs Source(1)/Source(0) rail drivers.
-  tiePowerRail(circuit, 'VCC', pmos.pins.source);
-  tiePowerRail(circuit, 'GND', nmos.pins.source);
+  const nmos = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + stack });
+  stubLocalRail(circuit, 'VCC', pmos.pins.source, -18);
+  stubLocalRail(circuit, 'GND', nmos.pins.source, 18);
   wire(circuit, pmos.pins.drain, nmos.pins.drain);
   wire(circuit, pmos.pins.gate, nmos.pins.gate);
   return { in: pmos.pins.gate, out: pmos.pins.drain };
 }
 
-/** Standard CMOS NAND: two PMOS in parallel (pull-up), two NMOS in series (pull-down). */
+/**
+ * Standard CMOS NAND schematic layout:
+ *   VCC--+--P_a--+     VCC--+--P_b--+
+ *        |       |          |       |
+ *        +-------+----+-----+-------+---- out
+ *                     |
+ *                    N_a
+ *                     |
+ *                    N_b
+ *                     |
+ *                    GND
+ */
 export function buildNand(
   circuit: Circuit,
   pos: Point = { x: 0, y: 0 },
@@ -360,20 +558,37 @@ export function buildNand(
   const placer = circuitGatePlacers.get(circuit);
   if (placer) return placer.nand(circuit, pos);
 
+  const col = CMOS_COL_PITCH;
+  const stack = CMOS_STACK_PITCH;
+  const midX = pos.x + col / 2;
+
   const p1 = makeTransistor(circuit, 'P', pos);
-  const p2 = makeTransistor(circuit, 'P', { x: pos.x + 50, y: pos.y });
-  const n1 = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
-  const n2 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y + 60 });
+  const p2 = makeTransistor(circuit, 'P', { x: pos.x + col, y: pos.y });
+  // Series pull-down stacked on the centerline (classic textbook NAND).
+  const n1 = makeTransistor(circuit, 'N', { x: midX, y: pos.y + stack });
+  const n2 = makeTransistor(circuit, 'N', { x: midX, y: pos.y + 2 * stack });
 
-  tiePowerRail(circuit, 'VCC', p1.pins.source);
-  tiePowerRail(circuit, 'VCC', p2.pins.source);
-  wire(circuit, p1.pins.drain, p2.pins.drain);
-  wire(circuit, p1.pins.drain, n1.pins.drain);
+  stubLocalRail(circuit, 'VCC', p1.pins.source, -18);
+  stubLocalRail(circuit, 'VCC', p2.pins.source, -18);
+  // Parallel P drains meet on a horizontal bus; drop to series N stack.
+  wire(circuit, p1.pins.drain, p2.pins.drain, [{ x: midX, y: p1.pins.drain.pos.y }]);
+  wire(circuit, p1.pins.drain, n1.pins.drain, [
+    { x: midX, y: p1.pins.drain.pos.y },
+    { x: midX, y: n1.pins.drain.pos.y },
+  ]);
   wire(circuit, n1.pins.source, n2.pins.drain);
-  tiePowerRail(circuit, 'GND', n2.pins.source);
+  stubLocalRail(circuit, 'GND', n2.pins.source, 18);
 
-  wire(circuit, p1.pins.gate, n1.pins.gate); // input A
-  wire(circuit, p2.pins.gate, n2.pins.gate); // input B
+  // Gate A: left column P to stacked N (HVH via left rail).
+  wire(circuit, p1.pins.gate, n1.pins.gate, [
+    { x: pos.x - 44, y: p1.pins.gate.pos.y },
+    { x: pos.x - 44, y: n1.pins.gate.pos.y },
+  ]);
+  // Gate B: right column P down then in to lower N.
+  wire(circuit, p2.pins.gate, n2.pins.gate, [
+    { x: pos.x + col + 44, y: p2.pins.gate.pos.y },
+    { x: pos.x + col + 44, y: n2.pins.gate.pos.y },
+  ]);
 
   return { a: p1.pins.gate, b: p2.pins.gate, out: p1.pins.drain };
 }
@@ -389,7 +604,16 @@ export function buildAnd(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInpu
   return { a: nand.a, b: nand.b, out: inv.out };
 }
 
-/** Standard CMOS NOR: two PMOS in series (pull-up), two NMOS in parallel (pull-down) — the dual of NAND. */
+/**
+ * Standard CMOS NOR schematic layout (dual of NAND):
+ *   VCC--P_a--P_b--+--out
+ *                  |
+ *            +-----+-----+
+ *            |           |
+ *           N_a         N_b
+ *            |           |
+ *           GND         GND
+ */
 export function buildNor(
   circuit: Circuit,
   pos: Point = { x: 0, y: 0 },
@@ -397,20 +621,39 @@ export function buildNor(
   const placer = circuitGatePlacers.get(circuit);
   if (placer) return placer.nor(circuit, pos);
 
-  const p1 = makeTransistor(circuit, 'P', pos);
-  const p2 = makeTransistor(circuit, 'P', { x: pos.x, y: pos.y + 60 });
-  const n1 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y });
-  const n2 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y + 60 });
+  const col = CMOS_COL_PITCH;
+  const stack = CMOS_STACK_PITCH;
+  const midX = pos.x + col / 2;
 
-  tiePowerRail(circuit, 'VCC', p1.pins.source);
+  // Series P stack on the centerline.
+  const p1 = makeTransistor(circuit, 'P', { x: midX, y: pos.y });
+  const p2 = makeTransistor(circuit, 'P', { x: midX, y: pos.y + stack });
+  // Parallel N pull-downs at the output row.
+  const n1 = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 2 * stack });
+  const n2 = makeTransistor(circuit, 'N', { x: pos.x + col, y: pos.y + 2 * stack });
+
+  stubLocalRail(circuit, 'VCC', p1.pins.source, -18);
   wire(circuit, p1.pins.drain, p2.pins.source);
-  wire(circuit, p2.pins.drain, n1.pins.drain);
-  wire(circuit, n1.pins.drain, n2.pins.drain);
-  tiePowerRail(circuit, 'GND', n1.pins.source);
-  tiePowerRail(circuit, 'GND', n2.pins.source);
+  // Out bus: P series drain fans to both N drains.
+  wire(circuit, p2.pins.drain, n1.pins.drain, [
+    { x: midX, y: p2.pins.drain.pos.y },
+    { x: n1.pins.drain.pos.x, y: p2.pins.drain.pos.y },
+  ]);
+  wire(circuit, p2.pins.drain, n2.pins.drain, [
+    { x: midX, y: p2.pins.drain.pos.y },
+    { x: n2.pins.drain.pos.x, y: p2.pins.drain.pos.y },
+  ]);
+  stubLocalRail(circuit, 'GND', n1.pins.source, 18);
+  stubLocalRail(circuit, 'GND', n2.pins.source, 18);
 
-  wire(circuit, p1.pins.gate, n1.pins.gate); // input A
-  wire(circuit, p2.pins.gate, n2.pins.gate); // input B
+  wire(circuit, p1.pins.gate, n1.pins.gate, [
+    { x: pos.x - 44, y: p1.pins.gate.pos.y },
+    { x: pos.x - 44, y: n1.pins.gate.pos.y },
+  ]);
+  wire(circuit, p2.pins.gate, n2.pins.gate, [
+    { x: pos.x + col + 44, y: p2.pins.gate.pos.y },
+    { x: pos.x + col + 44, y: n2.pins.gate.pos.y },
+  ]);
 
   return { a: p1.pins.gate, b: p2.pins.gate, out: p2.pins.drain };
 }

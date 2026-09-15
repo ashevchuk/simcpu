@@ -32,6 +32,8 @@ export interface SoftZ80State {
   r: number;
   iff1: boolean;
   iff2: boolean;
+  /** Frames until IFF enable after EI (Z80: enables after the following instruction). */
+  eiDelay: number;
   im: 0 | 1 | 2;
   sp: number;
   pc: number;
@@ -87,6 +89,7 @@ export function createSoftZ80(sp = 0xdff): SoftZ80State {
     r: 0,
     iff1: false,
     iff2: false,
+    eiDelay: 0,
     im: 0,
     sp: sp & 0xffff,
     pc: 0,
@@ -989,15 +992,15 @@ function execOpcode(
     cpu.f2 = tf;
     return true;
   }
-  // DI / EI
+  // DI / EI — EI enables IFF only after the *next* instruction completes.
   if (op === 0xf3) {
     cpu.iff1 = false;
     cpu.iff2 = false;
+    cpu.eiDelay = 0;
     return true;
   }
   if (op === 0xfb) {
-    cpu.iff1 = true;
-    cpu.iff2 = true;
+    cpu.eiDelay = 2;
     return true;
   }
 
@@ -1115,21 +1118,16 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHook
   const op = fetch(cpu, ram, hooks);
   bumpR(cpu);
 
+  let ok = true;
   if (op === 0xcb) {
     const cb = fetch(cpu, ram, hooks);
     bumpR(cpu);
     const z = cb & 7;
     const ea = z === 6 ? hl(cpu) : null;
     execCb(cpu, ram, cb, ea, hooks);
-    return true;
-  }
-
-  if (op === 0xed) {
+  } else if (op === 0xed) {
     execEd(cpu, ram, hooks);
-    return true;
-  }
-
-  if (op === 0xdd || op === 0xfd) {
+  } else if (op === 0xdd || op === 0xfd) {
     const idx: IndexReg = op === 0xdd ? 'ix' : 'iy';
     const nop = fetch(cpu, ram, hooks);
     bumpR(cpu);
@@ -1145,21 +1143,28 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHook
         );
       }
       execCb(cpu, ram, cb, ea, hooks);
-      return true;
-    }
-
-    if (nop === 0xdd || nop === 0xfd || nop === 0xed) {
+    } else if (nop === 0xdd || nop === 0xfd || nop === 0xed) {
       // Nested/ignored prefixes: treat as new prefix start by rewinding one and re-fetching
       // Common soft approach: ignore and continue with latest — here throw clearly
       throw new Error(
         `soft Z80: nested prefix 0x${op.toString(16)} 0x${nop.toString(16)} unsupported`,
       );
+    } else {
+      ok = execOpcode(cpu, ram, nop, hooks, idx);
     }
-
-    return execOpcode(cpu, ram, nop, hooks, idx);
+  } else {
+    ok = execOpcode(cpu, ram, op, hooks, null);
   }
 
-  return execOpcode(cpu, ram, op, hooks, null);
+  // EI delay: countdown hits 0 after the instruction that *followed* EI.
+  if (cpu.eiDelay > 0) {
+    cpu.eiDelay -= 1;
+    if (cpu.eiDelay === 0) {
+      cpu.iff1 = true;
+      cpu.iff2 = true;
+    }
+  }
+  return ok;
 }
 
 /** Run up to `max` instructions or until halted. Returns steps taken. */
