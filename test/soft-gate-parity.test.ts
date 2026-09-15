@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { createSoftZ80, softStep, type SoftZ80State } from '../src/machine/softZ80.js';
+import {
+  createSoftZ80,
+  softStep,
+  type SoftMemHooks,
+  type SoftZ80State,
+} from '../src/machine/softZ80.js';
 import { makeZ80Harness, type Z80Harness } from './z80Harness.js';
+import type { Z80Cpu } from '../src/sim/blocks.js';
+import type { Pin } from '../src/sim/types.js';
 
 /**
  * Soft vs gate register/RAM parity.
@@ -11,14 +18,15 @@ import { makeZ80Harness, type Z80Harness } from './z80Harness.js';
  * - P/V (bit 2): soft ALU/INC/DEC uses parity; gate uses signed overflow for
  *   arithmetic. Documented bits S/Z/H/N/C are compared.
  *
- * Stack-heavy CALL/RET/PUSH/POP beyond simple DD IX forms stay in dedicated
- * z80cpu-* tests — soft may retire in one step while some gate paths need
- * careful SP mid-instruction matching beyond PC catch-up.
- *
- * ED/DD: soft counts one softStep for the whole prefixed op; the gate may
- * need more than one 10-phase ring. `gateCatchUp` runs rings until PC matches.
+ * Soft runs with `addrBits=7` + `gateCallStack` so CALL/RET/RST match the
+ * gate's single-byte return stack; PUSH/POP qq stay two-byte on both sides.
+ * `gateCatchUp` advances rings until PC and SP match after each softStep.
  */
 const FLAG_MASK = 0xd3; // S Z - H - - N C  (exclude Y=0x20, X=0x08, P/V=0x04)
+const ADDR_BITS = 7;
+const ADDR_MASK = (1 << ADDR_BITS) - 1;
+const SP0 = 0x60;
+const PARITY_HOOKS: SoftMemHooks = { addrBits: ADDR_BITS, gateCallStack: true };
 
 interface Snapshot {
   a: number;
@@ -40,8 +48,8 @@ function softSnap(cpu: SoftZ80State, ram: Uint8Array, addrs: number[]): Snapshot
     de: (cpu.d << 8) | cpu.e,
     hl: (cpu.h << 8) | cpu.l,
     ix: cpu.ix & 0xffff,
-    sp: cpu.sp,
-    pc: cpu.pc,
+    sp: cpu.sp & ADDR_MASK,
+    pc: cpu.pc & ADDR_MASK,
     ram: addrs.map((a) => ram[a] ?? 0),
   };
 }
@@ -70,21 +78,45 @@ function expectParity(label: string, soft: Snapshot, gate: Snapshot): void {
 }
 
 /**
- * Advance the gate until its PC matches soft's PC after one softStep.
- * Unprefixed ops usually need one 10-phase ring; ED/DD bodies that burn
- * prefix phases plus a long execute window may need a second ring.
+ * Advance the gate until PC and SP match soft after one softStep.
+ * Prefixed / multi-ring ops may need more than one 10-phase ring.
  */
-function gateCatchUp(h: Z80Harness, targetPc: number): void {
+function gateCatchUp(h: Z80Harness, targetPc: number, targetSp: number): void {
   h.runInstruction();
   let extra = 0;
-  while (h.readReg(h.cpu.pc) !== targetPc) {
+  while (h.readReg(h.cpu.pc) !== targetPc || h.readReg(h.cpu.sp.q) !== targetSp) {
     h.runInstruction();
     if (++extra > 4) {
       throw new Error(
-        `gateCatchUp: gate PC=${h.readReg(h.cpu.pc)} still != soft PC=${targetPc} after ${extra + 1} rings`,
+        `gateCatchUp: gate PC=${h.readReg(h.cpu.pc)} SP=${h.readReg(h.cpu.sp.q)} ` +
+          `!= soft PC=${targetPc} SP=${targetSp} after ${extra + 1} rings`,
       );
     }
   }
+}
+
+type SeedReg = (reg: { we: Pin; d: Pin[] }, value: number, width?: number) => void;
+
+function seedDefaultRegs(cpu: Z80Cpu, seedReg: SeedReg, sp: number): void {
+  seedReg(cpu.rB, 0);
+  seedReg(cpu.rC, 0);
+  seedReg(cpu.rD, 0);
+  seedReg(cpu.rE, 0);
+  seedReg(cpu.rH, 0);
+  seedReg(cpu.rL, 0);
+  seedReg(cpu.rIXH, 0);
+  seedReg(cpu.rIXL, 0);
+  seedReg(cpu.rIYH, 0);
+  seedReg(cpu.rIYL, 0);
+  seedReg(cpu.sp, sp, ADDR_BITS);
+  seedReg(cpu.aP, 0);
+  seedReg(cpu.fP, 0);
+  seedReg(cpu.bP, 0);
+  seedReg(cpu.cP, 0);
+  seedReg(cpu.dP, 0);
+  seedReg(cpu.eP, 0);
+  seedReg(cpu.hP, 0);
+  seedReg(cpu.lP, 0);
 }
 
 /**
@@ -93,26 +125,27 @@ function gateCatchUp(h: Z80Harness, targetPc: number): void {
  * Gate HALT (0x76) is inert but still advances PC like a 1-byte NOP — matching
  * soft's fetch-then-halt PC.
  */
-function runBoth(program: Uint8Array, ramAddrs: number[], maxSteps = 16) {
-  const softRam = new Uint8Array(1 << 7);
+function runBoth(program: Uint8Array, ramAddrs: number[], maxSteps = 16, sp = SP0) {
+  const softRam = new Uint8Array(1 << ADDR_BITS);
   softRam.set(program);
-  const softCpu = createSoftZ80(0);
+  const softCpu = createSoftZ80(sp);
   let steps = 0;
   while (steps < maxSteps && !softCpu.halted) {
-    softStep(softCpu, softRam);
+    softStep(softCpu, softRam, PARITY_HOOKS);
     steps++;
   }
   expect(steps, 'soft should retire at least one instruction').toBeGreaterThan(0);
   expect(softCpu.halted, 'soft programs should end in HALT').toBe(true);
 
-  // Re-run soft step-by-step alongside the gate so catch-up sees each target PC.
-  const soft2Ram = new Uint8Array(1 << 7);
+  const soft2Ram = new Uint8Array(1 << ADDR_BITS);
   soft2Ram.set(program);
-  const soft2 = createSoftZ80(0);
-  const h = makeZ80Harness(Uint8Array.from(program), 7);
+  const soft2 = createSoftZ80(sp);
+  const h = makeZ80Harness(Uint8Array.from(program), ADDR_BITS, (cpu, seedReg) => {
+    seedDefaultRegs(cpu, seedReg, sp);
+  });
   for (let i = 0; i < steps; i++) {
-    softStep(soft2, soft2Ram);
-    gateCatchUp(h, soft2.pc);
+    softStep(soft2, soft2Ram, PARITY_HOOKS);
+    gateCatchUp(h, soft2.pc & ADDR_MASK, soft2.sp & ADDR_MASK);
   }
 
   return {
@@ -250,5 +283,38 @@ describe('softZ80 vs buildZ80Cpu parity', () => {
     const { soft, gate } = runBoth(program, []);
     expectParity('DD INC IX', soft, gate);
     expect(soft.ix).toBe(0x0100);
+  });
+
+  it('PUSH BC / POP BC / HALT', () => {
+    const program = new Uint8Array([0x01, 0x34, 0x12, 0xc5, 0xc1, 0x76]);
+    const { soft, gate } = runBoth(program, [0x5e, 0x5f]);
+    expectParity('PUSH/POP BC', soft, gate);
+    expect(soft.bc).toBe(0x1234);
+    expect(soft.sp).toBe(SP0);
+    expect(soft.ram[0]).toBe(0x34);
+    expect(soft.ram[1]).toBe(0x12);
+  });
+
+  it('CALL nn / RET / HALT', () => {
+    // 0: CALL 0x10; 3: LD A,0x99; HALT; 0x10: LD A,0x42; RET
+    const program = new Uint8Array(128);
+    program.set([0xcd, 0x10, 0x00, 0x3e, 0x99, 0x76], 0);
+    program.set([0x3e, 0x42, 0xc9], 0x10);
+    const { soft, gate } = runBoth(program, [0x5f], 16);
+    expectParity('CALL/RET', soft, gate);
+    expect(soft.a).toBe(0x99);
+    expect(soft.sp).toBe(SP0);
+  });
+
+  it('DD PUSH IX / POP IX / HALT', () => {
+    const program = new Uint8Array([
+      0xdd, 0x21, 0x34, 0x12, 0xdd, 0xe5, 0xdd, 0x21, 0x00, 0x00, 0xdd, 0xe1, 0x76,
+    ]);
+    const { soft, gate } = runBoth(program, [0x5e, 0x5f], 16);
+    expectParity('DD PUSH/POP IX', soft, gate);
+    expect(soft.ix).toBe(0x1234);
+    expect(soft.sp).toBe(SP0);
+    expect(soft.ram[0]).toBe(0x34);
+    expect(soft.ram[1]).toBe(0x12);
   });
 });

@@ -42,6 +42,16 @@ export interface SoftMemHooks {
   clearOnReadKeys?: boolean;
   portIn?: (port: number) => number;
   portOut?: (port: number, val: number) => void;
+  /**
+   * Truncate PC/SP/memory addresses to `2^addrBits` — matches `buildZ80Cpu`
+   * parity harnesses (addrBits=7 → 128-byte RAM).
+   */
+  addrBits?: number;
+  /**
+   * When set with `addrBits`, CALL/RET/RST push/pop a single return byte
+   * (gate scale). PUSH/POP qq and DD/FD IX/IY stay two-byte.
+   */
+  gateCallStack?: boolean;
 }
 
 const FLAG_C = 0x01;
@@ -94,6 +104,13 @@ function s8(n: number): number {
   return n & 0x80 ? n - 256 : n;
 }
 
+function addrMask(hooks?: SoftMemHooks): number {
+  return hooks?.addrBits != null ? (1 << hooks.addrBits) - 1 : 0xffff;
+}
+function uAddr(n: number, hooks?: SoftMemHooks): number {
+  return n & addrMask(hooks);
+}
+
 function parity(n: number): boolean {
   let x = n & 0xff;
   x ^= x >> 4;
@@ -109,24 +126,24 @@ function setSZP(f: number, n: number): number {
 }
 
 function memRead(ram: Uint8Array, addr: number, hooks?: SoftMemHooks): number {
-  addr = addr & 0xffff;
-  const v = ram[addr]! & 0xff;
+  addr = uAddr(addr, hooks);
+  const v = (ram[addr] ?? 0) & 0xff;
   if (hooks?.clearOnReadKeys && addr === KEY_DATA) {
     ram[KEY_STATUS] = 0;
   }
   return v;
 }
 
-function memWrite(ram: Uint8Array, addr: number, v: number): void {
-  ram[addr & 0xffff] = v & 0xff;
+function memWrite(ram: Uint8Array, addr: number, v: number, hooks?: SoftMemHooks): void {
+  ram[uAddr(addr, hooks)] = v & 0xff;
 }
 
 function read16(ram: Uint8Array, addr: number, hooks?: SoftMemHooks): number {
-  return memRead(ram, addr, hooks) | (memRead(ram, addr + 1, hooks) << 8);
+  return memRead(ram, addr, hooks) | (memRead(ram, uAddr(addr + 1, hooks), hooks) << 8);
 }
-function write16(ram: Uint8Array, addr: number, v: number): void {
-  memWrite(ram, addr, v & 0xff);
-  memWrite(ram, addr + 1, (v >> 8) & 0xff);
+function write16(ram: Uint8Array, addr: number, v: number, hooks?: SoftMemHooks): void {
+  memWrite(ram, addr, v & 0xff, hooks);
+  memWrite(ram, uAddr(addr + 1, hooks), (v >> 8) & 0xff, hooks);
 }
 
 function getR(cpu: SoftZ80State, r: number, idx: IndexReg = null): number {
@@ -223,24 +240,42 @@ function setIndex(cpu: SoftZ80State, idx: IndexReg, v: number): void {
   else setHl(cpu, v);
 }
 
-function push(cpu: SoftZ80State, ram: Uint8Array, v: number): void {
-  cpu.sp = u16(cpu.sp - 2);
-  write16(ram, cpu.sp, v);
+function push(cpu: SoftZ80State, ram: Uint8Array, v: number, hooks?: SoftMemHooks): void {
+  cpu.sp = uAddr(cpu.sp - 2, hooks);
+  write16(ram, cpu.sp, v, hooks);
 }
 function pop(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): number {
   const v = read16(ram, cpu.sp, hooks);
-  cpu.sp = u16(cpu.sp + 2);
+  cpu.sp = uAddr(cpu.sp + 2, hooks);
   return v;
 }
 
-function fetch(cpu: SoftZ80State, ram: Uint8Array): number {
-  const b = ram[cpu.pc]! & 0xff;
-  cpu.pc = u16(cpu.pc + 1);
+/** CALL/RET/RST stack — 1 byte when `gateCallStack`, else full 16-bit push/pop. */
+function pushReturn(cpu: SoftZ80State, ram: Uint8Array, v: number, hooks?: SoftMemHooks): void {
+  if (hooks?.gateCallStack) {
+    cpu.sp = uAddr(cpu.sp - 1, hooks);
+    memWrite(ram, cpu.sp, v & 0xff, hooks);
+    return;
+  }
+  push(cpu, ram, v, hooks);
+}
+function popReturn(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): number {
+  if (hooks?.gateCallStack) {
+    const v = memRead(ram, cpu.sp, hooks);
+    cpu.sp = uAddr(cpu.sp + 1, hooks);
+    return v;
+  }
+  return pop(cpu, ram, hooks);
+}
+
+function fetch(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): number {
+  const b = memRead(ram, cpu.pc, hooks);
+  cpu.pc = uAddr(cpu.pc + 1, hooks);
   return b;
 }
-function fetch16(cpu: SoftZ80State, ram: Uint8Array): number {
-  const lo = fetch(cpu, ram);
-  const hi = fetch(cpu, ram);
+function fetch16(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): number {
+  const lo = fetch(cpu, ram, hooks);
+  const hi = fetch(cpu, ram, hooks);
   return lo | (hi << 8);
 }
 
@@ -389,7 +424,7 @@ function execCb(cpu: SoftZ80State, ram: Uint8Array, op: number, ea: number | nul
   if (x === 0) {
     const { v, f } = rotOp(op, val, cpu.f);
     cpu.f = f;
-    if (ea !== null) memWrite(ram, ea, v);
+    if (ea !== null) memWrite(ram, ea, v, hooks);
     else setR(cpu, z, v);
     return;
   }
@@ -406,20 +441,20 @@ function execCb(cpu: SoftZ80State, ram: Uint8Array, op: number, ea: number | nul
   if (x === 2) {
     // RES
     const nv = val & ~(1 << y);
-    if (ea !== null) memWrite(ram, ea, nv);
+    if (ea !== null) memWrite(ram, ea, nv, hooks);
     else setR(cpu, z, nv);
     return;
   }
   // SET
   const nv = val | (1 << y);
-  if (ea !== null) memWrite(ram, ea, nv);
+  if (ea !== null) memWrite(ram, ea, nv, hooks);
   else setR(cpu, z, nv);
 }
 
 function blockLd(cpu: SoftZ80State, ram: Uint8Array, dir: 1 | -1, repeat: boolean, hooks?: SoftMemHooks): void {
   for (;;) {
     const v = memRead(ram, hl(cpu), hooks);
-    memWrite(ram, de(cpu), v);
+    memWrite(ram, de(cpu), v, hooks);
     setHl(cpu, hl(cpu) + dir);
     setDe(cpu, de(cpu) + dir);
     setBc(cpu, bc(cpu) - 1);
@@ -471,7 +506,7 @@ function adcSbcHl(cpu: SoftZ80State, addend: number, adc: boolean): void {
 }
 
 function execEd(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): void {
-  const op = fetch(cpu, ram);
+  const op = fetch(cpu, ram, hooks);
   bumpR(cpu);
 
   // IN r,(C) / OUT (C),r — r≠6; also IN A,(C)/OUT (C),A as r=7
@@ -506,14 +541,14 @@ function execEd(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): void 
 
   // LD (nn),dd / LD dd,(nn)
   if ((op & 0xcf) === 0x43) {
-    const nn = fetch16(cpu, ram);
+    const nn = fetch16(cpu, ram, hooks);
     const p = (op >> 4) & 3;
     const v = p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? hl(cpu) : cpu.sp;
-    write16(ram, nn, v);
+    write16(ram, nn, v, hooks);
     return;
   }
   if ((op & 0xcf) === 0x4b) {
-    const nn = fetch16(cpu, ram);
+    const nn = fetch16(cpu, ram, hooks);
     const v = read16(ram, nn, hooks);
     const p = (op >> 4) & 3;
     if (p === 0) setBc(cpu, v);
@@ -537,13 +572,13 @@ function execEd(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): void 
 
   // RETN (45/55/65/75) — restore IFF1 from IFF2
   if ((op & 0xc7) === 0x45) {
-    cpu.pc = pop(cpu, ram, hooks);
+    cpu.pc = uAddr(popReturn(cpu, ram, hooks), hooks);
     cpu.iff1 = cpu.iff2;
     return;
   }
   // RETI (4D/5D/6D/7D)
   if ((op & 0xc7) === 0x4d) {
-    cpu.pc = pop(cpu, ram, hooks);
+    cpu.pc = uAddr(popReturn(cpu, ram, hooks), hooks);
     return;
   }
 
@@ -594,7 +629,7 @@ function execEd(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): void 
     const addr = hl(cpu);
     const m = memRead(ram, addr, hooks);
     const a = cpu.a;
-    memWrite(ram, addr, ((a & 0x0f) << 4) | (m >> 4));
+    memWrite(ram, addr, ((a & 0x0f) << 4) | (m >> 4), hooks);
     cpu.a = (a & 0xf0) | (m & 0x0f);
     cpu.f = setSZP(cpu.f & ~(FLAG_H | FLAG_N), cpu.a);
     return;
@@ -603,7 +638,7 @@ function execEd(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): void 
     const addr = hl(cpu);
     const m = memRead(ram, addr, hooks);
     const a = cpu.a;
-    memWrite(ram, addr, ((m << 4) & 0xf0) | (a & 0x0f));
+    memWrite(ram, addr, ((m << 4) & 0xf0) | (a & 0x0f), hooks);
     cpu.a = (a & 0xf0) | ((m >> 4) & 0x0f);
     cpu.f = setSZP(cpu.f & ~(FLAG_H | FLAG_N), cpu.a);
     return;
@@ -677,15 +712,15 @@ function execOpcode(
 
   // Prefixed: index register pair ops that replace HL
   if (idx && (op & 0xcf) === 0x01 && ((op >> 4) & 3) === 2) {
-    setIndex(cpu, idx, fetch16(cpu, ram));
+    setIndex(cpu, idx, fetch16(cpu, ram, hooks));
     return true;
   }
   if (idx && op === 0x22) {
-    write16(ram, fetch16(cpu, ram), indexAddr(cpu, idx));
+    write16(ram, fetch16(cpu, ram, hooks), indexAddr(cpu, idx));
     return true;
   }
   if (idx && op === 0x2a) {
-    setIndex(cpu, idx, read16(ram, fetch16(cpu, ram), hooks));
+    setIndex(cpu, idx, read16(ram, fetch16(cpu, ram, hooks), hooks));
     return true;
   }
   if (idx && (op === 0x23 || op === 0x2b)) {
@@ -703,21 +738,21 @@ function execOpcode(
     return true;
   }
   if (idx && op === 0xf9) {
-    cpu.sp = indexAddr(cpu, idx);
+    cpu.sp = uAddr(indexAddr(cpu, idx), hooks);
     return true;
   }
   if (idx && op === 0xe9) {
-    cpu.pc = indexAddr(cpu, idx);
+    cpu.pc = uAddr(indexAddr(cpu, idx), hooks);
     return true;
   }
   if (idx && (op === 0xe5 || op === 0xe1)) {
-    if (op === 0xe5) push(cpu, ram, indexAddr(cpu, idx));
+    if (op === 0xe5) push(cpu, ram, indexAddr(cpu, idx), hooks);
     else setIndex(cpu, idx, pop(cpu, ram, hooks));
     return true;
   }
   if (idx && op === 0xe3) {
     const t = read16(ram, cpu.sp, hooks);
-    write16(ram, cpu.sp, indexAddr(cpu, idx));
+    write16(ram, cpu.sp, indexAddr(cpu, idx), hooks);
     setIndex(cpu, idx, t);
     return true;
   }
@@ -726,7 +761,7 @@ function execOpcode(
   let disp = 0;
   let ea: number | null = null;
   if (idx && needsIndexDisp(op)) {
-    disp = s8(fetch(cpu, ram));
+    disp = s8(fetch(cpu, ram, hooks));
     ea = u16(indexAddr(cpu, idx) + disp);
   }
 
@@ -736,13 +771,13 @@ function execOpcode(
     const z = op & 7;
     if (idx && (y === 6 || z === 6)) {
       const val = z === 6 ? memRead(ram, ea!, hooks) : getR(cpu, z, null);
-      if (y === 6) memWrite(ram, ea!, val);
+      if (y === 6) memWrite(ram, ea!, val, hooks);
       else setR(cpu, y, val, null);
       return true;
     }
     const regIdx = idx;
     const val = z === 6 ? memRead(ram, hl(cpu), hooks) : getR(cpu, z, regIdx);
-    if (y === 6) memWrite(ram, hl(cpu), val);
+    if (y === 6) memWrite(ram, hl(cpu), val, hooks);
     else setR(cpu, y, val, regIdx);
     return true;
   }
@@ -758,7 +793,7 @@ function execOpcode(
 
   // ALU A,n
   if ((op & 0xc7) === 0xc6) {
-    aluOp(cpu, (op >> 3) & 7, fetch(cpu, ram));
+    aluOp(cpu, (op >> 3) & 7, fetch(cpu, ram, hooks));
     return true;
   }
 
@@ -767,11 +802,11 @@ function execOpcode(
     const y = (op >> 3) & 7;
     if (idx && y === 6) {
       // LD (IX+d),n — n follows displacement already consumed
-      memWrite(ram, ea!, fetch(cpu, ram));
+      memWrite(ram, ea!, fetch(cpu, ram, hooks));
       return true;
     }
-    const n = fetch(cpu, ram);
-    if (y === 6) memWrite(ram, hl(cpu), n);
+    const n = fetch(cpu, ram, hooks);
+    if (y === 6) memWrite(ram, hl(cpu), n, hooks);
     else setR(cpu, y, n, idx);
     return true;
   }
@@ -783,7 +818,7 @@ function execOpcode(
     let v = y === 6 ? memRead(ram, idx ? ea! : hl(cpu), hooks) : getR(cpu, y, idx);
     const old = v;
     v = u8(inc ? v + 1 : v - 1);
-    if (y === 6) memWrite(ram, idx ? ea! : hl(cpu), v);
+    if (y === 6) memWrite(ram, idx ? ea! : hl(cpu), v, hooks);
     else setR(cpu, y, v, idx);
     let f = cpu.f & FLAG_C;
     f = setSZP(f, v);
@@ -803,20 +838,20 @@ function execOpcode(
     else if (p === 2) {
       if (idx) setIndex(cpu, idx, indexAddr(cpu, idx) + d);
       else setHl(cpu, hl(cpu) + d);
-    } else cpu.sp = u16(cpu.sp + d);
+    } else cpu.sp = uAddr(cpu.sp + d, hooks);
     return true;
   }
 
   // LD rr,nn
   if ((op & 0xcf) === 0x01) {
-    const nn = fetch16(cpu, ram);
+    const nn = fetch16(cpu, ram, hooks);
     const p = (op >> 4) & 3;
     if (p === 0) setBc(cpu, nn);
     else if (p === 1) setDe(cpu, nn);
     else if (p === 2) {
       if (idx) setIndex(cpu, idx, nn);
       else setHl(cpu, nn);
-    } else cpu.sp = nn;
+    } else cpu.sp = uAddr(nn, hooks);
     return true;
   }
 
@@ -832,7 +867,7 @@ function execOpcode(
 
   // JR e / JR cc,e / DJNZ
   if (op === 0x18 || op === 0x10 || (op & 0xe7) === 0x20) {
-    const e = s8(fetch(cpu, ram));
+    const e = s8(fetch(cpu, ram, hooks));
     let take = op === 0x18;
     if (op === 0x10) {
       cpu.b = u8(cpu.b - 1);
@@ -840,30 +875,30 @@ function execOpcode(
     } else if (op !== 0x18) {
       take = cond(cpu, (op >> 3) & 3);
     }
-    if (take) cpu.pc = u16(cpu.pc + e);
+    if (take) cpu.pc = uAddr(cpu.pc + e, hooks);
     return true;
   }
 
   // JP nn / JP cc,nn
   if (op === 0xc3 || (op & 0xc7) === 0xc2) {
-    const nn = fetch16(cpu, ram);
-    if (op === 0xc3 || cond(cpu, (op >> 3) & 7)) cpu.pc = nn;
+    const nn = fetch16(cpu, ram, hooks);
+    if (op === 0xc3 || cond(cpu, (op >> 3) & 7)) cpu.pc = uAddr(nn, hooks);
     return true;
   }
 
   // CALL nn / CALL cc,nn
   if (op === 0xcd || (op & 0xc7) === 0xc4) {
-    const nn = fetch16(cpu, ram);
+    const nn = fetch16(cpu, ram, hooks);
     if (op === 0xcd || cond(cpu, (op >> 3) & 7)) {
-      push(cpu, ram, cpu.pc);
-      cpu.pc = nn;
+      pushReturn(cpu, ram, cpu.pc, hooks);
+      cpu.pc = uAddr(nn, hooks);
     }
     return true;
   }
 
   // RET / RET cc
   if (op === 0xc9 || (op & 0xc7) === 0xc0) {
-    if (op === 0xc9 || cond(cpu, (op >> 3) & 7)) cpu.pc = pop(cpu, ram, hooks);
+    if (op === 0xc9 || cond(cpu, (op >> 3) & 7)) cpu.pc = uAddr(popReturn(cpu, ram, hooks), hooks);
     return true;
   }
 
@@ -882,7 +917,7 @@ function execOpcode(
                 ? indexAddr(cpu, idx)
                 : hl(cpu)
               : (cpu.a << 8) | cpu.f;
-      push(cpu, ram, v);
+      push(cpu, ram, v, hooks);
     } else {
       const v = pop(cpu, ram, hooks);
       if (p === 0) setBc(cpu, v);
@@ -900,12 +935,12 @@ function execOpcode(
 
   // JP (HL)
   if (op === 0xe9) {
-    cpu.pc = hl(cpu);
+    cpu.pc = uAddr(hl(cpu), hooks);
     return true;
   }
   // LD SP,HL
   if (op === 0xf9) {
-    cpu.sp = hl(cpu);
+    cpu.sp = uAddr(hl(cpu), hooks);
     return true;
   }
   // EX DE,HL
@@ -918,7 +953,7 @@ function execOpcode(
   // EX (SP),HL
   if (op === 0xe3) {
     const t = read16(ram, cpu.sp, hooks);
-    write16(ram, cpu.sp, hl(cpu));
+    write16(ram, cpu.sp, hl(cpu), hooks);
     setHl(cpu, t);
     return true;
   }
@@ -976,30 +1011,30 @@ function execOpcode(
     return true;
   }
   if (op === 0x02) {
-    memWrite(ram, bc(cpu), cpu.a);
+    memWrite(ram, bc(cpu), cpu.a, hooks);
     return true;
   }
   if (op === 0x12) {
-    memWrite(ram, de(cpu), cpu.a);
+    memWrite(ram, de(cpu), cpu.a, hooks);
     return true;
   }
 
   // LD A,(nn) / LD (nn),A
   if (op === 0x3a) {
-    cpu.a = memRead(ram, fetch16(cpu, ram), hooks);
+    cpu.a = memRead(ram, fetch16(cpu, ram, hooks), hooks);
     return true;
   }
   if (op === 0x32) {
-    memWrite(ram, fetch16(cpu, ram), cpu.a);
+    memWrite(ram, fetch16(cpu, ram, hooks), cpu.a);
     return true;
   }
   // LD HL,(nn) / LD (nn),HL
   if (op === 0x2a) {
-    setHl(cpu, read16(ram, fetch16(cpu, ram), hooks));
+    setHl(cpu, read16(ram, fetch16(cpu, ram, hooks), hooks));
     return true;
   }
   if (op === 0x22) {
-    write16(ram, fetch16(cpu, ram), hl(cpu));
+    write16(ram, fetch16(cpu, ram, hooks), hl(cpu));
     return true;
   }
 
@@ -1049,19 +1084,19 @@ function execOpcode(
 
   // RST
   if ((op & 0xc7) === 0xc7) {
-    push(cpu, ram, cpu.pc);
-    cpu.pc = op & 0x38;
+    pushReturn(cpu, ram, cpu.pc, hooks);
+    cpu.pc = uAddr(op & 0x38, hooks);
     return true;
   }
 
   // IN A,(n) / OUT (n),A
   if (op === 0xdb) {
-    const n = fetch(cpu, ram);
+    const n = fetch(cpu, ram, hooks);
     cpu.a = portIn((cpu.a << 8) | n, hooks);
     return true;
   }
   if (op === 0xd3) {
-    const n = fetch(cpu, ram);
+    const n = fetch(cpu, ram, hooks);
     portOut((cpu.a << 8) | n, cpu.a, hooks);
     return true;
   }
@@ -1077,11 +1112,11 @@ function execOpcode(
 /** Execute one instruction. Returns false if halted / unsupported. */
 export function softStep(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): boolean {
   if (cpu.halted) return false;
-  const op = fetch(cpu, ram);
+  const op = fetch(cpu, ram, hooks);
   bumpR(cpu);
 
   if (op === 0xcb) {
-    const cb = fetch(cpu, ram);
+    const cb = fetch(cpu, ram, hooks);
     bumpR(cpu);
     const z = cb & 7;
     const ea = z === 6 ? hl(cpu) : null;
@@ -1096,12 +1131,12 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHook
 
   if (op === 0xdd || op === 0xfd) {
     const idx: IndexReg = op === 0xdd ? 'ix' : 'iy';
-    const nop = fetch(cpu, ram);
+    const nop = fetch(cpu, ram, hooks);
     bumpR(cpu);
 
     if (nop === 0xcb) {
-      const d = s8(fetch(cpu, ram));
-      const cb = fetch(cpu, ram);
+      const d = s8(fetch(cpu, ram, hooks));
+      const cb = fetch(cpu, ram, hooks);
       const ea = u16(indexAddr(cpu, idx) + d);
       // Only (IX+d)/(IY+d) form (z=6); undocumented register forms unsupported
       if ((cb & 7) !== 6) {

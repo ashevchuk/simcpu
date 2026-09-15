@@ -1035,8 +1035,9 @@ component clone + ChipDef expand cache (`hierarchy.ts`); previously ~4s via
 `scripts/bench-build.mts`):** build ~40–100ms (was ~100–175ms; earlier
 ~210–250ms) after placing AND/OR/NOT/NAND/NOR/XOR as stdcell chip instances
 instead of ~17k inline transistors, plus one Label anchor per fanout name
-(`tieToLabel` cache). Fold ~80ms (was ~250–300ms) on the smaller place
-graph (~6.8k comps / ~5.8k nested chips). Flatten still ~1.2s for the
+(`tieToLabel` cache), plus folded control macros (`RAM_ADDR_BIT` per address
+bit, `PC_HOLD_OR` for the PC-advance OR chain). Fold ~80ms (was ~250–300ms)
+on the smaller place graph (~6.6k comps class). Flatten still ~1.2s for the
 expanded ~128k-transistor netlist. Shared-rail `tiePowerRail`/`railPin`,
 batched structure bumps, and MUX2/TRI_BUF/HALF_ADDER/REG_BIT reuse remain.
 
@@ -1046,14 +1047,16 @@ the solver clears `KEY_STATUS` (0xF00) — same contract as soft
 
 Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
 pos?)`, etc.); power is always `tiePowerRail` (reuses the circuit's Source
-pins when present). Soft↔gate parity covers unprefixed/CB plus ED/DD cases
-via a multi-ring `gateCatchUp` harness (prefixed ops may need >1×10 phases).
+pins when present). Soft↔gate parity covers unprefixed/CB, ED/DD, and
+stack ops (PUSH/POP, CALL/RET, DD PUSH/POP IX) via multi-ring `gateCatchUp`
+on PC+SP; soft uses `addrBits` + `gateCallStack` hooks so CALL/RET match the
+gate's single-byte return stack.
 
 ### Explicitly later
 
-Still-faster place if large control/decode trees are folded into named
-macros (beyond per-gate stdcells). Stack-heavy CALL/RET soft↔gate parity
-beyond simple DD IX forms.
+Still-faster place if remaining large control/decode trees (e.g. `ramOe`
+OR depth) are folded into named macros the way `RAM_ADDR_BIT` / `PC_HOLD_OR`
+already are. Wider soft↔gate stack coverage (RET cc, CALL cc, RST).
 
 ## Decode and execute: a tiny working CPU
 
