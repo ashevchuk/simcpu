@@ -401,6 +401,27 @@ export class Editor {
     this.highlightedNetId = nets.netOf.get(w.a) ?? null;
   }
 
+  /** Net id under the pointer (hovered wire or pin), else the sticky H highlight. */
+  netIdUnderPointer(): string | null {
+    const nets = this.circuit.computeNets();
+    if (this.hoveredPinId) {
+      return nets.netOf.get(this.hoveredPinId) ?? null;
+    }
+    if (this.hoveredWireId) {
+      const w = this.circuit.wires.get(this.hoveredWireId);
+      if (w) return nets.netOf.get(w.a) ?? null;
+    }
+    return this.highlightedNetId;
+  }
+
+  /** Human-readable net name for UI (label name, or short anonymous id). */
+  formatNetName(netId: string | null): string | null {
+    if (!netId) return null;
+    if (!netId.includes(':')) return netId; // named label net (VCC, GND, foo)
+    const short = netId.length > 18 ? netId.slice(0, 16) + '…' : netId;
+    return short;
+  }
+
   /** Highlight the net of the first pin on a selected component (H key). */
   highlightSelectionNet(): void {
     if (this.selectedWireId) {
@@ -418,6 +439,52 @@ export class Editor {
     if (!pin) return;
     const nets = this.circuit.computeNets();
     this.highlightedNetId = nets.netOf.get(pin.id) ?? null;
+  }
+
+  /**
+   * Align selected component centers. `axis` is the coordinate to equalize;
+   * `edge` picks min / max / mid of the selection.
+   */
+  alignSelection(axis: 'x' | 'y', edge: 'min' | 'max' | 'mid'): number {
+    const comps = [...this.selectedIds]
+      .map((id) => this.circuit.components.get(id))
+      .filter((c): c is Component => !!c);
+    if (comps.length < 2) return 0;
+    const vals = comps.map((c) => c.pos[axis]);
+    const target =
+      edge === 'min' ? Math.min(...vals) : edge === 'max' ? Math.max(...vals) : (Math.min(...vals) + Math.max(...vals)) / 2;
+    const snapped = Math.round(target / GRID) * GRID;
+    this.noteEdit();
+    for (const c of comps) {
+      const delta = snapped - c.pos[axis];
+      if (delta === 0) continue;
+      if (axis === 'x') this.circuit.moveComponent(c.id, delta, 0);
+      else this.circuit.moveComponent(c.id, 0, delta);
+    }
+    return comps.length;
+  }
+
+  /** Evenly space selected components between the leftmost/topmost and rightmost/bottommost. */
+  distributeSelection(axis: 'x' | 'y'): number {
+    const comps = [...this.selectedIds]
+      .map((id) => this.circuit.components.get(id))
+      .filter((c): c is Component => !!c);
+    if (comps.length < 3) return 0;
+    comps.sort((a, b) => a.pos[axis] - b.pos[axis]);
+    const first = comps[0]!.pos[axis];
+    const last = comps[comps.length - 1]!.pos[axis];
+    if (Math.abs(last - first) < 1) return 0;
+    this.noteEdit();
+    for (let i = 1; i < comps.length - 1; i++) {
+      const ideal = first + ((last - first) * i) / (comps.length - 1);
+      const snapped = Math.round(ideal / GRID) * GRID;
+      const c = comps[i]!;
+      const delta = snapped - c.pos[axis];
+      if (delta === 0) continue;
+      if (axis === 'x') this.circuit.moveComponent(c.id, delta, 0);
+      else this.circuit.moveComponent(c.id, 0, delta);
+    }
+    return comps.length;
   }
 
   /**

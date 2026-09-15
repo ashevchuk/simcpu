@@ -75,4 +75,61 @@ describe('wire tidy', () => {
     const expected = routeWirePoints([a.pins.in.pos, b.pins.in.pos]).slice(1, -1);
     expect(w.waypoints ?? []).toEqual(expected);
   });
+
+  it('formatNetName prefers label names', () => {
+    const library = new ChipLibrary();
+    const c = new Circuit();
+    const editor = new Editor(c, library);
+    expect(editor.formatNetName('VCC')).toBe('VCC');
+    expect(editor.formatNetName('chip1:a')).toMatch(/^chip1/);
+  });
+});
+
+describe('align / distribute', () => {
+  it('alignSelection snaps X to leftmost', () => {
+    const library = new ChipLibrary();
+    const c = new Circuit();
+    const a = makeLed(c, { x: 40, y: 0 });
+    const b = makeLed(c, { x: 100, y: 40 });
+    const editor = new Editor(c, library);
+    editor.selectedIds = new Set([a.id, b.id]);
+    expect(editor.alignSelection('x', 'min')).toBe(2);
+    expect(a.pos.x).toBe(40);
+    expect(b.pos.x).toBe(40);
+  });
+
+  it('distributeSelection spaces three parts on X', () => {
+    const library = new ChipLibrary();
+    const c = new Circuit();
+    const a = makeLed(c, { x: 0, y: 0 });
+    const b = makeLed(c, { x: 20, y: 0 });
+    const d = makeLed(c, { x: 100, y: 0 });
+    const editor = new Editor(c, library);
+    editor.selectedIds = new Set([a.id, b.id, d.id]);
+    expect(editor.distributeSelection('x')).toBe(3);
+    expect(a.pos.x).toBe(0);
+    expect(d.pos.x).toBe(100);
+    expect(b.pos.x).toBe(60);
+  });
+});
+
+describe('pin order', () => {
+  it('swapping pinOrder moves chip pin positions', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const c = new Circuit();
+    const nandDef = library.list().find((d) => d.name === 'NAND')!;
+    const nand = makeChipInstance(c, nandDef, { x: 0, y: 0 });
+    const yA = nand.pins.a!.pos.y;
+    const yB = nand.pins.b!.pos.y;
+    expect(yA).toBeLessThan(yB);
+    const i = nand.pinOrder.indexOf('a');
+    const j = nand.pinOrder.indexOf('b');
+    const tmp = nand.pinOrder[i]!;
+    nand.pinOrder[i] = nand.pinOrder[j]!;
+    nand.pinOrder[j] = tmp;
+    applyPinLayout(nand);
+    expect(nand.pins.a!.pos.y).toBe(yB);
+    expect(nand.pins.b!.pos.y).toBe(yA);
+  });
 });

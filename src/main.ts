@@ -131,6 +131,7 @@ const editHistory = new EditHistory();
 editor.onBeforeEdit = () => editHistory.checkpoint(editor.circuit);
 objectInspector.onBeforeEdit = () => editHistory.checkpoint(editor.circuit);
 objectInspector.onDive = (inst) => diveInto(inst);
+objectInspector.editor = editor;
 let simState: SimState = initialState();
 /** Last flat net map — used by MachineRunner gate halt detection. */
 let lastFlatNetMap: ReturnType<Circuit['computeNets']> | null = null;
@@ -909,6 +910,20 @@ window.addEventListener('keydown', (ev) => {
     camera.scale = 1;
   } else if (ev.key.toLowerCase() === 'f') {
     camera.fit(circuitBounds(editor.circuit), vw(), vh());
+  } else if (ev.altKey && !ev.ctrlKey && !ev.metaKey && NUDGE_KEYS[ev.key] && editor.selectedIds.size >= 2) {
+    ev.preventDefault();
+    const [dx, dy] = NUDGE_KEYS[ev.key]!;
+    if (ev.shiftKey && editor.selectedIds.size >= 3) {
+      if (dx !== 0) editor.distributeSelection('x');
+      else editor.distributeSelection('y');
+    } else if (!ev.shiftKey) {
+      if (dx < 0) editor.alignSelection('x', 'min');
+      else if (dx > 0) editor.alignSelection('x', 'max');
+      else if (dy < 0) editor.alignSelection('y', 'min');
+      else if (dy > 0) editor.alignSelection('y', 'max');
+    }
+    uiDirty = true;
+    syncInspector();
   } else if (noModifiers && NUDGE_KEYS[ev.key] && editor.selectedIds.size > 0) {
     // Fine-positioning after a rough drag — one grid step per press, no
     // separate "confirm" step needed since a move is already grid-snapped.

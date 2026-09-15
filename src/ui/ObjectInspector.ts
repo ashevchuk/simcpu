@@ -8,6 +8,7 @@ import type { Circuit } from '../sim/Circuit.js';
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import { renamePort } from '../sim/hierarchy.js';
 import {
+  applyPinLayout,
   getOrientation,
   isOrientable,
   rotateCcw,
@@ -16,6 +17,7 @@ import {
   type Rotation,
 } from '../sim/orientation.js';
 import type { ChipInstanceComponent, Component } from '../sim/types.js';
+import type { Editor } from './Editor.js';
 import { FloatingWindow } from './FloatingWindow.js';
 
 export class ObjectInspector {
@@ -32,6 +34,8 @@ export class ObjectInspector {
   onBeforeEdit: (() => void) | null = null;
   /** Dive into a chip instance from the inspector. */
   onDive: ((inst: ChipInstanceComponent) => void) | null = null;
+  /** Editor for align/distribute (multi-select). */
+  editor: Editor | null = null;
 
   constructor() {
     this.win.setTitle('Inspector', '');
@@ -123,6 +127,38 @@ export class ObjectInspector {
     summary.textContent = `${this.targets.length} parts · ${orientable.length} rotatable`;
     body.appendChild(summary);
 
+    if (this.targets.length >= 2 && this.editor) {
+      const ed = this.editor;
+      const alignRow = document.createElement('div');
+      alignRow.style.display = 'flex';
+      alignRow.style.flexWrap = 'wrap';
+      alignRow.style.gap = '6px';
+      alignRow.append(
+        this.mkBtn('←', 'Align left (Alt+←)', () => ed.alignSelection('x', 'min')),
+        this.mkBtn('→', 'Align right (Alt+→)', () => ed.alignSelection('x', 'max')),
+        this.mkBtn('↑', 'Align top (Alt+↑)', () => ed.alignSelection('y', 'min')),
+        this.mkBtn('↓', 'Align bottom (Alt+↓)', () => ed.alignSelection('y', 'max')),
+        this.mkBtn('↔ mid', 'Align centers X', () => ed.alignSelection('x', 'mid')),
+        this.mkBtn('↕ mid', 'Align centers Y', () => ed.alignSelection('y', 'mid')),
+      );
+      body.appendChild(alignRow);
+      if (this.targets.length >= 3) {
+        const distRow = document.createElement('div');
+        distRow.style.display = 'flex';
+        distRow.style.flexWrap = 'wrap';
+        distRow.style.gap = '6px';
+        distRow.append(
+          this.mkBtn('Distribute H', 'Even spacing horizontally (Alt+Shift+←/→)', () =>
+            ed.distributeSelection('x'),
+          ),
+          this.mkBtn('Distribute V', 'Even spacing vertically (Alt+Shift+↑/↓)', () =>
+            ed.distributeSelection('y'),
+          ),
+        );
+        body.appendChild(distRow);
+      }
+    }
+
     if (orientable.length === 0) return;
 
     const row = document.createElement('div');
@@ -151,7 +187,7 @@ export class ObjectInspector {
     );
     const hint = document.createElement('div');
     hint.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3';
-    hint.textContent = 'bulk orient · R / Shift+R / M';
+    hint.textContent = 'bulk orient · R / Shift+R / M · Alt+arrows align';
     body.append(row, hint);
   }
 
@@ -420,11 +456,7 @@ export class ObjectInspector {
           return span;
         })(),
       );
-      const ports = c.pinOrder?.length ? c.pinOrder : Object.keys(c.pins);
-      const portNote = document.createElement('div');
-      portNote.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;word-break:break-all';
-      portNote.textContent = `ports: ${ports.join(', ')}`;
-      body.appendChild(portNote);
+      this.appendPinOrderEditor(body, c);
       body.appendChild(
         this.mkBtn('Dive in', 'Open chip internals (same as dblclick)', () => {
           this.onDive?.(c);
@@ -442,6 +474,7 @@ export class ObjectInspector {
           return span;
         })(),
       );
+      this.appendPinOrderEditor(body, c);
     }
 
     if (isOrientable(c)) {
@@ -477,6 +510,7 @@ export class ObjectInspector {
           return span;
         })(),
       );
+      this.appendPinOrderEditor(body, c);
       body.appendChild(
         this.mkBtn(c.armed ? 'Disarm' : 'Arm', 'Toggle analyzer sampling', () => {
           c.armed = !c.armed;
@@ -486,6 +520,48 @@ export class ObjectInspector {
       note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3';
       note.textContent = c.armed ? 'armed — sampling' : 'paused · dblclick opens LA';
       body.appendChild(note);
+    }
+  }
+
+  /** Up/down pin stack reorder for chip / RAM / ROM / analyzer. */
+  private appendPinOrderEditor(
+    body: HTMLElement,
+    c: Component & { pinOrder?: string[]; pins: Record<string, { name: string }> },
+  ): void {
+    if (!c.pinOrder?.length) c.pinOrder = Object.keys(c.pins);
+    const title = document.createElement('div');
+    title.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
+    title.textContent = 'pin order';
+    body.appendChild(title);
+    for (let i = 0; i < c.pinOrder.length; i++) {
+      const name = c.pinOrder[i]!;
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '6px';
+      const lab = document.createElement('span');
+      lab.style.cssText = 'flex:1;font:11px ui-monospace,monospace;color:#e7e9ef';
+      lab.textContent = name;
+      const up = this.mkBtn('↑', 'Move pin up in stack', () => {
+        if (i <= 0) return;
+        const order = c.pinOrder!;
+        const tmp = order[i - 1]!;
+        order[i - 1] = order[i]!;
+        order[i] = tmp;
+        applyPinLayout(c as Component);
+      });
+      const down = this.mkBtn('↓', 'Move pin down in stack', () => {
+        const order = c.pinOrder!;
+        if (i >= order.length - 1) return;
+        const tmp = order[i + 1]!;
+        order[i + 1] = order[i]!;
+        order[i] = tmp;
+        applyPinLayout(c as Component);
+      });
+      up.disabled = i === 0;
+      down.disabled = i === c.pinOrder.length - 1;
+      row.append(lab, up, down);
+      body.appendChild(row);
     }
   }
 }

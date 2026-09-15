@@ -192,7 +192,9 @@ export function draw(
   for (const p of circuit.allPins()) pinById.set(p.id, p);
 
   const highlightNet = editor.highlightedNetId;
-  const netOf = highlightNet ? circuit.computeNets().netOf : null;
+  const hoverNet = editor.netIdUnderPointer();
+  const glowNet = highlightNet ?? hoverNet;
+  const netOf = glowNet ? circuit.computeNets().netOf : null;
 
   // Wires first, so component bodies sit on top of the lines meeting them.
   const routedWires: Point[][] = [];
@@ -205,15 +207,18 @@ export function draw(
     routedWires.push(points);
     if (!isWireVisible(points, visible)) continue;
     const { level, contended } = resolve(w.a);
-    const netHit = netOf != null && highlightNet != null && netOf.get(w.a) === highlightNet;
+    const netHit = netOf != null && glowNet != null && netOf.get(w.a) === glowNet;
+    const sticky = highlightNet != null && netHit;
     const emphasis =
       w.id === editor.selectedWireId
         ? 'selected'
-        : netHit
+        : sticky
           ? 'net'
-          : editor.tool.kind === 'select' && w.id === editor.hoveredWireId
+          : netHit
             ? 'hover'
-            : 'none';
+            : editor.tool.kind === 'select' && w.id === editor.hoveredWireId
+              ? 'hover'
+              : 'none';
     drawWire(ctx, points, levelColor(level, contended), contended, emphasis);
   }
 
@@ -301,6 +306,29 @@ export function draw(
     ctx.strokeStyle = COLOR.marqueeStroke;
     ctx.lineWidth = 1 / camera.scale;
     ctx.strokeRect(x, y, w, h);
+  }
+
+  // Net name chip near the cursor (hover wire/pin, or sticky H highlight).
+  const netLabel = editor.formatNetName(glowNet);
+  if (netLabel && !editor.dragging) {
+    const lx = editor.mouse.x + 12 / camera.scale;
+    const ly = editor.mouse.y - 10 / camera.scale;
+    ctx.save();
+    ctx.font = `${11 / camera.scale}px ui-monospace, "SF Mono", monospace`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const pad = 4 / camera.scale;
+    const tw = ctx.measureText(netLabel).width;
+    const th = 14 / camera.scale;
+    ctx.fillStyle = 'rgba(18, 20, 28, 0.88)';
+    ctx.strokeStyle = glowNet === highlightNet ? '#5ec8ff' : COLOR.hover;
+    ctx.lineWidth = 1 / camera.scale;
+    roundRectPath(ctx, lx - pad, ly - th / 2, tw + pad * 2, th, 3 / camera.scale);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#e7e9ef';
+    ctx.fillText(netLabel, lx, ly);
+    ctx.restore();
   }
 
   ctx.restore();

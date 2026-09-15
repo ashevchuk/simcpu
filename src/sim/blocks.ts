@@ -2299,8 +2299,8 @@ function buildZ80CpuInner(
   // I/R — real Z80's interrupt-vector and refresh registers. Built here
   // alongside the other CPU state; `LD I,A`/`LD R,A`/`LD A,I`/`LD A,R`
   // (see "x=01, z=7, y=0..3" below) are the only ops that touch them.
-  // No auto-increment of R on FETCH, and no IFF2 into P/V on LD A,I/R —
-  // see Known Simplifications.
+  // No auto-increment of R on FETCH. P/V on LD A,I/R copies IFF2 (soft parity).
+  // NMI / IM0 / IM2 remain Known Simplifications.
   const regI = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 3800 });
   const regR = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 4600 });
   // IX — real Z80's first index register, as two 8-bit halves (same shape
@@ -4819,8 +4819,7 @@ function buildZ80CpuInner(
   // x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R (real 0xED
   // 0x47/0x4F/0x57/0x5F). Collides with unprefixed `LD y,A`
   // (`z=7`) the same way RRD/RLD (y=4/5) does. Single PHASE4 after the
-  // ED prefix: copy A→I/R, or I/R→A with S/Z/H=0/N=0/P/V=0 (IFF2 exists
-  // for thin IM1 IRQ but is not copied into P/V here — Known Simplifications)
+  // ED prefix: copy A→I/R, or I/R→A with S/Z/H=0/N=0/P/V←IFF2 (soft parity)
   // / X/Y from the transferred byte; C held.
   const isLdIA = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5680 });
   const isLdIAStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5680 });
@@ -10202,8 +10201,7 @@ function buildZ80CpuInner(
   wire(parent, inRcPChain, inRcPBit.in);
 
   // LD A,I / LD A,R flags (see "x=01, z=7, y=0..3") — off the source
-  // register (mux I vs R by LDAR_NOW). P/V is forced 0: real Z80 copies
-  // IFF2 here, and this project has no interrupt flip-flops yet.
+  // register (mux I vs R by LDAR_NOW). P/V copies IFF2 (soft parity).
   const ldAIrByte: Pin[] = [];
   for (let i = 0; i < 8; i++) {
     const mux = makeChipInstance(parent, muxDef, { x: pos.x - 1200, y: pos.y - 5720 + i * 20 });
@@ -10434,15 +10432,14 @@ function buildZ80CpuInner(
       wire(parent, inRcFreshBit[i]!, inRcFMux.pins[muxDef.ports[2]!]!);
       cLayerIn = inRcFMux.pins[muxDef.ports[3]!]!;
     }
-    // LD A,I / LD A,R (see "x=01, z=7, y=0..3") — every bit but C; P/V=0
-    // (IFF2 absent).
+    // LD A,I / LD A,R (see "x=01, z=7, y=0..3") — every bit but C; P/V←IFF2.
     if (i !== 0) {
       const ldAIrFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8383, y: pos.y + 2227 + i * 100 });
       tieToLabel('LDAIR_NOW', ldAIrFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8283, y: pos.y + 2227 + i * 100 });
       wire(parent, cLayerIn, ldAIrFMux.pins[muxDef.ports[1]!]!);
       const ldAIrFreshBit: Record<number, Pin> = {
         1: gnd4,
-        2: gnd4, // P/V ← IFF2, inert without IRQ
+        2: iff2.q[0]!, // P/V ← IFF2 (soft parity)
         3: ldAIrByte[3]!,
         4: gnd4,
         5: ldAIrByte[5]!,
