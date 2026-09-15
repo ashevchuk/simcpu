@@ -48,6 +48,7 @@ export interface TransistorComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pins: {
     gate: Pin;
     drain: Pin;
@@ -62,6 +63,7 @@ export interface SourceComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pins: { out: Pin };
 }
 
@@ -72,6 +74,7 @@ export interface InputComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pins: { out: Pin };
 }
 
@@ -87,6 +90,7 @@ export interface ButtonComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pins: { out: Pin };
 }
 
@@ -99,6 +103,7 @@ export interface LedComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pins: { in: Pin };
 }
 
@@ -123,6 +128,7 @@ export interface ClockComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pins: { out: Pin; trig: Pin };
 }
 
@@ -135,6 +141,7 @@ export interface AnalyzerComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pinOrder: string[];
   /** ch0 .. ch{channelCount-1} */
   pins: Record<string, Pin>;
@@ -157,6 +164,7 @@ export interface ProbeComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pins: { in: Pin };
 }
 
@@ -173,11 +181,18 @@ export interface LabelComponent {
  * only mark, inside a ChipDef's internal circuit, which internal pin a
  * given external instance pin corresponds to. flatten() (hierarchy.ts)
  * consumes them and drops them from the simulated netlist entirely.
+ *
+ * `dir` is editorial (IN/OUT marker in the editor); electrically every port
+ * is still a bidirectional `io` pin.
  */
+export type PortDir = 'in' | 'out' | 'inout';
+
 export interface PortComponent {
   id: string;
   kind: 'port';
   name: string; // matches one entry of the owning ChipDef's `ports` list
+  /** Editor-facing direction; omitted/legacy loads as `'inout'`. */
+  dir: PortDir;
   pos: Point;
   pins: { io: Pin };
 }
@@ -194,8 +209,20 @@ export interface ChipInstanceComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   /** Port names in stack order (same as ChipDef.ports at place time). */
   pinOrder: string[];
+  /**
+   * Local pin side per port name: -1 = left, +1 = right (from PortDir:
+   * out → right, in/inout → left). Omitted on legacy saves ⇒ all left.
+   */
+  pinSide?: Record<string, -1 | 1>;
+  /** Optional body width override (default CHIP_INSTANCE_WIDTH). */
+  boxWidth?: number;
+  /** Optional silkscreen text override (default ChipDef name). */
+  marking?: string;
+  /** ChipDef.revision when this instance was placed or last dived into. */
+  defRevision?: number;
   pins: Record<string, Pin>; // keyed by port name
 }
 
@@ -233,6 +260,7 @@ export interface RamComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pinOrder: string[];
   pins: Record<string, Pin>;
 }
@@ -251,6 +279,7 @@ export interface RomComponent {
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
+  mirrorY: boolean;
   pinOrder: string[];
   pins: Record<string, Pin>;
 }

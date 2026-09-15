@@ -14,15 +14,17 @@ function classicScriptsForFileProtocol(): Plugin {
     transformIndexHtml(html) {
       // Modules are deferred; a classic <script> in <head> would run before
       // #stage exists and crash main.ts. `defer` restores module timing.
+      // Cache-bust query so file:// reloads pick up a fresh app.js.
+      const v = Date.now().toString(36);
       return html
         .replace(/<link rel="modulepreload"[^>]*>\s*/g, '')
         .replace(
           /<script type="module" crossorigin src="([^"]+)"><\/script>/g,
-          '<script src="$1" defer><\/script>',
+          `<script src="$1?v=${v}" defer><\/script>`,
         )
         .replace(
           /<script type="module" src="([^"]+)"><\/script>/g,
-          '<script src="$1" defer><\/script>',
+          `<script src="$1?v=${v}" defer><\/script>`,
         );
     },
   };

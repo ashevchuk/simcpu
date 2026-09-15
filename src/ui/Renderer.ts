@@ -1,7 +1,7 @@
-import { bodyEdgeToward, getOrientation } from '../sim/orientation.js';
+import { bodyEdgeToward, getOrientation, transformOffset } from '../sim/orientation.js';
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
-import { CHIP_INSTANCE_WIDTH, chipInstanceHeight, ramPortCount, romPortCount } from '../sim/library.js';
+import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from '../sim/library.js';
 import type { Component, Level, Pin, Point } from '../sim/types.js';
 import type { Camera } from './Camera.js';
 import type { Editor } from './Editor.js';
@@ -61,12 +61,12 @@ export function componentRadius(c: Component): { rx: number; ry: number } {
   switch (c.kind) {
     case 'transistor':
       return { rx: 30, ry: 34 };
+    case 'button':
+      return { rx: 28, ry: 26 };
     case 'source':
-      return { rx: 26, ry: 26 };
+      return { rx: 28, ry: 30 };
     case 'input':
       return { rx: 22, ry: 20 };
-    case 'button':
-      return { rx: 24, ry: 22 };
     case 'clock':
       return { rx: 32, ry: 26 };
     case 'analyzer':
@@ -82,7 +82,7 @@ export function componentRadius(c: Component): { rx: number; ry: number } {
     case 'port':
       return { rx: 40, ry: 28 };
     case 'chip':
-      return { rx: CHIP_INSTANCE_WIDTH / 2 + 20, ry: chipInstanceHeight(Object.keys(c.pins).length) / 2 + 20 };
+      return { rx: chipBodyWidth(c) / 2 + 20, ry: chipBoxHeight(c) / 2 + 20 };
     case 'ram':
       return { rx: CHIP_INSTANCE_WIDTH / 2 + 20, ry: chipInstanceHeight(ramPortCount(c)) / 2 + 20 };
     case 'rom':
@@ -155,6 +155,7 @@ export function draw(
   resolve: LevelResolver,
   editor: Editor,
   library: ChipLibrary,
+  opts?: { softMode?: boolean },
 ): void {
   // Clear the full backing store in device pixels (identity transform), not
   // just the CSS viewport rect. Avoids a 1-px stale strip when
@@ -170,6 +171,12 @@ export function draw(
   ctx.translate(viewportW / 2, viewportH / 2);
   ctx.scale(camera.scale, camera.scale);
   ctx.translate(-camera.x, -camera.y);
+
+  // Soft Run: mute live wire/pin colors so a quiet schematic is not mistaken
+  // for a stuck gate sim — levels are often Z while the soft CPU runs in RAM.
+  if (opts?.softMode) {
+    ctx.globalAlpha = 0.55;
+  }
 
   drawGrid(ctx, camera, viewportW, viewportH);
 
@@ -210,7 +217,7 @@ export function draw(
     const netHit = netOf != null && glowNet != null && netOf.get(w.a) === glowNet;
     const sticky = highlightNet != null && netHit;
     const emphasis =
-      w.id === editor.selectedWireId
+      w.id === editor.selectedWireId || editor.selectedWireIds.has(w.id)
         ? 'selected'
         : sticky
           ? 'net'
@@ -266,16 +273,22 @@ export function draw(
     drawComponent(ctx, c, resolve, selected, hovered, library);
   }
 
-  // Hovered pin, while the wire tool is actually usable (placing or completing a wire).
+  // Hovered pin magnet while the wire tool is active (placing or completing).
   if (editor.tool.kind === 'wire' && editor.hoveredPinId) {
     const p = pinById.get(editor.hoveredPinId);
     if (p) {
       ctx.save();
-      ctx.strokeStyle = COLOR.hover;
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = COLOR.selected;
+      ctx.fillStyle = 'rgba(245, 197, 24, 0.18)';
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(p.pos.x, p.pos.y, 7, 0, Math.PI * 2);
+      ctx.arc(p.pos.x, p.pos.y, 10, 0, Math.PI * 2);
+      ctx.fill();
       ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(p.pos.x, p.pos.y, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = COLOR.selected;
+      ctx.fill();
       ctx.restore();
     }
   }
@@ -285,7 +298,7 @@ export function draw(
   // would just be noise.
   for (const w of circuit.wires.values()) {
     if (!w.waypoints || w.waypoints.length === 0) continue;
-    const isSelected = w.id === editor.selectedWireId;
+    const isSelected = editor.selectedWireIds.has(w.id);
     const isHovered = editor.tool.kind === 'select' && w.id === editor.hoveredWireId;
     if (!isSelected && !isHovered) continue;
     ctx.fillStyle = isSelected ? COLOR.selected : COLOR.hover;
@@ -309,8 +322,34 @@ export function draw(
   }
 
   // Net name chip near the cursor (hover wire/pin, or sticky H highlight).
-  const netLabel = editor.formatNetName(glowNet);
-  if (netLabel && !editor.dragging) {
+  // Prefer pin name+net when a pin is under the cursor.
+  let tip = '';
+  if (editor.hoveredPinId && !editor.dragging) {
+    const pin = pinById.get(editor.hoveredPinId);
+    if (pin) {
+      const nets = circuit.computeNets();
+      const net = editor.formatNetName(nets.netOf.get(pin.id) ?? null);
+      const { level, contended } = resolve(pin.id);
+      const lvl = contended ? 'X' : level === 'Z' ? 'Z' : String(level);
+      tip = net ? `${pin.name} · ${net} · ${lvl}` : `${pin.name} · ${lvl}`;
+    }
+  }
+  if (!tip) tip = editor.formatNetName(glowNet) ?? '';
+  // Chip dive preview while hovering an instance in select tool.
+  if (
+    !tip &&
+    editor.tool.kind === 'select' &&
+    editor.hoveredComponentId &&
+    !editor.dragging
+  ) {
+    const hc = circuit.components.get(editor.hoveredComponentId);
+    if (hc?.kind === 'chip' && library.has(hc.defId)) {
+      const def = library.get(hc.defId);
+      const edited = (def.revision ?? 0) !== (hc.defRevision ?? 0);
+      tip = `${def.name} · ${def.ports.length} pins · Dive${edited ? ' · edited' : ''}`;
+    }
+  }
+  if (tip && !editor.dragging) {
     const lx = editor.mouse.x + 12 / camera.scale;
     const ly = editor.mouse.y - 10 / camera.scale;
     ctx.save();
@@ -318,7 +357,7 @@ export function draw(
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     const pad = 4 / camera.scale;
-    const tw = ctx.measureText(netLabel).width;
+    const tw = ctx.measureText(tip).width;
     const th = 14 / camera.scale;
     ctx.fillStyle = 'rgba(18, 20, 28, 0.88)';
     ctx.strokeStyle = glowNet === highlightNet ? '#5ec8ff' : COLOR.hover;
@@ -327,11 +366,34 @@ export function draw(
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = '#e7e9ef';
-    ctx.fillText(netLabel, lx, ly);
+    ctx.fillText(tip, lx, ly);
     ctx.restore();
   }
 
   ctx.restore();
+
+  if (opts?.softMode) {
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    const label = 'SOFT RUN';
+    const padX = 8;
+    const padY = 5;
+    const tw = ctx.measureText(label).width;
+    const x = 10;
+    const y = 10;
+    ctx.fillStyle = 'rgba(40, 28, 12, 0.82)';
+    ctx.strokeStyle = '#e6a23c';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(x, y, tw + padX * 2, 12 + padY * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#e6a23c';
+    ctx.fillText(label, x + padX, y + padY);
+    ctx.restore();
+  }
 }
 
 /** Adaptive dot grid: keeps on-screen dot spacing in a readable range regardless of zoom. */
@@ -435,30 +497,94 @@ export function formatPinLabel(name: string): string {
   return name.length <= 6 ? name.toUpperCase() : name;
 }
 
-/** Pin name drawn just inside the body, toward the center from the pin. */
+/**
+ * Chip / RAM / ROM body title — silkscreen-style, like a real IC package:
+ * text always runs along the long axis of the body (vertical on tall
+ * left/right-pin packages, horizontal on wide ones), centered on the die.
+ */
+function drawChipMarking(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  w: number,
+  h: number,
+  text: string,
+): void {
+  ctx.save();
+  ctx.fillStyle = COLOR.text;
+  ctx.font = '10px ui-monospace, "SF Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.translate(cx, cy);
+  if (h > w) {
+    // Tall package (DIP-like): read upward along the body.
+    ctx.rotate(-Math.PI / 2);
+  }
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+/**
+ * Pin name just inside the body beside the pin. Offset is axis-aligned
+ * toward the body center (not along the pin→center ray) so tall left/right
+ * stacks keep labels level with each pin instead of sliding onto the pad.
+ */
 function drawBodyPinLabel(
   ctx: CanvasRenderingContext2D,
   pin: Pin,
   cx: number,
   cy: number,
+  labelText?: string,
+  bodyW = CHIP_INSTANCE_WIDTH,
+  bodyH?: number,
 ): void {
-  const dx = cx - pin.pos.x;
-  const dy = cy - pin.pos.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const lx = pin.pos.x + (dx / len) * 12;
-  const ly = pin.pos.y + (dy / len) * 12;
+  const halfW = bodyW / 2;
+  const halfH = bodyH != null ? bodyH / 2 : halfW;
+  const distL = Math.abs(cx - halfW - pin.pos.x);
+  const distR = Math.abs(cx + halfW - pin.pos.x);
+  const distT = Math.abs(cy - halfH - pin.pos.y);
+  const distB = Math.abs(cy + halfH - pin.pos.y);
+  const minH = Math.min(distL, distR);
+  const minV = Math.min(distT, distB);
+
+  const inset = 10;
+  let lx = pin.pos.x;
+  let ly = pin.pos.y;
+  let align: CanvasTextAlign = 'center';
+  let baseline: CanvasTextBaseline = 'middle';
+
+  if (minH <= minV) {
+    // Left / right edge — label sits inward on the same row as the pin.
+    if (distL <= distR) {
+      lx = pin.pos.x + inset;
+      align = 'left';
+    } else {
+      lx = pin.pos.x - inset;
+      align = 'right';
+    }
+  } else {
+    // Top / bottom edge — label sits inward on the same column.
+    if (distT <= distB) {
+      ly = pin.pos.y + inset;
+      baseline = 'top';
+    } else {
+      ly = pin.pos.y - inset;
+      baseline = 'bottom';
+    }
+  }
+
   ctx.save();
   ctx.font = '9px ui-monospace, "SF Mono", monospace';
-  ctx.textAlign = Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 'left' : 'right') : 'center';
-  ctx.textBaseline = Math.abs(dy) > Math.abs(dx) ? (dy > 0 ? 'top' : 'bottom') : 'middle';
+  ctx.textAlign = align;
+  ctx.textBaseline = baseline;
   ctx.fillStyle = COLOR.textDim;
-  ctx.fillText(formatPinLabel(pin.name), lx, ly);
+  ctx.fillText(labelText ?? formatPinLabel(pin.name), lx, ly);
   ctx.restore();
 }
 
 /**
  * Classic enhancement-mode MOSFET in local coords (gate left, D/S vertical),
- * then oriented via rotation / mirrorX on the canvas transform.
+ * then oriented via rotation / flip H/V on the canvas transform.
  */
 function drawMosfetSymbol(
   ctx: CanvasRenderingContext2D,
@@ -467,7 +593,7 @@ function drawMosfetSymbol(
   selected: boolean,
   hovered: boolean,
 ): void {
-  const { rotation, mirrorX } = getOrientation(c);
+  const { rotation, mirrorX, mirrorY } = getOrientation(c);
   const chanX = 2;
   const gatePlateX = -8;
   const gateX = -28;
@@ -480,6 +606,7 @@ function drawMosfetSymbol(
   ctx.save();
   ctx.translate(c.pos.x, c.pos.y);
   if (mirrorX) ctx.scale(-1, 1);
+  if (mirrorY) ctx.scale(1, -1);
   ctx.rotate((rotation * Math.PI) / 180);
 
   if (selected || hovered) {
@@ -645,20 +772,65 @@ function drawComponent(
     }
     case 'source': {
       const { x, y } = c.pos;
-      const w = 32;
-      const h = 16;
-      const stroke = c.value === 1 ? COLOR.wireHigh : COLOR.wireLow;
-      if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 6, ringColor);
-      ctx.fillStyle = COLOR.body;
-      roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 6);
-      ctx.fill();
+      const isVcc = c.value === 1;
+      const stroke = isVcc ? COLOR.wireHigh : COLOR.wireLow;
+      const { rotation, mirrorX, mirrorY } = getOrientation(c);
+      if (ringColor) {
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.strokeStyle = ringColor;
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.arc(x, y, 14, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+      // Draw the whole rail symbol in local space so rotate / flip moves
+      // the bar + stem together (not just the pin stub).
+      ctx.save();
+      ctx.translate(x, y);
+      if (mirrorX) ctx.scale(-1, 1);
+      if (mirrorY) ctx.scale(1, -1);
+      ctx.rotate((rotation * Math.PI) / 180);
       ctx.strokeStyle = bodyStroke(stroke);
-      ctx.lineWidth = selected || hovered ? 2 : 1.3;
-      ctx.stroke();
-      stubPin(x, y, w / 2, h / 2, c.pins.out);
-      drawPinDot(ctx, c.pins.out, resolve);
+      ctx.lineWidth = selected || hovered ? 2 : 1.4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      if (isVcc) {
+        // Classic VCC: pin at +Y, stem up into a horizontal rail bar.
+        ctx.beginPath();
+        ctx.moveTo(0, 15);
+        ctx.lineTo(0, 2);
+        ctx.lineTo(0, -6);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(-10, -6);
+        ctx.lineTo(10, -6);
+        ctx.stroke();
+      } else {
+        // Earth symbol: pin below, three bars above it.
+        ctx.beginPath();
+        ctx.moveTo(0, 15);
+        ctx.lineTo(0, 6);
+        ctx.stroke();
+        for (let i = 0; i < 3; i++) {
+          const half = 11 - i * 3.5;
+          const yy = 6 - i * 4;
+          ctx.beginPath();
+          ctx.moveTo(-half, yy);
+          ctx.lineTo(half, yy);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+      // Keep the name upright; place it opposite the pin.
+      const labelOff = transformOffset(0, isVcc ? -12 : -11, rotation, mirrorX, mirrorY);
       ctx.fillStyle = COLOR.text;
-      ctx.fillText(c.value === 1 ? 'VCC' : 'GND', x, y);
+      ctx.font = '9px ui-monospace, "SF Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(isVcc ? 'VCC' : 'GND', x + labelOff.x, y + labelOff.y);
+      drawPinDot(ctx, c.pins.out, resolve);
       break;
     }
     case 'input': {
@@ -680,20 +852,48 @@ function drawComponent(
     }
     case 'button': {
       const { x, y } = c.pos;
-      const w = 28;
-      const h = 24;
       const on = c.value === 1;
-      if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 8, ringColor);
-      ctx.fillStyle = on ? '#4a3520' : '#1a1e28';
-      roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 8);
+      const toggle = c.mode === 'toggle';
+      // Chassis plate
+      const pw = 34;
+      const ph = 30;
+      if (ringColor) glowRect(ctx, x - pw / 2, y - ph / 2, pw, ph, 6, ringColor);
+      ctx.fillStyle = '#151820';
+      roundRectPath(ctx, x - pw / 2, y - ph / 2, pw, ph, 5);
       ctx.fill();
-      ctx.strokeStyle = bodyStroke(on ? COLOR.selected : COLOR.bodyStroke);
-      ctx.lineWidth = selected || hovered ? 2.2 : 1.4;
+      ctx.strokeStyle = bodyStroke(COLOR.bodyStroke);
+      ctx.lineWidth = selected || hovered ? 2 : 1.2;
       ctx.stroke();
-      stubPin(x, y, w / 2, h / 2, c.pins.out);
+      // Raised / pressed circular actuator
+      const r = on ? 8.5 : 10;
+      const cyBtn = on ? y - 1 : y - 3;
+      ctx.beginPath();
+      ctx.arc(x, cyBtn + 1.5, r + 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fill();
+      const grad = ctx.createRadialGradient(x - 2, cyBtn - 2, 1, x, cyBtn, r);
+      if (on) {
+        grad.addColorStop(0, '#f0c040');
+        grad.addColorStop(1, '#a87818');
+      } else {
+        grad.addColorStop(0, '#5a6578');
+        grad.addColorStop(1, '#2a3140');
+      }
+      ctx.beginPath();
+      ctx.arc(x, cyBtn, r, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.strokeStyle = bodyStroke(on ? COLOR.selected : '#8a93a8');
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+      // Mode caption under the bezel
+      ctx.font = '7px ui-monospace, "SF Mono", monospace';
+      ctx.fillStyle = COLOR.textDim;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(toggle ? 'TOG' : 'MOM', x, y + 11);
+      stubPin(x, y, pw / 2, ph / 2, c.pins.out);
       drawPinDot(ctx, c.pins.out, resolve);
-      ctx.fillStyle = COLOR.text;
-      ctx.fillText(c.mode === 'toggle' ? 'T' : 'BTN', x, y);
       break;
     }
     case 'clock': {
@@ -745,7 +945,7 @@ function drawComponent(
         if (!p) continue;
         stubPin(x, y, w / 2, h / 2, p);
         drawPinDot(ctx, p, resolve);
-        drawBodyPinLabel(ctx, p, x, y);
+        drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
       }
       ctx.fillStyle = COLOR.selected;
       ctx.font = '10px ui-monospace, "SF Mono", monospace';
@@ -861,15 +1061,33 @@ function drawComponent(
       ctx.strokeStyle = bodyStroke(COLOR.bodyStroke);
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
+      // Direction chevron: in ←, out →, inout both (diamond alone).
+      const dir = c.dir ?? 'inout';
+      if (dir === 'in' || dir === 'out') {
+        ctx.beginPath();
+        if (dir === 'in') {
+          ctx.moveTo(x + 14, y - 4);
+          ctx.lineTo(x + 8, y);
+          ctx.lineTo(x + 14, y + 4);
+        } else {
+          ctx.moveTo(x - 14, y - 4);
+          ctx.lineTo(x - 8, y);
+          ctx.lineTo(x - 14, y + 4);
+        }
+        ctx.strokeStyle = selected || hovered ? COLOR.selected : COLOR.textDim;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
       drawPinDot(ctx, c.pins.io, resolve);
       ctx.fillStyle = selected || hovered ? COLOR.selected : COLOR.textDim;
-      ctx.fillText(c.name, x, y - 16);
+      const tag = dir === 'in' ? 'IN ' : dir === 'out' ? 'OUT ' : '';
+      ctx.fillText(`${tag}${c.name}`, x, y - 16);
       break;
     }
     case 'chip': {
       const { x, y } = c.pos;
-      const w = CHIP_INSTANCE_WIDTH;
-      const h = chipInstanceHeight(Object.keys(c.pins).length);
+      const w = chipBodyWidth(c);
+      const h = chipBoxHeight(c);
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 8, ringColor);
       const grad = ctx.createLinearGradient(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
       grad.addColorStop(0, COLOR.chipBody);
@@ -883,17 +1101,33 @@ function drawComponent(
       for (const p of Object.values(c.pins) as Pin[]) {
         stubPin(x, y, w / 2, h / 2, p);
         drawPinDot(ctx, p, resolve);
-        drawBodyPinLabel(ctx, p, x, y);
+        let label: string | undefined;
+        if (library.has(c.defId)) {
+          for (const ic of library.get(c.defId).circuit.components.values()) {
+            if (ic.kind === 'port' && ic.name === p.name) {
+              const dir = ic.dir ?? 'inout';
+              if (dir === 'in') label = `›${formatPinLabel(p.name)}`;
+              else if (dir === 'out') label = `${formatPinLabel(p.name)}›`;
+              break;
+            }
+          }
+        }
+        drawBodyPinLabel(ctx, p, x, y, label, w, h);
       }
       ctx.fillStyle = COLOR.text;
-      const name = library.has(c.defId) ? library.get(c.defId).name : '?';
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.font = '10px ui-monospace, "SF Mono", monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(name, 0, 0);
-      ctx.restore();
+      const name =
+        c.marking?.trim() || (library.has(c.defId) ? library.get(c.defId).name : '?');
+      drawChipMarking(ctx, x, y, w, h, name);
+      // Shared ChipDef was edited after this instance was placed / last dived.
+      if (library.has(c.defId)) {
+        const rev = library.get(c.defId).revision ?? 0;
+        if (rev !== (c.defRevision ?? 0)) {
+          ctx.fillStyle = COLOR.selected;
+          ctx.beginPath();
+          ctx.arc(x + w / 2 - 8, y - h / 2 + 8, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
       break;
     }
     case 'ram': {
@@ -913,16 +1147,9 @@ function drawComponent(
       for (const p of Object.values(c.pins) as Pin[]) {
         stubPin(x, y, w / 2, h / 2, p);
         drawPinDot(ctx, p, resolve);
-        drawBodyPinLabel(ctx, p, x, y);
+        drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
       }
-      ctx.fillStyle = COLOR.text;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.font = '10px ui-monospace, "SF Mono", monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`RAM ${1 << c.addrBits}×${c.dataBits}`, 0, 0);
-      ctx.restore();
+      drawChipMarking(ctx, x, y, w, h, `RAM ${1 << c.addrBits}×${c.dataBits}`);
       break;
     }
     case 'rom': {
@@ -942,16 +1169,9 @@ function drawComponent(
       for (const p of Object.values(c.pins) as Pin[]) {
         stubPin(x, y, w / 2, h / 2, p);
         drawPinDot(ctx, p, resolve);
-        drawBodyPinLabel(ctx, p, x, y);
+        drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
       }
-      ctx.fillStyle = COLOR.text;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.font = '10px ui-monospace, "SF Mono", monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`ROM ${1 << c.addrBits}×${c.dataBits}`, 0, 0);
-      ctx.restore();
+      drawChipMarking(ctx, x, y, w, h, `ROM ${1 << c.addrBits}×${c.dataBits}`);
       break;
     }
   }

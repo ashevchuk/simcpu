@@ -5,7 +5,7 @@ import { Circuit } from '../src/sim/Circuit.js';
 import { flatten } from '../src/sim/hierarchy.js';
 import { makeChipInstance, makeInput, wire } from '../src/sim/library.js';
 import { initialState, step } from '../src/sim/solver.js';
-import { seedStandardCells } from '../src/sim/stdcells.js';
+import { pruneDuplicateChipNames, seedStandardCells } from '../src/sim/stdcells.js';
 import type { Level, NetMap, SimState } from '../src/sim/types.js';
 
 function tick(circuit: Circuit, netMap: NetMap, state: SimState, n = 10): SimState {
@@ -35,6 +35,16 @@ function getDef(library: ChipLibrary, name: string): ChipDef {
  * wrong here.
  */
 describe('seedStandardCells — placed chip instances behave like the raw gates they wrap', () => {
+  it('is idempotent by name (session reload must not duplicate Library entries)', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const once = library.list().length;
+    seedStandardCells(library);
+    seedStandardCells(library);
+    expect(library.list().length).toBe(once);
+    const names = library.list().map((d) => d.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
   it('NOT', () => {
     const library = new ChipLibrary();
     seedStandardCells(library);
@@ -164,5 +174,28 @@ describe('seedStandardCells — placed chip instances behave like the raw gates 
     clk.value = 1;
     hop(); // rising edge captures D=1
     expect(levelAt(state, netMap!, inst.pins[def.ports[2]!]!.id)).toBe(1);
+  });
+});
+
+describe('pruneDuplicateChipNames', () => {
+  it('removes unreferenced same-name orphans left by re-seeding', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const not = library.findByName('NOT')!;
+    // Simulate the old bug: register a second NOT with a different id.
+    library.register({
+      id: 'orphan-not',
+      name: 'NOT',
+      ports: [...not.ports],
+      circuit: new Circuit(),
+    });
+    expect(library.list().filter((d) => d.name === 'NOT').length).toBe(2);
+
+    const parent = new Circuit();
+    makeChipInstance(parent, not);
+    const removed = pruneDuplicateChipNames(library, [parent, ...library.list().map((d) => d.circuit)]);
+    expect(removed).toBe(1);
+    expect(library.list().filter((d) => d.name === 'NOT').length).toBe(1);
+    expect(library.has(not.id)).toBe(true);
   });
 });

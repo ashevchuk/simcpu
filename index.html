@@ -29,28 +29,83 @@
 
       #chrome {
         flex: 0 0 auto;
-        z-index: 20;
+        z-index: 5000;
         box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
         position: relative;
       }
-      #menubar, #toolstrip, #breadcrumb {
+      #menubar {
         display: flex;
-        gap: 2px;
+        flex-wrap: wrap;
+        gap: 0;
         align-items: center;
-        padding: 0 10px;
-        background: var(--panel);
+        padding: 0 8px 0 4px;
+        min-height: 32px;
+        background: #12141a;
         border-bottom: 1px solid var(--border);
       }
-      #menubar {
-        gap: 0;
-        padding: 0 6px;
-        min-height: 30px;
-        background: #12141a;
+      #menubar .chrome-sep {
+        width: 1px;
+        height: 18px;
+        background: var(--border);
+        margin: 0 6px;
+        flex-shrink: 0;
       }
-      #toolstrip {
-        gap: 6px;
-        padding: 6px 10px;
-        background: var(--panel);
+      #menubar .tools {
+        display: flex;
+        gap: 3px;
+        align-items: center;
+        flex-shrink: 0;
+      }
+      #menubar .tools button {
+        padding: 3px 8px;
+        font-size: 11px;
+        border-radius: 4px;
+      }
+      #menubar #active-place-hint .tool-label {
+        color: var(--accent);
+        font: 600 11px ui-monospace, monospace;
+        margin: 0 2px;
+      }
+      #menubar #breadcrumb {
+        display: flex;
+        gap: 0;
+        align-items: center;
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        font: 12px ui-monospace, monospace;
+        padding: 0 4px;
+      }
+      #menubar #breadcrumb button {
+        background: none;
+        border: none;
+        padding: 2px 4px;
+        color: var(--text-dim);
+        cursor: pointer;
+        font: inherit;
+        white-space: nowrap;
+      }
+      #menubar #breadcrumb button:hover { color: var(--text); background: none; transform: none; }
+      #menubar #breadcrumb button:last-child { color: var(--accent); cursor: default; }
+      #menubar #breadcrumb button:last-child:hover { color: var(--accent); }
+      #menubar #breadcrumb .crumb-session {
+        color: var(--accent) !important;
+        font-weight: 600;
+        cursor: pointer !important;
+      }
+      #menubar #breadcrumb .crumb-session:hover { filter: brightness(1.1); }
+      #menubar #breadcrumb .crumb-sep { color: #454b5a; flex-shrink: 0; }
+      #status {
+        margin-left: auto;
+        opacity: 0.7;
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 42vw;
+        flex-shrink: 1;
+        min-width: 0;
       }
 
       button {
@@ -112,7 +167,7 @@
         border: 1px solid #303646;
         border-radius: 8px;
         box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.03);
-        z-index: 40;
+        z-index: 5100;
       }
       .menu.open > .menu-panel { display: block; }
       .menu-panel.align-right { left: auto; right: 0; }
@@ -177,45 +232,77 @@
         font: 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
       }
 
-      #toolstrip .group { display: flex; gap: 4px; align-items: center; }
-      #toolstrip .sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
-      #toolstrip .tool-label {
-        color: var(--text-dim);
-        font: 11px ui-monospace, monospace;
-        margin-right: 2px;
-      }
       #active-place-hint .tool-label {
         color: var(--accent);
         font-weight: 600;
       }
-      #status {
-        margin-left: auto;
-        opacity: 0.7;
+      .autosave-status {
+        flex-shrink: 0;
+        margin-left: 10px;
         font: 11px ui-monospace, monospace;
         color: var(--text-dim);
-        white-space: nowrap;
+        min-width: 4.5em;
+        text-align: right;
+        cursor: pointer;
       }
+      .autosave-status[data-state="saving"],
+      .autosave-status[data-state="pending"] { color: var(--accent); }
+      .autosave-status[data-state="saved"] { color: #7dcea0; }
+      .autosave-status[data-state="error"],
+      .autosave-status[data-state="conflict"] { color: #ff6b6b; }
 
-      #breadcrumb {
-        font: 12px ui-monospace, monospace;
-        padding-block: 5px;
+      #watch-strip {
+        display: none;
+        flex-wrap: wrap;
+        gap: 6px 10px;
+        align-items: center;
+        padding: 4px 10px;
         background: var(--panel-2);
-      }
-      #breadcrumb button {
-        background: none; border: none; padding: 2px 4px;
+        border-bottom: 1px solid var(--border);
+        font: 11px ui-monospace, monospace;
         color: var(--text-dim);
+        max-height: 4.5em;
+        overflow: auto;
       }
-      #breadcrumb button:hover { color: var(--text); background: none; }
-      #breadcrumb button:last-child { color: var(--accent); cursor: default; }
-      #breadcrumb button:last-child:hover { color: var(--accent); }
-      #breadcrumb .crumb-sep { color: #454b5a; }
+      #watch-strip.visible { display: flex; }
+      #watch-strip .watch-label {
+        color: var(--text-dim);
+        margin-right: 4px;
+      }
+      #watch-strip .watch-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 6px;
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        background: var(--panel);
+      }
+      #watch-strip .watch-name { color: var(--text); }
+      #watch-strip .watch-lvl {
+        font-weight: 600;
+        min-width: 1.2em;
+        text-align: center;
+      }
+      #watch-strip .watch-lvl[data-lvl="1"] { color: #7dcea0; }
+      #watch-strip .watch-lvl[data-lvl="0"] { color: #ff8e8e; }
+      #watch-strip .watch-lvl[data-lvl="Z"] { color: var(--text-dim); }
+      #watch-strip .watch-lvl[data-lvl="X"] { color: #e6c07b; }
 
       #workspace {
+        position: relative;
         display: flex;
         flex: 1 1 auto;
         min-height: 0;
         overflow: hidden;
       }
+      #status.clickable {
+        cursor: pointer;
+        opacity: 1;
+        color: #e6c07b;
+        text-decoration: underline dotted;
+      }
+      #status.clickable:hover { color: var(--accent); }
       #stage {
         position: relative;
         flex: 1 1 auto;
@@ -233,21 +320,105 @@
         flex-wrap: wrap;
         gap: 6px;
         align-items: center;
+        flex: 0 0 auto;
       }
-      .memory-editor-toolbar input, .memory-editor-grid {
+      .memory-editor-toolbar input {
         background: var(--panel-2);
         border: 1px solid var(--border);
         color: var(--text);
         border-radius: 4px;
         font: 12px ui-monospace, monospace;
+        padding: 3px 6px;
       }
-      .memory-editor-grid {
+      .hex-head, .hex-row {
+        display: grid;
+        grid-template-columns: 3.2em minmax(0, 1fr) 9.6em;
+        gap: 8px;
+        align-items: center;
+        font: 12px/22px ui-monospace, 'SF Mono', monospace;
+        user-select: none;
         width: 100%;
-        min-height: 220px;
-        resize: vertical;
-        padding: 8px;
-        line-height: 1.35;
+        box-sizing: border-box;
       }
+      .hex-head {
+        flex: 0 0 auto;
+        color: var(--text-dim);
+        border-bottom: 1px solid var(--border);
+        padding: 0 6px 4px;
+      }
+      .hex-view {
+        position: relative;
+        flex: 1 1 auto;
+        min-height: 140px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        background: #0e1016;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        outline: none;
+      }
+      .hex-view:focus {
+        border-color: #3d4658;
+        box-shadow: inset 0 0 0 1px rgba(245, 197, 24, 0.25);
+      }
+      .hex-spacer { width: 1px; pointer-events: none; }
+      .hex-rows {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+      }
+      .hex-row {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 22px;
+        padding: 0 6px;
+        box-sizing: border-box;
+      }
+      .hex-row:hover { background: rgba(255, 255, 255, 0.03); }
+      .hex-addr {
+        color: #7a8499;
+        text-align: right;
+      }
+      .hex-bytes, .hex-asc {
+        display: flex;
+        min-width: 0;
+        gap: 0;
+        letter-spacing: 0;
+      }
+      .hex-bytes { justify-content: space-between; }
+      .hex-b {
+        flex: 1 1 0;
+        min-width: 0;
+        text-align: center;
+        color: #e7e9ef;
+        border-radius: 3px;
+        cursor: default;
+      }
+      .hex-b:nth-child(8) { margin-right: 0.45em; }
+      .hex-asc {
+        justify-content: space-between;
+        width: 9.6em;
+        flex-shrink: 0;
+      }
+      .hex-a {
+        flex: 1 1 0;
+        min-width: 0;
+        text-align: center;
+        color: #9aa1b3;
+        border-radius: 2px;
+      }
+      .hex-b.sel, .hex-a.sel {
+        background: var(--accent);
+        color: var(--accent-ink);
+        font-weight: 600;
+      }
+      .hex-b.hi {
+        outline: 1px solid #fff3;
+        outline-offset: -1px;
+      }
+      .float-win.memory-editor .lab-panel-status { flex: 0 0 auto; }
       .la-channels { display: flex; flex-direction: column; gap: 2px; font: 11px ui-monospace, monospace; }
       .la-channel-row { display: flex; justify-content: space-between; align-items: center; }
       .la-channel-row button { background: transparent; border: none; color: var(--text-dim); cursor: pointer; }
@@ -418,15 +589,42 @@
             <button type="button" class="menu-item" id="import-project" title="Replace everything with a project JSON file">
               Import project…
             </button>
+            <button type="button" class="menu-item" id="open-examples" title="Load a built-in demo schematic (project JSON)">
+              Open examples…
+            </button>
             <div class="menu-sep"></div>
             <button type="button" class="menu-item" id="export-chip" title="Select one chip instance, then download its definition (and every chip it depends on) as a JSON file">
               Export chip…
+            </button>
+            <button type="button" class="menu-item" id="export-selection-chip" title="Fold the selection into a chip and download its JSON (Ctrl+Shift+E)">
+              Export selection as chip…
             </button>
             <button type="button" class="menu-item" id="import-chip" title="Add a chip from a JSON file to this session's palette">
               Import chip…
             </button>
             <div class="menu-sep"></div>
+            <button type="button" class="menu-item" id="export-png" title="Download the current view as a PNG image">
+              Export PNG…
+            </button>
+            <button type="button" class="menu-item" id="export-svg" title="Download a simplified SVG of the schematic">
+              Export SVG…
+            </button>
+            <div class="menu-sep"></div>
+            <div class="menu-section">Sessions</div>
+            <button type="button" class="menu-item" id="session-switch" title="Switch browser session slot">
+              Switch session…
+            </button>
+            <button type="button" class="menu-item" id="session-rename" title="Rename the active session">
+              Rename session…
+            </button>
+            <button type="button" class="menu-item" id="session-new" title="Save current work and open a new empty session (max 3)">
+              New session…
+            </button>
+            <div class="menu-sep"></div>
             <button type="button" class="menu-item" id="clear">Clear circuit…</button>
+            <button type="button" class="menu-item" id="reset-session" title="Clear all browser sessions and reload the demo schematic">
+              Reset all sessions…
+            </button>
           </div>
         </div>
 
@@ -450,6 +648,9 @@
             </button>
             <button type="button" class="menu-item" data-tool="input" data-key="8" title="Place a toggleable input (8)">
               Input<span class="kbd">8</span>
+            </button>
+            <button type="button" class="menu-item" data-tool="port" data-key="o" title="Place a chip I/O port as p0, p1… (O). Shift+O prompts for a name or bus D[7:0].">
+              Port<span class="kbd">O</span>
             </button>
             <button type="button" class="menu-item" data-tool="button" data-key="b" title="Place a pushbutton — click to pulse (B)">
               Button<span class="kbd">B</span>
@@ -532,27 +733,60 @@
             <button type="button" class="menu-item" id="fold" title="Fold selection into a reusable chip (Ctrl+G)">
               Fold selection…<span class="kbd">⌃G</span>
             </button>
+            <button type="button" class="menu-item" id="unfold" title="Unfold selected chip instance(s) back into this level (Ctrl+Shift+G)">
+              Unfold chip…<span class="kbd">⌃⇧G</span>
+            </button>
+            <div class="menu-sep"></div>
+            <button type="button" class="menu-item" id="find" title="Find net / port / chip / label (Ctrl+F)">
+              Find…<span class="kbd">⌃F</span>
+            </button>
+            <button type="button" class="menu-item" id="rename-net" title="Name or merge the highlighted/selected net via a label (Ctrl+R)">
+              Rename net…<span class="kbd">⌃R</span>
+            </button>
+            <button type="button" class="menu-item" id="duplicate" title="Duplicate selection with offset (Ctrl+D)">
+              Duplicate<span class="kbd">⌃D</span>
+            </button>
           </div>
         </div>
-      </div>
 
-      <div id="toolstrip">
-        <span class="tool-label">Tools</span>
-        <div class="group">
+        <div class="menu" data-menu="help">
+          <button type="button" class="menu-trigger">Help</button>
+          <div class="menu-panel">
+            <button type="button" class="menu-item" id="help-cheatsheet" title="Keyboard shortcuts">
+              Keyboard shortcuts…<span class="kbd">?</span>
+            </button>
+            <button type="button" class="menu-item" id="help-tutorial" title="Load the D-latch walkthrough example">
+              Tutorial (latch)…
+            </button>
+            <div class="menu-sep"></div>
+            <div class="menu-empty">Press ? anytime for the cheat sheet</div>
+          </div>
+        </div>
+
+        <span class="chrome-sep" aria-hidden="true"></span>
+        <div class="tools" role="toolbar" aria-label="Tools">
           <button data-tool="select" data-key="1" title="Select / move / toggle inputs (1)">select</button>
           <button data-tool="pan" data-key="2" title="Pan — or hold Space / right-drag (2)">pan</button>
           <button data-tool="wire" data-key="3" title="Draw a wire between two pins (3)">wire</button>
+          <span class="chrome-sep" aria-hidden="true"></span>
+          <button type="button" id="sim-run" title="Run simulation / soft machine">Run</button>
+          <button type="button" id="sim-pause" title="Pause simulation">Pause</button>
+          <button type="button" id="sim-step" title="Step one sim tick (or one soft instruction)">Step</button>
+          <div id="active-place-hint" hidden>
+            <span class="tool-label" id="active-tool-name"></span>
+          </div>
         </div>
-        <span class="sep"></span>
-        <div class="group" id="active-place-hint" hidden>
-          <span class="tool-label" id="active-tool-name"></span>
-        </div>
+
+        <span class="chrome-sep" aria-hidden="true"></span>
+        <div id="breadcrumb" aria-label="Session and hierarchy"></div>
+
         <div id="status"></div>
+        <span id="autosave-status" class="autosave-status" title="Click to export session JSON"></span>
       </div>
     </div>
     <input type="file" id="import-project-file" accept="application/json" hidden />
     <input type="file" id="import-chip-file" accept="application/json" hidden />
-    <div id="breadcrumb"></div>
+    <div id="watch-strip" aria-label="Probe watch list"></div>
     <div id="workspace">
       <div id="stage">
         <canvas id="canvas"></canvas>
@@ -563,7 +797,7 @@
           <button id="zoom-100" title="Reset to 100%">1:1</button>
           <button id="zoom-fit" title="Fit everything in view">fit</button>
         </div>
-        <div id="hint">Place · Insert · Inspector · R/M rotate · ⌃Z undo · ⌃C/V copy</div>
+        <div id="hint">R/⇧R rotate · M/⇧M flip · T tidy · ⌃Z/Y undo/redo · ? help · ⌃G fold · Run/Pause/Step</div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -1,7 +1,10 @@
 import type { ChipDef, ChipLibrary } from './ChipLibrary.js';
 import { bumpStructureVersion, Circuit, currentStructureVersion, GLOBAL_NET_NAMES, nextId } from './Circuit.js';
-import { makeChipInstance, makeInput, makePort, makeProbe, makeSource } from './library.js';
+import { makeChipInstance, makeInput, makePort, makeProbe, makeSource, pinSidesFromDef } from './library.js';
 import { tidyLibraryCircuit } from './labelWires.js';
+import { orthoWaypoints } from './wireRoute.js';
+import { importChipDef, serializeChipDef } from './serialize.js';
+import { applyPinLayout } from './orientation.js';
 import type {
   ButtonComponent,
   ChipInstanceComponent,
@@ -10,6 +13,7 @@ import type {
   InputComponent,
   Pin,
   Point,
+  PortComponent,
   SourceComponent,
 } from './types.js';
 
@@ -17,6 +21,23 @@ export interface FoldResult {
   def: ChipDef;
   instance: ChipInstanceComponent;
 }
+
+const UNFOLD_ID_PREFIX: Record<Component['kind'], string> = {
+  transistor: 't',
+  source: 'src',
+  input: 'in',
+  button: 'btn',
+  led: 'led',
+  clock: 'clk',
+  analyzer: 'la',
+  tty: 'tty',
+  probe: 'probe',
+  label: 'lbl',
+  port: 'port',
+  chip: 'chip',
+  ram: 'ram',
+  rom: 'rom',
+};
 
 /**
  * Convenience wrapper around fold() for building a ChipDef entirely in
@@ -76,10 +97,14 @@ export function foldExposing(
     for (const c of def.circuit.components.values()) {
       if (c.kind !== 'port') continue;
       if (nets.netOf.get(c.pins.io.id) !== net) continue;
-      if (c.name === want) break;
+      if (c.name === want) {
+        c.dir = exp.isOutput ? 'out' : 'in';
+        break;
+      }
       const idx = def.ports.indexOf(c.name);
       if (idx >= 0) def.ports[idx] = want;
       c.name = want;
+      c.dir = exp.isOutput ? 'out' : 'in';
       break;
     }
   }
@@ -139,12 +164,14 @@ function layoutCmosPrimitivePorts(def: ChipDef): void {
     if (isOut) {
       const y = target?.y ?? (minY + maxY) / 2;
       c.pos = { x: maxX + 72, y };
+      c.dir = 'out';
     } else {
       const idx = inputPorts.indexOf(c.name);
       const y =
         target?.y ??
         minY + ((idx >= 0 ? idx : 0) + 0.5) * ((maxY - minY) / Math.max(inputPorts.length, 1));
       c.pos = { x: minX - 72, y };
+      c.dir = 'in';
     }
     c.pins.io.pos = { x: c.pos.x, y: c.pos.y };
   }
@@ -204,6 +231,12 @@ export function renamePort(
       pin.name = newName;
       delete c.pins[oldName];
       c.pins[newName] = pin;
+      const orderIdx = c.pinOrder.indexOf(oldName);
+      if (orderIdx !== -1) c.pinOrder[orderIdx] = newName;
+      if (c.pinSide && oldName in c.pinSide) {
+        c.pinSide[newName] = c.pinSide[oldName]!;
+        delete c.pinSide[oldName];
+      }
     }
   }
   // None of the mutations above go through Circuit's own tracked methods
@@ -221,16 +254,21 @@ export function renamePort(
  * selection is cut out of `parent` into a fresh internal Circuit, registered
  * in `library`, and replaced in `parent` by one ChipInstanceComponent.
  *
- * Any net that has pins both inside and outside the selection becomes a
- * numbered port, in first-encountered order. VCC/GND are the one exception:
- * per the reference project's spec, they're a global rail available inside
- * every chip with no explicit port ("Power flows into chips over the global
- * VCC/GND rails automatically") — so a crossing VCC/GND net instead gets a
- * fresh local `source` component wired in on the inside. That makes every
- * folded chip self-powered on its own, and flatten() (below) still reunites
- * every VCC/GND source system-wide once the whole hierarchy is simulated,
- * for free, via Circuit.computeNets()'s existing global name-based merge —
- * no extra plumbing needed.
+ * Ports come from two sources (same ChipDef.ports list):
+ * 1. Explicit `PortComponent`s already in the selection (design-in-place —
+ *    place Port from the palette, wire the internals, fold without leaving
+ *    stubs outside the selection).
+ * 2. Any remaining net that has pins both inside and outside the selection
+ *    (classic boundary-crossing fold), which gets a numbered `pN` port.
+ *
+ * VCC/GND are the one exception: per the reference project's spec, they're a
+ * global rail available inside every chip with no explicit port ("Power flows
+ * into chips over the global VCC/GND rails automatically") — so a crossing
+ * VCC/GND net instead gets a fresh local `source` component wired in on the
+ * inside. That makes every folded chip self-powered on its own, and flatten()
+ * (below) still reunites every VCC/GND source system-wide once the whole
+ * hierarchy is simulated, for free, via Circuit.computeNets()'s existing
+ * global name-based merge — no extra plumbing needed.
  *
  * Known limitation: this assumes a selection's internal share of any
  * crossing net is already connected *within* the selection (by a wire that
@@ -285,6 +323,26 @@ export function fold(
   const portByNet = new Map<string, { name: string; ioPinId: string }>();
   const pendingOutsideWires: { outsidePinId: string; portName: string }[] = [];
 
+  // Explicit ports in the selection become ChipDef ports as-is (palette Port
+  // workflow). Sort by y so the instance pin stack matches on-canvas layout.
+  const explicitPorts = [...internal.components.values()]
+    .filter((c) => c.kind === 'port')
+    .sort((a, b) => a.pos.y - b.pos.y || a.name.localeCompare(b.name));
+  for (const port of explicitPorts) {
+    let name = port.name.trim() || `p${ports.length}`;
+    if (ports.includes(name)) {
+      let k = 2;
+      while (ports.includes(`${name}_${k}`)) k++;
+      name = `${name}_${k}`;
+      port.name = name;
+    }
+    ports.push(name);
+    const netId = netMap.netOf.get(port.pins.io.id);
+    if (netId && netId !== 'VCC' && netId !== 'GND') {
+      portByNet.set(netId, { name, ioPinId: port.pins.io.id });
+    }
+  }
+
   // Delete while iterating — Map forbids only inserting unseen keys; deleting
   // the current entry is fine and avoids copying ~50k wires on Z80 fold.
   for (const w of parent.wires.values()) {
@@ -311,7 +369,12 @@ export function fold(
 
     let entry = netId ? portByNet.get(netId) : undefined;
     if (!entry) {
-      const portName = `p${ports.length}`;
+      let i = ports.length;
+      let portName = `p${i}`;
+      while (ports.includes(portName)) {
+        i++;
+        portName = `p${i}`;
+      }
       // Positive x: the canvas can't scroll to negative coordinates, so a
       // freshly-folded chip's internals must open with its ports on-screen.
       const port = makePort(internal, portName, { x: 40, y: 80 + ports.length * 40 });
@@ -323,7 +386,11 @@ export function fold(
     // first — a net can fan in from several inside pins that are only
     // mutually connected via the outside world at all (before folding),
     // e.g. one external line driving several separate internal gates.
-    internal.addWire(insidePinId, entry.ioPinId);
+    // Skip when the crossing already lands on the port pin itself (explicit
+    // Port placed on the boundary and wired outward).
+    if (insidePinId !== entry.ioPinId) {
+      internal.addWire(insidePinId, entry.ioPinId);
+    }
     pendingOutsideWires.push({ outsidePinId, portName: entry.name });
   }
 
@@ -338,6 +405,181 @@ export function fold(
 
   bumpStructureVersion();
   return { def, instance };
+}
+
+/**
+ * Soft warnings before fold — duplicate explicit port names, or ports with
+ * no wire at all. Callers may confirm-or-abort; fold() itself still renames
+ * duplicates with `_2` suffixes and leaves unwired ports as dangling pins.
+ */
+export function foldPortWarnings(parent: Circuit, selectedIds: Set<string>): string[] {
+  const warnings: string[] = [];
+  const ports: PortComponent[] = [];
+  for (const id of selectedIds) {
+    const c = parent.components.get(id);
+    if (c?.kind === 'port') ports.push(c);
+  }
+  if (ports.length === 0) return warnings;
+
+  const counts = new Map<string, number>();
+  for (const p of ports) counts.set(p.name, (counts.get(p.name) ?? 0) + 1);
+  for (const [name, n] of counts) {
+    if (n > 1) warnings.push(`Duplicate port name "${name}" (${n}×) — extras become ${name}_2…`);
+  }
+
+  const wired = new Set<string>();
+  for (const w of parent.wires.values()) {
+    wired.add(w.a);
+    wired.add(w.b);
+  }
+  for (const p of ports) {
+    if (!wired.has(p.pins.io.id)) warnings.push(`Port "${p.name}" has no wire`);
+  }
+  return warnings;
+}
+
+/**
+ * Inverse of fold for one chip instance: clone the ChipDef's internal
+ * circuit into `parent` (fresh ids — the def template stays shared), rewire
+ * anything that was attached to the instance pins onto the matching cloned
+ * ports, and delete the instance. Nested chip instances keep their defIds.
+ *
+ * Orientation of the instance is ignored (guts are placed unrotated around
+ * the instance position).
+ */
+export function unfold(
+  parent: Circuit,
+  instanceId: string,
+  library: ChipLibrary,
+): { ids: string[] } {
+  const inst = parent.components.get(instanceId);
+  if (!inst || inst.kind !== 'chip') throw new Error('unfold: not a chip instance');
+  const def = library.get(inst.defId);
+
+  // Detach parent wires that touch the instance; remember outside ends per port.
+  const externalByPort = new Map<string, string[]>();
+  for (const w of [...parent.wires.values()]) {
+    const aInst = w.a.startsWith(`${instanceId}:`);
+    const bInst = w.b.startsWith(`${instanceId}:`);
+    if (aInst === bInst) continue;
+    const instPinId = aInst ? w.a : w.b;
+    const outsidePinId = aInst ? w.b : w.a;
+    let portName: string | undefined;
+    for (const p of Object.values(inst.pins) as Pin[]) {
+      if (p.id === instPinId) {
+        portName = p.name;
+        break;
+      }
+    }
+    parent.removeWire(w.id);
+    if (!portName) continue;
+    const list = externalByPort.get(portName) ?? [];
+    list.push(outsidePinId);
+    externalByPort.set(portName, list);
+  }
+
+  let sumX = 0;
+  let sumY = 0;
+  let n = 0;
+  for (const c of def.circuit.components.values()) {
+    sumX += c.pos.x;
+    sumY += c.pos.y;
+    n++;
+  }
+  const dx = n > 0 ? inst.pos.x - sumX / n : inst.pos.x;
+  const dy = n > 0 ? inst.pos.y - sumY / n : inst.pos.y;
+
+  const pinMap = new Map<string, string>();
+  const newIds: string[] = [];
+  const portIoByName = new Map<string, string>();
+
+  for (const c of def.circuit.components.values()) {
+    const newId = nextId(UNFOLD_ID_PREFIX[c.kind]);
+    newIds.push(newId);
+    const clone = structuredClone(c) as Component;
+    clone.id = newId;
+    clone.pos = { x: c.pos.x + dx, y: c.pos.y + dy };
+    for (const p of Object.values(clone.pins) as Pin[]) {
+      const oldId = p.id;
+      const pinName = oldId.includes(':') ? oldId.slice(oldId.indexOf(':') + 1) : p.name;
+      p.id = `${newId}:${pinName}`;
+      p.componentId = newId;
+      p.pos = { x: p.pos.x + dx, y: p.pos.y + dy };
+      pinMap.set(oldId, p.id);
+    }
+    if (clone.kind === 'port') {
+      clone.dir = clone.dir ?? 'inout';
+      portIoByName.set(clone.name, clone.pins.io.id);
+    }
+    if (clone.kind === 'ram' || clone.kind === 'rom') {
+      clone.bytes = Uint8Array.from(c.kind === 'ram' || c.kind === 'rom' ? c.bytes : []);
+    }
+    parent.addComponent(clone);
+  }
+
+  for (const w of def.circuit.wires.values()) {
+    const a = pinMap.get(w.a);
+    const b = pinMap.get(w.b);
+    if (!a || !b) continue;
+    parent.addWire(
+      a,
+      b,
+      w.waypoints?.map((p) => ({ x: p.x + dx, y: p.y + dy })),
+    );
+  }
+
+  for (const [portName, outsidePins] of externalByPort) {
+    const ioId = portIoByName.get(portName);
+    if (!ioId) continue;
+    // Resolve positions for orthogonal routing after components are placed.
+    let portPos: Point | undefined;
+    for (const c of parent.components.values()) {
+      for (const p of Object.values(c.pins) as Pin[]) {
+        if (p.id === ioId) {
+          portPos = p.pos;
+          break;
+        }
+      }
+      if (portPos) break;
+    }
+    for (const outsidePinId of outsidePins) {
+      let outsidePos: Point | undefined;
+      for (const c of parent.components.values()) {
+        for (const p of Object.values(c.pins) as Pin[]) {
+          if (p.id === outsidePinId) {
+            outsidePos = p.pos;
+            break;
+          }
+        }
+        if (outsidePos) break;
+      }
+      const mid =
+        portPos && outsidePos ? orthoWaypoints(outsidePos, portPos) : undefined;
+      parent.addWire(outsidePinId, ioId, mid);
+    }
+  }
+
+  parent.removeComponent(instanceId);
+  bumpStructureVersion();
+  return { ids: newIds };
+}
+
+/**
+ * Clone a ChipDef into a fresh library entry and retarget `inst` to it so
+ * subsequent dive-edits do not mutate other instances of the original def.
+ */
+export function forkChipInstance(library: ChipLibrary, inst: ChipInstanceComponent): ChipDef {
+  const def = library.get(inst.defId);
+  const bundle = serializeChipDef(def, library);
+  const forked = importChipDef(bundle, library);
+  forked.name = `${def.name}_copy`;
+  forked.revision = 0;
+  inst.defId = forked.id;
+  inst.defRevision = 0;
+  inst.pinSide = pinSidesFromDef(forked);
+  applyPinLayout(inst);
+  bumpStructureVersion();
+  return forked;
 }
 
 interface FlatLevel {
@@ -481,6 +723,7 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pins: {
           gate: clonePin(c.pins.gate),
           drain: clonePin(c.pins.drain),
@@ -495,6 +738,7 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pins: { out: clonePin(c.pins.out) },
       };
     case 'input':
@@ -505,6 +749,7 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pins: { out: clonePin(c.pins.out) },
       };
     case 'button':
@@ -518,6 +763,7 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pins: { out: clonePin(c.pins.out) },
       };
     case 'led':
@@ -529,6 +775,7 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pins: { in: clonePin(c.pins.in) },
       };
     case 'clock':
@@ -546,6 +793,7 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pins: { out: clonePin(c.pins.out), trig: clonePin(c.pins.trig) },
       };
     case 'analyzer': {
@@ -559,6 +807,7 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pinOrder: [...c.pinOrder],
         pins,
       };
@@ -579,12 +828,20 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pins: { in: clonePin(c.pins.in) },
       };
     case 'label':
       return { id: c.id, kind: 'label', name: c.name, pos, pins: { net: clonePin(c.pins.net) } };
     case 'port':
-      return { id: c.id, kind: 'port', name: c.name, pos, pins: { io: clonePin(c.pins.io) } };
+      return {
+        id: c.id,
+        kind: 'port',
+        name: c.name,
+        dir: c.dir ?? 'inout',
+        pos,
+        pins: { io: clonePin(c.pins.io) },
+      };
     case 'ram':
       // Alias `.bytes` — writes must survive the next flatten (see flattenLevel).
       return {
@@ -596,6 +853,7 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pinOrder: [...c.pinOrder],
         pins: clonePinsRecord(c.pins),
       };
@@ -609,6 +867,7 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pinOrder: [...c.pinOrder],
         pins: clonePinsRecord(c.pins),
       };
@@ -620,7 +879,12 @@ function cloneComponent(c: Component): Component {
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
         pinOrder: [...c.pinOrder],
+        ...(c.pinSide ? { pinSide: { ...c.pinSide } } : {}),
+        ...(c.boxWidth !== undefined ? { boxWidth: c.boxWidth } : {}),
+        ...(c.marking !== undefined ? { marking: c.marking } : {}),
+        ...(c.defRevision !== undefined ? { defRevision: c.defRevision } : {}),
         pins: clonePinsRecord(c.pins),
       };
   }

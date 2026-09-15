@@ -13,6 +13,11 @@ export interface ChipDef {
   name: string;
   ports: string[]; // order matches the pin order on every placed instance
   circuit: Circuit;
+  /**
+   * Bumped when the shared internals are edited (dive-in). Instances store
+   * `defRevision` at place/dive time; a mismatch draws an "edited" marker.
+   */
+  revision?: number;
 }
 
 /** Flat store of every chip definition the user has folded so far. */

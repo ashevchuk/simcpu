@@ -1,11 +1,12 @@
 import { buildAlu, buildInstructionRegister, buildMinimalCpu, buildProgramCounter, buildRegister, buildRingCounter, buildStubRom, buildZ80Cpu } from './sim/blocks.js';
 import { ChipLibrary } from './sim/ChipLibrary.js';
-import { Circuit } from './sim/Circuit.js';
+import { Circuit, currentStructureVersion } from './sim/Circuit.js';
 import { foldZ80CpuLeavingRam, newComponentIdSet, packFoldedMachine } from './sim/foldZ80.js';
 import { replaceLongWiresWithLabels } from './sim/labelWires.js';
 import { circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
-import { flatten, fold } from './sim/hierarchy.js';
+import { flatten, fold, foldPortWarnings, forkChipInstance, unfold } from './sim/hierarchy.js';
 import { buildNot, makeButton, makeLed, makeProbe, makeRam, makeRom, makeSource, makeTty, wire } from './sim/library.js';
+import { EXAMPLE_PROJECTS } from './examples/catalog.js';
 import {
   deserializeProject,
   importChipDef,
@@ -14,14 +15,28 @@ import {
   type SerializedChipBundle,
   type SerializedProject,
 } from './sim/serialize.js';
+import {
+  clearAutosave,
+  clearSlot,
+  createAutosaveScheduler,
+  ensureSlot,
+  getSessionMeta,
+  loadAutosave,
+  loadAutosaveSync,
+  loadSlot,
+  MAX_SLOTS,
+  saveSessionMeta,
+  type AutosaveStatus,
+} from './sim/autosave.js';
+import { netIdFromEditorSelection, renameNet } from './sim/netRename.js';
 import { initialState, step } from './sim/solver.js';
-import { seedStandardCells } from './sim/stdcells.js';
+import { pruneDuplicateChipNames, seedStandardCells } from './sim/stdcells.js';
 import type { ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
 import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
 import { commandRomHexPrompt } from './machine/commandRom.js';
 import { Camera, type Bounds } from './ui/Camera.js';
-import { showAlert, showConfirm, showPrompt } from './ui/Dialog.js';
+import { showAlert, showChoice, showConfirm, showPrompt } from './ui/Dialog.js';
 import { EditHistory } from './ui/EditHistory.js';
 import { Editor, type Tool } from './ui/Editor.js';
 import { GRID, snap } from './ui/geometry.js';
@@ -30,13 +45,15 @@ import { MachinePanel } from './ui/MachinePanel.js';
 import { MemoryEditor } from './ui/MemoryEditor.js';
 import { ObjectInspector } from './ui/ObjectInspector.js';
 import { draw } from './ui/Renderer.js';
+import { isOrientable, orientSelection } from './sim/orientation.js';
 import {
-  getOrientation,
-  isOrientable,
-  rotateCcw,
-  rotateCw,
-  setOrientation,
-} from './sim/orientation.js';
+  showContextMenu,
+  hideContextMenu,
+  contextMenuOpen,
+  type ContextMenuItem,
+} from './ui/ContextMenu.js';
+import { toggleCheatSheet, hideCheatSheet, cheatSheetOpen } from './ui/CheatSheet.js';
+import { Minimap } from './ui/Minimap.js';
 
 const stage = document.getElementById('stage') as HTMLDivElement;
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
@@ -54,7 +71,30 @@ const objectInspector = new ObjectInspector();
 const library = new ChipLibrary();
 seedStandardCells(library); // NOT/NAND/AND/NOR/OR/XOR/MUX2/MUX4/FULL_ADDER/D_LATCH/D_FF, ready to drag out
 const topCircuit = new Circuit();
-seedDemoCircuit(topCircuit);
+
+function applyLoadedProject(loaded: { topCircuit: Circuit; library: ChipLibrary }): void {
+  topCircuit.components.clear();
+  topCircuit.wires.clear();
+  for (const c of loaded.topCircuit.components.values()) topCircuit.addComponent(c);
+  for (const w of loaded.topCircuit.wires.values()) topCircuit.addRawWire(w);
+  library.clear();
+  for (const def of loaded.library.list()) library.register(def);
+  // Fill any missing stdcells without re-adding names already in the session,
+  // then drop orphan duplicates left by older builds that re-seeded on every load.
+  seedStandardCells(library);
+  pruneDuplicateChipNames(library, [topCircuit, ...library.list().map((d) => d.circuit)]);
+}
+
+const restoredSync = loadAutosaveSync();
+if (restoredSync) {
+  try {
+    applyLoadedProject(deserializeProject(restoredSync));
+  } catch {
+    seedDemoCircuit(topCircuit);
+  }
+} else {
+  seedDemoCircuit(topCircuit);
+}
 
 function seedDemoCircuit(c: Circuit): void {
   makeSource(c, 1, { x: 80, y: 60 }); // rail driver
@@ -128,9 +168,65 @@ const navStack: NavFrame[] = [{ circuit: topCircuit, pathPrefix: '', label: 'top
 
 const editor = new Editor(topCircuit, library);
 const editHistory = new EditHistory();
-editor.onBeforeEdit = () => editHistory.checkpoint(editor.circuit);
-objectInspector.onBeforeEdit = () => editHistory.checkpoint(editor.circuit);
-objectInspector.onDive = (inst) => diveInto(inst);
+
+const autosaveStatusEl = document.getElementById('autosave-status');
+function setAutosaveStatusUi(status: AutosaveStatus, detail?: string): void {
+  if (!autosaveStatusEl) return;
+  autosaveStatusEl.dataset.state = status;
+  const slot = getSessionMeta().slots.find((s) => s.id === getSessionMeta().activeId);
+  const name = slot?.name ?? 'Session';
+  switch (status) {
+    case 'pending':
+      autosaveStatusEl.textContent = `${name} · …`;
+      break;
+    case 'saving':
+      autosaveStatusEl.textContent = `${name} · Saving…`;
+      break;
+    case 'saved':
+      autosaveStatusEl.textContent = detail ? `${name} · Saved (${detail})` : `${name} · Saved`;
+      break;
+    case 'error':
+      autosaveStatusEl.textContent = `${name} · Save failed${detail ? ` (${detail})` : ''}`;
+      break;
+    case 'conflict':
+      autosaveStatusEl.textContent = `${name} · Changed elsewhere`;
+      break;
+    default:
+      autosaveStatusEl.textContent = name;
+  }
+}
+
+const autosave = createAutosaveScheduler(() => serializeProject(topCircuit, library), {
+  onStatus: setAutosaveStatusUi,
+  onConflict: () => {
+    /* status already set; click badge to export a safety copy */
+  },
+});
+autosave.adoptWriteGen(getSessionMeta().activeId);
+let lastAutosaveStructureVersion = currentStructureVersion();
+setAutosaveStatusUi('idle');
+
+function bumpDefRevisionOnEdit(): void {
+  const defId = navStack[navStack.length - 1]?.defId;
+  if (defId && library.has(defId)) {
+    const def = library.get(defId);
+    def.revision = (def.revision ?? 0) + 1;
+  }
+}
+
+editor.onBeforeEdit = () => {
+  editHistory.checkpoint(editor.circuit);
+  bumpDefRevisionOnEdit();
+  autosave.schedule();
+};
+objectInspector.onBeforeEdit = () => {
+  editHistory.checkpoint(editor.circuit);
+  bumpDefRevisionOnEdit();
+  autosave.schedule();
+};
+objectInspector.onDive = (inst) => {
+  void diveInto(inst);
+};
 objectInspector.editor = editor;
 let simState: SimState = initialState();
 /** Last flat net map — used by MachineRunner gate halt detection. */
@@ -194,8 +290,31 @@ new ResizeObserver(() => {
   uiDirty = true;
 }).observe(stage);
 
-function diveInto(inst: ChipInstanceComponent): void {
-  const def = library.get(inst.defId);
+function countChipInstances(defId: string): number {
+  let n = 0;
+  const circuits = [topCircuit, ...library.list().map((d) => d.circuit)];
+  for (const circ of circuits) {
+    for (const c of circ.components.values()) {
+      if (c.kind === 'chip' && c.defId === defId) n++;
+    }
+  }
+  return n;
+}
+
+async function diveInto(inst: ChipInstanceComponent): Promise<void> {
+  let def = library.get(inst.defId);
+  const shared = countChipInstances(inst.defId) > 1;
+  if (shared) {
+    const fork = await showConfirm(
+      `"${def.name}" has multiple instances. Fork a private copy so edits do not affect the others?`,
+    );
+    if (fork) {
+      def = forkChipInstance(library, inst);
+      uiDirty = true;
+    }
+  }
+  // Acknowledge current revision so the "edited" badge clears for this instance.
+  inst.defRevision = def.revision ?? 0;
   const parent = navStack[navStack.length - 1]!;
   navStack.push({
     circuit: def.circuit,
@@ -216,7 +335,7 @@ function enterLevel(): void {
   editor.circuit = view.circuit;
   editor.clearSelection();
   editor.cancelWire();
-  editHistory.clear();
+  // Keep per-circuit undo stacks — diving must not wipe the parent's history.
   objectInspector.setContext({
     circuit: view.circuit,
     library,
@@ -227,18 +346,26 @@ function enterLevel(): void {
   // "Auto-centered at 100%" — see the reference project's own dive-in behavior.
   camera.centerOn(centroid(circuitBounds(view.circuit)), 1);
   renderBreadcrumb();
+  refreshWatchStrip();
 }
 
 const breadcrumbEl = document.getElementById('breadcrumb') as HTMLDivElement;
 function renderBreadcrumb(): void {
   breadcrumbEl.replaceChildren();
+  const meta = getSessionMeta();
+  const slot = meta.slots.find((s) => s.id === meta.activeId);
+  const sessionBtn = document.createElement('button');
+  sessionBtn.className = 'crumb-session';
+  sessionBtn.textContent = slot?.name ?? 'Session';
+  sessionBtn.title = 'Switch session';
+  sessionBtn.addEventListener('click', () => void switchSession());
+  breadcrumbEl.appendChild(sessionBtn);
+
   navStack.forEach((frame, i) => {
-    if (i > 0) {
-      const sep = document.createElement('span');
-      sep.className = 'crumb-sep';
-      sep.textContent = ' › ';
-      breadcrumbEl.appendChild(sep);
-    }
+    const sep = document.createElement('span');
+    sep.className = 'crumb-sep';
+    sep.textContent = ' › ';
+    breadcrumbEl.appendChild(sep);
     const btn = document.createElement('button');
     btn.textContent = frame.label;
     btn.addEventListener('click', () => diveTo(i));
@@ -247,6 +374,30 @@ function renderBreadcrumb(): void {
 }
 renderBreadcrumb();
 camera.centerOn(centroid(circuitBounds(topCircuit)), 1);
+
+// IndexedDB-only autosave (too big for localStorage) — apply once if boot
+// only saw the demo because LS was empty.
+if (!restoredSync) {
+  void loadAutosave().then((data) => {
+    if (!data) return;
+    // Still on the fresh demo (no user edits yet, or empty) — replace.
+    try {
+      applyLoadedProject(deserializeProject(data));
+      navStack.length = 0;
+      navStack.push({ circuit: topCircuit, pathPrefix: '', label: 'top' });
+      editor.circuit = topCircuit;
+      editor.clearSelection();
+      editHistory.clear();
+      simState = initialState();
+      renderBreadcrumb();
+      refreshChipPalette();
+      camera.centerOn(centroid(circuitBounds(topCircuit)), 1);
+      uiDirty = true;
+    } catch {
+      /* keep demo */
+    }
+  });
+}
 
 // --- Chip palette (Library menu): place an instance of any folded chip ---
 const chipPaletteListEl = document.getElementById('chip-palette-list') as HTMLDivElement;
@@ -311,6 +462,8 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') {
     closeAllMenus();
     menuBarArmed = false;
+    hideCheatSheet();
+    hideContextMenu();
   }
 });
 for (const panel of Array.from(document.querySelectorAll('#menubar .menu-panel'))) {
@@ -344,6 +497,7 @@ const CURSOR: Record<Tool['kind'], string> = {
   tty: 'copy',
   probe: 'copy',
   label: 'copy',
+  port: 'copy',
   'place-chip': 'copy',
 };
 const toolButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-tool]'));
@@ -367,6 +521,7 @@ const PLACE_TOOL_LABELS: Partial<Record<Tool['kind'], string>> = {
   tty: 'placing TTY',
   probe: 'placing probe',
   label: 'placing net label',
+  port: 'placing port',
   'place-chip': 'placing chip',
 };
 const activePlaceHint = document.getElementById('active-place-hint');
@@ -405,16 +560,313 @@ document.getElementById('clear')?.addEventListener('click', async () => {
     memoryEditor.detach();
     logicAnalyzer.clearChannels();
   }
+  editHistory.checkpoint(editor.circuit);
   editor.circuit.components.clear();
   editor.circuit.wires.clear();
   editor.clearSelection();
   editor.cancelWire();
+  autosave.schedule();
 });
 
+function resetEditorToTop(): void {
+  navStack.length = 0;
+  navStack.push({ circuit: topCircuit, pathPrefix: '', label: 'top' });
+  editor.circuit = topCircuit;
+  editor.clearSelection();
+  editor.cancelWire();
+  editHistory.clear();
+  simState = initialState();
+  machineRunner.detach();
+  machinePanel.detach();
+  memoryEditor.detach();
+  logicAnalyzer.clearChannels();
+  renderBreadcrumb();
+  refreshChipPalette();
+  camera.centerOn(centroid(circuitBounds(topCircuit)), 1);
+  uiDirty = true;
+  syncInspector();
+  refreshWatchStrip();
+  objectInspector.setContext({
+    circuit: topCircuit,
+    library,
+    defId: null,
+    allCircuits: [topCircuit, ...library.list().map((d) => d.circuit)],
+  });
+}
+
+document.getElementById('reset-session')?.addEventListener('click', async () => {
+  if (
+    !(await showConfirm(
+      'Discard ALL browser sessions and reset to the demo circuit? This cannot be undone.',
+    ))
+  ) {
+    return;
+  }
+  await clearAutosave();
+  topCircuit.components.clear();
+  topCircuit.wires.clear();
+  library.clear();
+  seedStandardCells(library);
+  seedDemoCircuit(topCircuit);
+  const meta = getSessionMeta();
+  meta.activeId = '1';
+  meta.slots = [{ id: '1', name: 'Session 1', updatedAt: Date.now() }];
+  saveSessionMeta(meta);
+  autosave.setActiveSlot('1');
+  resetEditorToTop();
+  setAutosaveStatusUi('idle');
+});
+
+document.getElementById('session-rename')?.addEventListener('click', async () => {
+  const meta = getSessionMeta();
+  const slot = meta.slots.find((s) => s.id === meta.activeId);
+  if (!slot) return;
+  const name = await showPrompt('Session name:', slot.name);
+  if (!name?.trim()) return;
+  slot.name = name.trim();
+  saveSessionMeta(meta);
+  setAutosaveStatusUi('idle');
+  renderBreadcrumb();
+});
+
+document.getElementById('session-switch')?.addEventListener('click', () => void switchSession());
+document.getElementById('session-new')?.addEventListener('click', () => void newSession());
+
+async function switchSession(): Promise<void> {
+  await autosave.flush();
+  const meta = getSessionMeta();
+  const pick = await showChoice(
+    'Switch session',
+    meta.slots.map((s) => ({
+      value: s.id,
+      label: s.name,
+      detail: s.id === meta.activeId ? 'current' : undefined,
+      current: s.id === meta.activeId,
+      deletable: meta.slots.length > 1,
+    })),
+  );
+  if (!pick) return;
+
+  if (pick.action === 'delete') {
+    if (meta.slots.length <= 1) {
+      await showAlert('Cannot delete the only session.');
+      return;
+    }
+    const victim = meta.slots.find((s) => s.id === pick.value);
+    if (
+      !(await showConfirm(`Delete session “${victim?.name ?? pick.value}”? This cannot be undone.`))
+    ) {
+      return;
+    }
+    await clearSlot(pick.value);
+    meta.slots = meta.slots.filter((s) => s.id !== pick.value);
+    if (meta.activeId === pick.value) {
+      const next = meta.slots[0]!;
+      meta.activeId = next.id;
+      saveSessionMeta(meta);
+      autosave.setActiveSlot(next.id);
+      const data = await loadSlot(next.id);
+      if (data) {
+        try {
+          applyLoadedProject(deserializeProject(data));
+        } catch {
+          topCircuit.components.clear();
+          topCircuit.wires.clear();
+          library.clear();
+          seedStandardCells(library);
+        }
+      } else {
+        topCircuit.components.clear();
+        topCircuit.wires.clear();
+        library.clear();
+        seedStandardCells(library);
+      }
+      resetEditorToTop();
+    } else {
+      saveSessionMeta(meta);
+    }
+    setAutosaveStatusUi('idle');
+    renderBreadcrumb();
+    return;
+  }
+
+  const id = pick.value;
+  if (id === meta.activeId) return;
+  const data = await loadSlot(id);
+  meta.activeId = id;
+  saveSessionMeta(meta);
+  autosave.setActiveSlot(id);
+  if (data) {
+    try {
+      applyLoadedProject(deserializeProject(data));
+    } catch (err) {
+      await showAlert(`Could not load session: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+  } else {
+    topCircuit.components.clear();
+    topCircuit.wires.clear();
+    library.clear();
+    seedStandardCells(library);
+  }
+  resetEditorToTop();
+  setAutosaveStatusUi('idle');
+}
+
+async function newSession(): Promise<void> {
+  await autosave.flush();
+  const meta = getSessionMeta();
+  if (meta.slots.length >= MAX_SLOTS) {
+    await showAlert(`Already ${MAX_SLOTS} sessions — switch or rename an existing one.`);
+    return;
+  }
+  let next = 1;
+  while (meta.slots.some((s) => s.id === String(next))) next++;
+  const id = String(next);
+  const name = (await showPrompt('New session name:', `Session ${id}`))?.trim() || `Session ${id}`;
+  ensureSlot(meta, id, name);
+  meta.activeId = id;
+  saveSessionMeta(meta);
+  autosave.setActiveSlot(id);
+  topCircuit.components.clear();
+  topCircuit.wires.clear();
+  library.clear();
+  seedStandardCells(library);
+  resetEditorToTop();
+  autosave.schedule();
+  setAutosaveStatusUi('idle');
+  renderBreadcrumb();
+}
+
 document.getElementById('fold')?.addEventListener('click', () => void foldSelection());
+document.getElementById('unfold')?.addEventListener('click', () => void unfoldSelection());
+document.getElementById('find')?.addEventListener('click', () => void findInCircuit());
+document.getElementById('rename-net')?.addEventListener('click', () => void renameSelectedNet());
+document.getElementById('duplicate')?.addEventListener('click', () => {
+  if (editor.duplicateSelection()) uiDirty = true;
+});
+document.getElementById('export-selection-chip')?.addEventListener('click', () => void exportSelectionAsChip());
+
+async function renameSelectedNet(): Promise<void> {
+  const netId = netIdFromEditorSelection(editor.circuit, {
+    highlightedNetId: editor.highlightedNetId,
+    selectedWireId: editor.selectedWireId,
+    selectedIds: editor.selectedIds,
+  });
+  if (!netId) {
+    await showAlert('Select a wire, label, or component (or press H on a net) first.');
+    return;
+  }
+  const name = await showPrompt('Net name (same name merges nets):', '');
+  if (!name?.trim()) return;
+  editHistory.checkpoint(editor.circuit);
+  const result = renameNet(editor.circuit, netId, name.trim());
+  if (!result.ok) {
+    await showAlert(result.reason);
+    return;
+  }
+  // Recompute so highlight tracks the (possibly merged) named net.
+  const nets = editor.circuit.computeNets();
+  for (const c of editor.circuit.components.values()) {
+    if (c.kind === 'label' && c.name === name.trim()) {
+      editor.highlightedNetId = nets.netOf.get(c.pins.net.id) ?? null;
+      break;
+    }
+  }
+  uiDirty = true;
+  if (result.merged) {
+    /* soft notice via status */
+    statusEl.textContent = `Net merged into "${name.trim()}"`;
+  }
+}
+
+async function exportSelectionAsChip(): Promise<void> {
+  if (editor.selectedIds.size === 0) {
+    await showAlert('Select the components to fold and export.');
+    return;
+  }
+  const warnings = foldPortWarnings(editor.circuit, editor.selectedIds);
+  if (warnings.length > 0) {
+    const ok = await showConfirm(`${warnings.join('\n')}\n\nFold and export anyway?`);
+    if (!ok) return;
+  }
+  const name = await showPrompt('Chip name:', 'CHIP');
+  if (!name) return;
+  editHistory.checkpoint(editor.circuit);
+  const pos = snap(centroid(boundsOfSelection()));
+  const { def, instance } = fold(editor.circuit, editor.selectedIds, name, library, pos);
+  editor.selectedIds = new Set([instance.id]);
+  refreshChipPalette();
+  downloadJson(`${def.name}.json`, serializeChipDef(def, library));
+  autosave.schedule();
+}
+
+async function findInCircuit(): Promise<void> {
+  const q = (await showPrompt('Find (net / port / chip / label):', ''))?.trim().toLowerCase();
+  if (!q) return;
+  const hits: Component[] = [];
+  for (const c of editor.circuit.components.values()) {
+    let hay = '';
+    if (c.kind === 'label' || c.kind === 'port') hay = c.name;
+    else if (c.kind === 'chip') hay = library.has(c.defId) ? library.get(c.defId).name : '';
+    else if (c.kind === 'probe' && c.label) hay = c.label;
+    else if (c.kind === 'ram') hay = 'ram';
+    else if (c.kind === 'rom') hay = 'rom';
+    else hay = c.kind;
+    if (hay.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)) hits.push(c);
+  }
+  if (hits.length === 0) {
+    await showAlert(`No match for "${q}".`);
+    return;
+  }
+  editor.selectedIds = new Set(hits.map((c) => c.id));
+  editor.selectedWireId = null;
+  // Prefer highlighting a label/port net when the query matches one.
+  const labelOrPort = hits.find((c) => c.kind === 'label' || c.kind === 'port');
+  if (labelOrPort) {
+    const pin =
+      labelOrPort.kind === 'label'
+        ? labelOrPort.pins.net
+        : labelOrPort.kind === 'port'
+          ? labelOrPort.pins.io
+          : null;
+    if (pin) {
+      const nets = editor.circuit.computeNets();
+      const netId = nets.netOf.get(pin.id);
+      if (netId) editor.highlightedNetId = netId;
+    }
+  }
+  const b = boundsOfIds(hits.map((c) => c.id));
+  camera.fit(b, vw(), vh());
+  uiDirty = true;
+  syncInspector();
+}
+
+function boundsOfIds(ids: string[]): Bounds {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const id of ids) {
+    const c = editor.circuit.components.get(id);
+    if (!c) continue;
+    minX = Math.min(minX, c.pos.x);
+    minY = Math.min(minY, c.pos.y);
+    maxX = Math.max(maxX, c.pos.x);
+    maxY = Math.max(maxY, c.pos.y);
+  }
+  if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  const pad = 80;
+  return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+}
 
 async function foldSelection(): Promise<void> {
   if (editor.selectedIds.size === 0) return;
+  const warnings = foldPortWarnings(editor.circuit, editor.selectedIds);
+  if (warnings.length > 0) {
+    const ok = await showConfirm(`${warnings.join('\n')}\n\nFold anyway?`);
+    if (!ok) return;
+  }
   const name = await showPrompt('Chip name:', 'CHIP');
   if (!name) return;
   editHistory.checkpoint(editor.circuit);
@@ -422,6 +874,29 @@ async function foldSelection(): Promise<void> {
   const { instance } = fold(editor.circuit, editor.selectedIds, name, library, pos);
   editor.selectedIds = new Set([instance.id]);
   refreshChipPalette();
+  autosave.schedule();
+}
+
+async function unfoldSelection(): Promise<void> {
+  const ids = [...editor.selectedIds];
+  const chips = ids
+    .map((id) => editor.circuit.components.get(id))
+    .filter((c): c is ChipInstanceComponent => !!c && c.kind === 'chip');
+  if (chips.length === 0) {
+    await showAlert('Select one or more chip instances to unfold.');
+    return;
+  }
+  editHistory.checkpoint(editor.circuit);
+  const newIds = new Set<string>();
+  for (const chip of chips) {
+    const { ids: placed } = unfold(editor.circuit, chip.id, library);
+    for (const id of placed) newIds.add(id);
+  }
+  editor.selectedIds = newIds;
+  editor.selectedWireId = null;
+  uiDirty = true;
+  syncInspector();
+  autosave.schedule();
 }
 
 function boundsOfSelection(): Bounds {
@@ -659,8 +1134,178 @@ function downloadJson(filename: string, data: unknown): void {
 }
 
 document.getElementById('export-project')?.addEventListener('click', () => {
-  downloadJson('circuit-project.json', serializeProject(topCircuit, library));
+  exportActiveSession();
 });
+
+function exportActiveSession(): void {
+  const meta = getSessionMeta();
+  const slot = meta.slots.find((s) => s.id === meta.activeId);
+  const safe = (slot?.name ?? 'session').replace(/[^\w.-]+/g, '_');
+  downloadJson(`${safe}.json`, serializeProject(topCircuit, library));
+}
+
+autosaveStatusEl?.addEventListener('click', () => {
+  exportActiveSession();
+});
+
+const watchStripEl = document.getElementById('watch-strip');
+
+function refreshWatchStrip(): void {
+  if (!watchStripEl) return;
+  const probes = [...editor.circuit.components.values()].filter((c) => c.kind === 'probe');
+  if (probes.length === 0) {
+    watchStripEl.classList.remove('visible');
+    watchStripEl.replaceChildren();
+    return;
+  }
+  watchStripEl.classList.add('visible');
+  const existing = new Map<string, HTMLElement>();
+  for (const child of Array.from(watchStripEl.children)) {
+    const id = (child as HTMLElement).dataset.probeId;
+    if (id) existing.set(id, child as HTMLElement);
+  }
+  watchStripEl.replaceChildren();
+  const title = document.createElement('span');
+  title.className = 'watch-label';
+  title.textContent = 'Watch';
+  watchStripEl.appendChild(title);
+  for (const p of probes) {
+    if (p.kind !== 'probe') continue;
+    let item = existing.get(p.id);
+    if (!item) {
+      item = document.createElement('span');
+      item.className = 'watch-item';
+      item.dataset.probeId = p.id;
+      const name = document.createElement('span');
+      name.className = 'watch-name';
+      const lvl = document.createElement('span');
+      lvl.className = 'watch-lvl';
+      lvl.dataset.lvl = 'Z';
+      lvl.textContent = 'Z';
+      item.append(name, lvl);
+    }
+    const nameEl = item.querySelector('.watch-name')!;
+    nameEl.textContent = p.label?.trim() || 'probe';
+    watchStripEl.appendChild(item);
+  }
+}
+
+function updateWatchLevels(
+  resolve: (localPinId: string) => { level: Level; contended: boolean },
+): void {
+  if (!watchStripEl?.classList.contains('visible')) return;
+  for (const child of Array.from(watchStripEl.querySelectorAll('.watch-item'))) {
+    const id = (child as HTMLElement).dataset.probeId;
+    if (!id) continue;
+    const c = editor.circuit.components.get(id);
+    if (!c || c.kind !== 'probe') continue;
+    const { level } = resolve(c.pins.in.id);
+    const lvlEl = child.querySelector('.watch-lvl') as HTMLElement | null;
+    if (!lvlEl) continue;
+    const text = String(level);
+    lvlEl.dataset.lvl = text;
+    lvlEl.textContent = text;
+  }
+}
+
+refreshWatchStrip();
+
+function resetViewAfterProjectLoad(): void {
+  navStack.length = 0;
+  navStack.push({ circuit: topCircuit, pathPrefix: '', label: 'top' });
+  editor.circuit = topCircuit;
+  editor.clearSelection();
+  editor.cancelWire();
+  editHistory.clear();
+  simState = initialState();
+  renderBreadcrumb();
+  refreshChipPalette();
+  refreshWatchStrip();
+  camera.fit(circuitBounds(topCircuit), vw(), vh());
+  machineRunner.detach();
+  machinePanel.detach();
+  memoryEditor.detach();
+  logicAnalyzer.clearChannels();
+  objectInspector.setContext({
+    circuit: topCircuit,
+    library,
+    defId: null,
+    allCircuits: [topCircuit, ...library.list().map((d) => d.circuit)],
+  });
+  objectInspector.sync(null);
+  uiDirty = true;
+  autosave.schedule();
+}
+
+async function openExampleProject(): Promise<void> {
+  const pick = await showChoice(
+    'Open example',
+    EXAMPLE_PROJECTS.map((ex) => ({
+      value: ex.id,
+      label: ex.title,
+      detail: ex.detail,
+    })),
+  );
+  if (!pick || pick.action === 'delete') return;
+  const ex = EXAMPLE_PROJECTS.find((e) => e.id === pick.value);
+  if (!ex) return;
+  if (
+    !(await showConfirm(
+      `Load “${ex.title}”? This replaces the current circuit and chip library in this session.`,
+    ))
+  ) {
+    return;
+  }
+  try {
+    applyLoadedProject(deserializeProject(ex.project));
+    resetViewAfterProjectLoad();
+    if (ex.id === 'd-latch') {
+      await showAlert(
+        'Latch walkthrough:\n\n' +
+          '1. Toggle D (data) with the select tool.\n' +
+          '2. Pulse or hold Enable so Q follows D.\n' +
+          '3. Release Enable — Q holds the last value.\n' +
+          '4. Double-click the chip to dive into its gates.\n\n' +
+          'Press ? for keyboard shortcuts.',
+      );
+    }
+  } catch (err) {
+    await showAlert(`Could not load example: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function openLatchTutorial(): Promise<void> {
+  const ex = EXAMPLE_PROJECTS.find((e) => e.id === 'd-latch');
+  if (!ex) {
+    await showAlert('Latch tutorial example is missing.');
+    return;
+  }
+  if (
+    !(await showConfirm(
+      `Load “${ex.title}”? This replaces the current circuit and chip library in this session.`,
+    ))
+  ) {
+    return;
+  }
+  try {
+    applyLoadedProject(deserializeProject(ex.project));
+    resetViewAfterProjectLoad();
+    await showAlert(
+      'Latch walkthrough:\n\n' +
+        '1. Toggle D (data) with the select tool.\n' +
+        '2. Pulse or hold Enable so Q follows D.\n' +
+        '3. Release Enable — Q holds the last value.\n' +
+        '4. Double-click the chip to dive into its gates.\n\n' +
+        'Press ? for keyboard shortcuts.',
+    );
+  } catch (err) {
+    await showAlert(`Could not load tutorial: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+document.getElementById('open-examples')?.addEventListener('click', () => void openExampleProject());
+document.getElementById('help-tutorial')?.addEventListener('click', () => void openLatchTutorial());
+document.getElementById('help-cheatsheet')?.addEventListener('click', () => toggleCheatSheet());
 
 const importProjectInput = document.getElementById('import-project-file') as HTMLInputElement;
 document.getElementById('import-project')?.addEventListener('click', () => importProjectInput.click());
@@ -673,38 +1318,8 @@ importProjectInput.addEventListener('change', async () => {
     .text()
     .then((text) => {
       const loaded = deserializeProject(JSON.parse(text) as SerializedProject);
-
-      // Keep the existing Circuit/ChipLibrary *objects* (Editor holds a
-      // readonly reference to the library, and dived-in NavFrames hold
-      // direct circuit references) — replace their contents instead of
-      // rebinding `topCircuit`/`library` to the freshly-parsed instances.
-      topCircuit.components.clear();
-      topCircuit.wires.clear();
-      for (const c of loaded.topCircuit.components.values()) topCircuit.addComponent(c);
-      for (const w of loaded.topCircuit.wires.values()) topCircuit.addRawWire(w);
-      library.clear();
-      for (const def of loaded.library.list()) library.register(def);
-      // A project file is a snapshot of what the user had, not the standard
-      // cell toolbox — re-seed it so the palette doesn't lose NOT/NAND/...
-      // just because the loaded project (likely built before this feature,
-      // or from a pared-down export) didn't happen to include them. Harmless
-      // even if the project already had its own same-named copies — those
-      // just show up as an extra palette entry, never a broken one.
-      seedStandardCells(library);
-
-      navStack.length = 0;
-      navStack.push({ circuit: topCircuit, pathPrefix: '', label: 'top' });
-      editor.circuit = topCircuit;
-      editor.clearSelection();
-      editor.cancelWire();
-      simState = initialState();
-      renderBreadcrumb();
-      refreshChipPalette();
-      camera.centerOn(centroid(circuitBounds(topCircuit)), 1);
-      machineRunner.detach();
-      machinePanel.detach(); // re-attach via + Z80CPU with addrBits ≥ 12
-      memoryEditor.detach();
-      logicAnalyzer.clearChannels();
+      applyLoadedProject(loaded);
+      resetViewAfterProjectLoad();
     })
     .catch((err: unknown) => {
       void showAlert(`Could not load that project file: ${err instanceof Error ? err.message : String(err)}`);
@@ -722,6 +1337,108 @@ document.getElementById('export-chip')?.addEventListener('click', async () => {
   const def = library.get(chips[0]!.defId);
   downloadJson(`${def.name}.json`, serializeChipDef(def, library));
 });
+
+function downloadBlob(filename: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportSchematicPng(): void {
+  const bounds = circuitBounds(editor.circuit);
+  const w = 1600;
+  const h = 1000;
+  const off = document.createElement('canvas');
+  off.width = w;
+  off.height = h;
+  const octx = off.getContext('2d');
+  if (!octx) return;
+  const cam = new Camera();
+  cam.fit(bounds, w, h);
+  const view = navStack[navStack.length - 1]!;
+  const flat = flatten(topCircuit, library);
+  const flatNetMap = flat.computeNets();
+  const resolve = (localPinId: string): { level: Level; contended: boolean } => {
+    const net = flatNetMap.netOf.get(view.pathPrefix + localPinId);
+    if (!net) return { level: 'Z', contended: false };
+    return { level: simState.levelOf.get(net) ?? 'Z', contended: simState.contended.has(net) };
+  };
+  draw(octx, cam, w, h, editor.circuit, resolve, editor, library);
+  off.toBlob((blob) => {
+    if (blob) downloadBlob('schematic.png', blob);
+  }, 'image/png');
+}
+
+function exportSchematicSvg(): void {
+  const circuit = editor.circuit;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const c of circuit.components.values()) {
+    minX = Math.min(minX, c.pos.x - 40);
+    minY = Math.min(minY, c.pos.y - 40);
+    maxX = Math.max(maxX, c.pos.x + 40);
+    maxY = Math.max(maxY, c.pos.y + 40);
+  }
+  if (!Number.isFinite(minX)) {
+    minX = 0;
+    minY = 0;
+    maxX = 200;
+    maxY = 200;
+  }
+  const pad = 20;
+  minX -= pad;
+  minY -= pad;
+  maxX += pad;
+  maxY += pad;
+  const pinById = new Map([...circuit.allPins()].map((p) => [p.id, p]));
+  const parts: string[] = [];
+  parts.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${maxX - minX} ${maxY - minY}" ` +
+      `width="${Math.round(maxX - minX)}" height="${Math.round(maxY - minY)}">`,
+  );
+  parts.push('<rect fill="#0b0c10" x="' + minX + '" y="' + minY + '" width="' + (maxX - minX) + '" height="' + (maxY - minY) + '"/>');
+  for (const w of circuit.wires.values()) {
+    const a = pinById.get(w.a);
+    const b = pinById.get(w.b);
+    if (!a || !b) continue;
+    const pts = w.waypoints?.length ? [a.pos, ...w.waypoints, b.pos] : [a.pos, b.pos];
+    parts.push(
+      `<polyline fill="none" stroke="#9aa1b3" stroke-width="2" points="${pts.map((p) => `${p.x},${p.y}`).join(' ')}"/>`,
+    );
+  }
+  for (const c of circuit.components.values()) {
+    const label =
+      c.kind === 'chip'
+        ? c.marking || (library.has(c.defId) ? library.get(c.defId).name : c.kind)
+        : c.kind === 'label' || c.kind === 'port'
+          ? c.name
+          : c.kind;
+    const bw = c.kind === 'chip' ? (c.boxWidth ?? 96) : 48;
+    const bh = 36;
+    parts.push(
+      `<rect x="${c.pos.x - bw / 2}" y="${c.pos.y - bh / 2}" width="${bw}" height="${bh}" ` +
+        `fill="#191c25" stroke="#f5c518" stroke-width="1.5" rx="4"/>`,
+    );
+    parts.push(
+      `<text x="${c.pos.x}" y="${c.pos.y + 4}" text-anchor="middle" fill="#e7e9ef" ` +
+        `font-family="ui-monospace,monospace" font-size="11">${escapeXml(label)}</text>`,
+    );
+  }
+  parts.push('</svg>');
+  downloadBlob('schematic.svg', new Blob([parts.join('\n')], { type: 'image/svg+xml' }));
+}
+
+function escapeXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+document.getElementById('export-png')?.addEventListener('click', () => exportSchematicPng());
+document.getElementById('export-svg')?.addEventListener('click', () => exportSchematicSvg());
 
 const importChipInput = document.getElementById('import-chip-file') as HTMLInputElement;
 document.getElementById('import-chip')?.addEventListener('click', () => importChipInput.click());
@@ -777,20 +1494,173 @@ let panDrag: { startScreen: { x: number; y: number } } | null = null;
 // use — a real bug caught live, not an automation-timing artifact.
 let mouseDownOnCanvas = false;
 
+/** True while focus is in a dialog, floating instrument, or text field. */
+function focusInUiChrome(): boolean {
+  const el = document.activeElement as HTMLElement | null;
+  if (!el || el === document.body) return false;
+  const tag = el.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (el.isContentEditable) return true;
+  return !!el.closest('.float-win, .z80-dialog-overlay, .hex-view, .z80-ctx, .z80-cheat, #minimap');
+}
+
 function isPanGesture(ev: MouseEvent): boolean {
   // Right button (2) — middle-click is awkward on many mice/trackpads.
   return editor.tool.kind === 'pan' || spacePressed || ev.button === 2;
 }
 
+let rightDragDist = 0;
+let rightDragOrigin: { x: number; y: number } | null = null;
+
+function orientSelected(mode: 'cw' | 'ccw' | 'flipH' | 'flipV'): boolean {
+  const comps = [...editor.selectedIds]
+    .map((id) => editor.circuit.components.get(id))
+    .filter((c): c is Component => !!c && isOrientable(c));
+  if (comps.length === 0) return false;
+  editHistory.checkpoint(editor.circuit);
+  orientSelection(comps, mode, (c, dx, dy) => editor.circuit.moveComponent(c.id, dx, dy));
+  editor.tidySelectedWires(false);
+  return true;
+}
+
+function openCanvasContextMenu(ev: MouseEvent): void {
+  const world = worldPoint(ev);
+  editor.handleMouseMove(world);
+
+  const pin = editor.hoveredPinId
+    ? editor.circuit.allPins().find((p) => p.id === editor.hoveredPinId)
+    : undefined;
+  const hitComp = editor.hoveredComponentId
+    ? editor.circuit.components.get(editor.hoveredComponentId)
+    : undefined;
+  const hitWireId = editor.hoveredWireId;
+
+  // Prefer the hit target for selection when nothing useful is selected.
+  if (hitComp && !editor.selectedIds.has(hitComp.id)) {
+    editor.selectedIds = new Set([hitComp.id]);
+    editor.selectedWireId = null;
+  } else if (hitWireId && editor.selectedIds.size === 0) {
+    editor.selectedWireId = hitWireId;
+  }
+
+  const hasSel = editor.selectedIds.size > 0 || editor.selectedWireIds.size > 0;
+  const orientable = [...editor.selectedIds]
+    .map((id) => editor.circuit.components.get(id))
+    .filter((c): c is Component => !!c && isOrientable(c));
+  const chipSel = [...editor.selectedIds]
+    .map((id) => editor.circuit.components.get(id))
+    .filter((c): c is ChipInstanceComponent => c?.kind === 'chip');
+  const analyzerSel = [...editor.selectedIds]
+    .map((id) => editor.circuit.components.get(id))
+    .find((c) => c?.kind === 'analyzer');
+
+  const items: (ContextMenuItem | 'sep')[] = [];
+  if (orientable.length > 0) {
+    items.push(
+      { label: 'Rotate CW', kbd: 'R', run: () => { if (orientSelected('cw')) { uiDirty = true; syncInspector(); objectInspector.refresh(); } } },
+      { label: 'Rotate CCW', kbd: '⇧R', run: () => { if (orientSelected('ccw')) { uiDirty = true; syncInspector(); objectInspector.refresh(); } } },
+      { label: 'Flip H', kbd: 'M', run: () => { if (orientSelected('flipH')) { uiDirty = true; syncInspector(); objectInspector.refresh(); } } },
+      { label: 'Flip V', kbd: '⇧M', run: () => { if (orientSelected('flipV')) { uiDirty = true; syncInspector(); objectInspector.refresh(); } } },
+      'sep',
+    );
+  }
+  items.push({
+    label: 'Tidy wires',
+    kbd: 'T',
+    disabled: !hasSel,
+    run: () => {
+      if (editor.tidySelectedWires() > 0) uiDirty = true;
+    },
+  });
+  items.push({
+    label: 'Delete',
+    kbd: 'Del',
+    danger: true,
+    disabled: !hasSel,
+    run: () => editor.handleDelete(),
+  });
+  if (chipSel.length === 1) {
+    items.push({
+      label: 'Dive',
+      run: () => void diveInto(chipSel[0]!),
+    });
+  }
+  if (analyzerSel && analyzerSel.kind === 'analyzer') {
+    items.push({
+      label: 'Add LA channel',
+      run: () => {
+        if (editor.addAnalyzerChannel(analyzerSel.id)) {
+          uiDirty = true;
+          objectInspector.refresh();
+        }
+      },
+    });
+  }
+  if (pin && hitComp?.kind === 'chip') {
+    const pinName = pin.name;
+    items.push('sep');
+    items.push({
+      label: `Pin “${pinName}” → Left`,
+      run: () => {
+        if (editor.setChipPinSide(hitComp.id, pinName, -1)) {
+          uiDirty = true;
+          objectInspector.refresh();
+        }
+      },
+    });
+    items.push({
+      label: `Pin “${pinName}” → Right`,
+      run: () => {
+        if (editor.setChipPinSide(hitComp.id, pinName, 1)) {
+          uiDirty = true;
+          objectInspector.refresh();
+        }
+      },
+    });
+  }
+  items.push('sep');
+  items.push({
+    label: 'Rename net…',
+    kbd: '⌃R',
+    run: () => void renameSelectedNet(),
+  });
+  items.push({
+    label: 'Copy',
+    kbd: '⌃C',
+    disabled: editor.selectedIds.size === 0,
+    run: () => editor.copySelection(),
+  });
+  items.push({
+    label: 'Paste',
+    kbd: '⌃V',
+    run: () => {
+      if (editor.pasteClipboard()) uiDirty = true;
+    },
+  });
+
+  showContextMenu(ev.clientX, ev.clientY, items);
+  uiDirty = true;
+}
+
 canvas.addEventListener('contextmenu', (ev) => {
-  ev.preventDefault(); // right-drag pans; don't open the browser menu
+  ev.preventDefault();
+  if (rightDragDist > 6) {
+    rightDragDist = 0;
+    return;
+  }
+  openCanvasContextMenu(ev);
 });
 
 canvas.addEventListener('mousedown', (ev) => {
   mouseDownOnCanvas = true;
+  hideContextMenu();
   if (isPanGesture(ev)) {
     ev.preventDefault();
     panDrag = { startScreen: screenPoint(ev) };
+    if (ev.button === 2) {
+      rightDragOrigin = screenPoint(ev);
+      rightDragDist = 0;
+    }
     canvas.style.cursor = 'grabbing';
     return;
   }
@@ -814,6 +1684,11 @@ canvas.addEventListener('mousemove', (ev) => {
   if (panDrag) {
     const p = screenPoint(ev);
     camera.pan(p.x - panDrag.startScreen.x, p.y - panDrag.startScreen.y);
+    if (rightDragOrigin) {
+      const dx = p.x - rightDragOrigin.x;
+      const dy = p.y - rightDragOrigin.y;
+      rightDragDist = Math.hypot(dx, dy);
+    }
     panDrag = { startScreen: p };
     return;
   }
@@ -830,6 +1705,7 @@ window.addEventListener('mouseup', (ev) => {
   mouseDownOnCanvas = false;
   if (panDrag) {
     panDrag = null;
+    rightDragOrigin = null;
     canvas.style.cursor = CURSOR[editor.tool.kind];
     return;
   }
@@ -847,7 +1723,7 @@ canvas.addEventListener('dblclick', async (ev) => {
   const hit: Component | null = editor.handleDoubleClick(worldPoint(ev));
   if (!hit) return;
   if (hit.kind === 'chip') {
-    diveInto(hit);
+    await diveInto(hit);
   } else if (hit.kind === 'ram' || hit.kind === 'rom') {
     memoryEditor.attach(hit);
   } else if (hit.kind === 'analyzer') {
@@ -871,13 +1747,46 @@ const NUDGE_KEYS: Record<string, [number, number]> = {
 };
 
 window.addEventListener('keydown', (ev) => {
+  // Cheat sheet / context menu close even when focus is in chrome.
+  if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.key === '?') {
+    ev.preventDefault();
+    toggleCheatSheet();
+    return;
+  }
+  if (ev.key === 'Escape') {
+    if (cheatSheetOpen()) {
+      hideCheatSheet();
+      ev.preventDefault();
+      return;
+    }
+    if (contextMenuOpen()) {
+      hideContextMenu();
+      ev.preventDefault();
+      return;
+    }
+  }
+  // Hex editor / floating instruments / dialogs use focusable divs, not only
+  // INPUT/TEXTAREA — skip canvas hotkeys while typing there.
+  if (focusInUiChrome()) return;
   if (ev.code === 'Space') spacePressed = true;
-  if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
   const noModifiers = !ev.ctrlKey && !ev.metaKey && !ev.altKey;
 
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'g') {
     ev.preventDefault();
-    foldSelection();
+    if (ev.shiftKey) void unfoldSelection();
+    else void foldSelection();
+  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f') {
+    ev.preventDefault();
+    void findInCircuit();
+  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'r' && !ev.shiftKey) {
+    ev.preventDefault();
+    void renameSelectedNet();
+  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'd') {
+    ev.preventDefault();
+    if (editor.duplicateSelection()) uiDirty = true;
+  } else if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === 'e') {
+    ev.preventDefault();
+    void exportSelectionAsChip();
   } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z' && !ev.shiftKey) {
     ev.preventDefault();
     if (editHistory.undo(editor.circuit)) {
@@ -904,8 +1813,11 @@ window.addEventListener('keydown', (ev) => {
   } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
     editor.handleDelete();
   } else if (ev.key === 'Escape') {
-    editor.cancelWire();
-    if (navStack.length > 1) diveTo(navStack.length - 2);
+    if (editor.escapeWireStep()) {
+      /* bend popped or wire cancelled */
+    } else if (navStack.length > 1) {
+      diveTo(navStack.length - 2);
+    }
   } else if (ev.key === '0') {
     camera.scale = 1;
   } else if (ev.key.toLowerCase() === 'f') {
@@ -931,53 +1843,120 @@ window.addEventListener('keydown', (ev) => {
     editHistory.checkpoint(editor.circuit);
     const [dx, dy] = NUDGE_KEYS[ev.key]!;
     for (const id of editor.selectedIds) editor.circuit.moveComponent(id, dx, dy);
+    editor.tidySelectedWires(false);
   } else if (noModifiers && ev.key.toLowerCase() === 'h') {
     editor.highlightSelectionNet();
     uiDirty = true;
   } else if (noModifiers && ev.key.toLowerCase() === 't') {
     if (editor.tidySelectedWires() > 0) uiDirty = true;
   } else if (noModifiers && (ev.key === 'r' || ev.key === 'R')) {
-    const ids = [...editor.selectedIds];
-    const comps = ids
-      .map((id) => editor.circuit.components.get(id))
-      .filter((c): c is Component => !!c && isOrientable(c));
-    if (comps.length > 0) {
+    if (orientSelected(ev.shiftKey ? 'ccw' : 'cw')) {
       ev.preventDefault();
-      editHistory.checkpoint(editor.circuit);
-      for (const c of comps) {
-        const { rotation, mirrorX } = getOrientation(c);
-        setOrientation(c, ev.shiftKey ? rotateCcw(rotation) : rotateCw(rotation), mirrorX);
-      }
       uiDirty = true;
       syncInspector();
       objectInspector.refresh();
     }
-  } else if (noModifiers && ev.key.toLowerCase() === 'm') {
-    const ids = [...editor.selectedIds];
-    const comps = ids
-      .map((id) => editor.circuit.components.get(id))
-      .filter((c): c is Component => !!c && isOrientable(c));
-    if (comps.length > 0) {
+  } else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.key.toLowerCase() === 'm') {
+    if (orientSelected(ev.shiftKey ? 'flipV' : 'flipH')) {
       ev.preventDefault();
-      editHistory.checkpoint(editor.circuit);
-      for (const c of comps) {
-        const { rotation, mirrorX } = getOrientation(c);
-        setOrientation(c, rotation, !mirrorX);
-      }
       uiDirty = true;
       syncInspector();
       objectInspector.refresh();
     }
+  } else if (noModifiers && ev.key === '=') {
+    minimap.setVisible(minimap.root.hidden);
+    uiDirty = true;
+  } else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.shiftKey && ev.key.toLowerCase() === 'o') {
+    ev.preventDefault();
+    setTool({ kind: 'port', promptName: true });
   } else if (noModifiers && TOOL_KEYS.has(ev.key.toLowerCase())) {
     setTool(TOOL_KEYS.get(ev.key.toLowerCase())!);
   }
 });
 window.addEventListener('keyup', (ev) => {
+  if (focusInUiChrome()) return;
   if (ev.code === 'Space') spacePressed = false;
 });
 
 // --- Simulation + render loop -------------------------------------------
 const statusEl = document.getElementById('status') as HTMLDivElement;
+let lastContendedNets = new Set<string>();
+let simPaused = false;
+let simStepOnce = false;
+
+const minimap = new Minimap(
+  () => editor.circuit,
+  () => camera,
+  () => ({ w: vw(), h: vh() }),
+  () => {
+    uiDirty = true;
+  },
+);
+stage.appendChild(minimap.root);
+
+function updateSimChrome(): void {
+  document.getElementById('sim-run')?.classList.toggle('active', !simPaused);
+  document.getElementById('sim-pause')?.classList.toggle('active', simPaused);
+}
+
+document.getElementById('sim-run')?.addEventListener('click', () => {
+  simPaused = false;
+  if (machineRunner.attached) machineRunner.setRunning(true);
+  updateSimChrome();
+  uiDirty = true;
+});
+document.getElementById('sim-pause')?.addEventListener('click', () => {
+  simPaused = true;
+  if (machineRunner.attached) machineRunner.setRunning(false);
+  updateSimChrome();
+  uiDirty = true;
+});
+document.getElementById('sim-step')?.addEventListener('click', () => {
+  if (machineRunner.attached) {
+    machineRunner.setRunning(false);
+    machineRunner.stepInstruction();
+  }
+  simPaused = true;
+  simStepOnce = true;
+  updateSimChrome();
+  uiDirty = true;
+});
+updateSimChrome();
+
+function highlightFirstContendedNet(): void {
+  if (lastContendedNets.size === 0 || !lastFlatNetMap) return;
+  const netId = [...lastContendedNets][0]!;
+  const view = navStack[navStack.length - 1]!;
+  const pins = lastFlatNetMap.pinsOf.get(netId) ?? [];
+  const localPins = pins
+    .filter((p) => (view.pathPrefix ? p.startsWith(view.pathPrefix) : !p.includes('/')))
+    .map((p) => (view.pathPrefix ? p.slice(view.pathPrefix.length) : p));
+  editor.clearSelection();
+  const localNets = editor.circuit.computeNets();
+  for (const pid of localPins) {
+    const compId = pid.split(':')[0];
+    if (compId && editor.circuit.components.has(compId)) editor.selectedIds.add(compId);
+  }
+  if (localPins[0]) {
+    editor.highlightedNetId = localNets.netOf.get(localPins[0]) ?? null;
+  } else {
+    // Named rails (VCC/GND) may already match local net ids.
+    editor.highlightedNetId = localNets.pinsOf.has(netId) ? netId : null;
+  }
+  // Also select wires on the highlighted local net.
+  if (editor.highlightedNetId) {
+    for (const w of editor.circuit.wires.values()) {
+      if (localNets.netOf.get(w.a) === editor.highlightedNetId) editor.selectedWireIds.add(w.id);
+    }
+  }
+  syncInspector();
+  uiDirty = true;
+}
+
+statusEl.addEventListener('click', () => {
+  if (lastContendedNets.size === 0) return;
+  highlightFirstContendedNet();
+});
 
 /** Offscreen 128×64 for soft bitmap HUD (screen-fixed, not world coords). */
 const bmpHudTmp = document.createElement('canvas');
@@ -1048,6 +2027,13 @@ function drawSoftBitmapHud(c: CanvasRenderingContext2D, _vw: number, vh: number)
  */
 function frame(): void {
   syncInspector();
+  // Catch Insert-menu / paste / clear mutations that skip onBeforeEdit.
+  const ver = currentStructureVersion();
+  if (ver !== lastAutosaveStructureVersion) {
+    lastAutosaveStructureVersion = ver;
+    autosave.schedule();
+    refreshWatchStrip();
+  }
   // Soft Run advances the interpreter only; gate Run spends a time-budgeted
   // slice of transistor phases. Either way we avoid the old pattern of
   // 160 full step()s *plus* another step+draw in the same rAF.
@@ -1067,7 +2053,11 @@ function frame(): void {
   const needSimDraw =
     softRun
       ? uiDirty
-      : uiDirty || !simState.settled || (machineRunner.running && machineWorked) || labActive;
+      : uiDirty ||
+        (!simPaused && !simState.settled) ||
+        simStepOnce ||
+        (machineRunner.running && machineWorked) ||
+        labActive;
 
   if (needSimDraw) {
     // Keep backing store in sync even if a layout change slipped past the
@@ -1077,24 +2067,29 @@ function frame(): void {
     // through flatten() — interactive TTY does not need pin levels. Dive-in
     // (navStack depth > 1) or any Gates path still flattens as before.
     const softTop = softRun && navStack.length === 1;
-    if (!softRun || uiDirty || labActive) {
+    if (!softRun || uiDirty || labActive || simStepOnce) {
       const view = navStack[navStack.length - 1]!;
-      if (softTop && !labActive) {
+      if (softTop && !labActive && !simStepOnce) {
         const resolve = (_localPinId: string): { level: Level; contended: boolean } => ({
           level: 'Z',
           contended: false,
         });
-        draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
+        draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library, { softMode: true });
         drawSoftBitmapHud(ctx!, vw(), vh());
+        minimap.draw();
         zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
-        statusEl.textContent = `${navStack.map((f) => f.label).join('/')} | soft (flatten deferred) | machine: soft`;
+        lastContendedNets = new Set();
+        statusEl.classList.remove('clickable');
+        statusEl.textContent = `${navStack.map((f) => f.label).join('/')} | soft (flatten deferred) | machine: soft${simPaused ? ' | sim paused' : ''}`;
+        updateWatchLevels(resolve);
       } else {
         const flat = flatten(topCircuit, library);
         const flatNetMap = flat.computeNets();
         lastFlatNetMap = flatNetMap;
-        if (!softRun) {
+        if (!softRun && (!simPaused || simStepOnce)) {
           simState = step(flat, flatNetMap, simState);
         }
+        simStepOnce = false;
         // Opportunistic tick on every sim frame (catches TRIG edges); continuous
         // instruments keep the loop alive via circuitNeedsLabTick above.
         if (tickLabInstruments(topCircuit, flatNetMap, simState.levelOf)) {
@@ -1110,9 +2105,19 @@ function frame(): void {
           return { level: simState.levelOf.get(net) ?? 'Z', contended: simState.contended.has(net) };
         };
 
-        draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library);
+        draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library, {
+          softMode: softRun,
+        });
         drawSoftBitmapHud(ctx!, vw(), vh());
+        minimap.draw();
         zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
+        lastContendedNets = new Set(simState.contended);
+        if (lastContendedNets.size > 0) statusEl.classList.add('clickable');
+        else statusEl.classList.remove('clickable');
+        const contendedHint =
+          lastContendedNets.size > 0 && lastContendedNets.size <= 4
+            ? ` [${[...lastContendedNets].map((n) => editor.formatNetName(n) ?? n).join(', ')}]`
+            : '';
         const mode =
           machineRunner.running && machineRunner.isSoft
             ? 'machine: soft'
@@ -1122,11 +2127,14 @@ function frame(): void {
                 ? 'machine: pause'
                 : '';
         const lab = labActive ? ' | lab' : '';
+        const paused = simPaused ? ' | sim paused' : '';
         statusEl.textContent =
           `${navStack.map((f) => f.label).join('/')} | flat nets: ${flatNetMap.pinsOf.size} | ` +
-          `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}` +
+          `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}${contendedHint}` +
           (mode ? ` | ${mode}` : '') +
-          lab;
+          lab +
+          paused;
+        updateWatchLevels(resolve);
       }
     }
     uiDirty = false;

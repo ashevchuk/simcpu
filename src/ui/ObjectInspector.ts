@@ -11,11 +11,10 @@ import {
   applyPinLayout,
   getOrientation,
   isOrientable,
-  rotateCcw,
-  rotateCw,
-  setOrientation,
-  type Rotation,
+  orientSelection,
+  relayoutDefInstances,
 } from '../sim/orientation.js';
+import { CHIP_INSTANCE_WIDTH } from '../sim/library.js';
 import type { ChipInstanceComponent, Component } from '../sim/types.js';
 import type { Editor } from './Editor.js';
 import { FloatingWindow } from './FloatingWindow.js';
@@ -99,6 +98,14 @@ export class ObjectInspector {
     else this.render();
   }
 
+  private orientTargets(mode: 'cw' | 'ccw' | 'flipH' | 'flipV'): void {
+    const comps = this.targets.filter(isOrientable);
+    const circuit = this.circuit;
+    if (!circuit || comps.length === 0) return;
+    orientSelection(comps, mode, (c, dx, dy) => circuit.moveComponent(c.id, dx, dy));
+    this.editor?.tidySelectedWires(false);
+  }
+
   private mkBtn(label: string, title: string, fn: () => void): HTMLButtonElement {
     const b = document.createElement('button');
     b.type = 'button';
@@ -166,28 +173,14 @@ export class ObjectInspector {
     row.style.flexWrap = 'wrap';
     row.style.gap = '6px';
     row.append(
-      this.mkBtn('↻ 90°', 'Rotate all clockwise (R)', () => {
-        for (const c of orientable) {
-          const { rotation, mirrorX } = getOrientation(c);
-          setOrientation(c, rotateCw(rotation as Rotation), mirrorX);
-        }
-      }),
-      this.mkBtn('↺ 90°', 'Rotate all counter-clockwise (Shift+R)', () => {
-        for (const c of orientable) {
-          const { rotation, mirrorX } = getOrientation(c);
-          setOrientation(c, rotateCcw(rotation as Rotation), mirrorX);
-        }
-      }),
-      this.mkBtn('Mirror', 'Mirror all horizontally (M)', () => {
-        for (const c of orientable) {
-          const { rotation, mirrorX } = getOrientation(c);
-          setOrientation(c, rotation as Rotation, !mirrorX);
-        }
-      }),
+      this.mkBtn('↻ 90°', 'Rotate all clockwise (R)', () => this.orientTargets('cw')),
+      this.mkBtn('↺ 90°', 'Rotate all counter-clockwise (Shift+R)', () => this.orientTargets('ccw')),
+      this.mkBtn('Flip H', 'Flip all horizontally (M)', () => this.orientTargets('flipH')),
+      this.mkBtn('Flip V', 'Flip all vertically (Shift+M)', () => this.orientTargets('flipV')),
     );
     const hint = document.createElement('div');
     hint.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3';
-    hint.textContent = 'bulk orient · R / Shift+R / M · Alt+arrows align';
+    hint.textContent = 'bulk orient · R / Shift+R / M / Shift+M · Alt+arrows align';
     body.append(row, hint);
   }
 
@@ -287,15 +280,48 @@ export class ObjectInspector {
         'name',
         textInput(c.name, (v) => {
           const name = v.trim();
-          if (!name || name === c.name || !this.library || !this.defId) return;
+          if (!name || name === c.name) return;
           this.noteEdit();
-          const ok = renamePort(this.library, this.allCircuits, this.defId, c.name, name);
-          if (!ok) {
-            this.render();
-            return;
+          if (this.library && this.defId) {
+            const ok = renamePort(this.library, this.allCircuits, this.defId, c.name, name);
+            if (!ok) {
+              this.render();
+              return;
+            }
+          } else {
+            const circuit = this.editor?.circuit;
+            if (circuit) {
+              for (const other of circuit.components.values()) {
+                if (other.kind === 'port' && other.id !== c.id && other.name === name) {
+                  this.render();
+                  return;
+                }
+              }
+            }
+            c.name = name;
           }
           this.changed();
         }),
+      );
+      addRow(
+        'dir',
+        select(
+          c.dir ?? 'inout',
+          [
+            { value: 'in', label: 'in' },
+            { value: 'out', label: 'out' },
+            { value: 'inout', label: 'inout' },
+          ],
+          (v) => {
+            this.noteEdit();
+            c.dir = v === 'in' || v === 'out' ? v : 'inout';
+            if (this.library && this.defId) {
+              const def = this.library.get(this.defId);
+              relayoutDefInstances(def, this.allCircuits);
+            }
+            this.changed();
+          },
+        ),
       );
     }
 
@@ -456,6 +482,20 @@ export class ObjectInspector {
           return span;
         })(),
       );
+      addRow(
+        'marking',
+        textInput(c.marking ?? '', (v) => {
+          this.editor?.setChipAppearance(c.id, { marking: v });
+          this.changed();
+        }),
+      );
+      addRow(
+        'width',
+        numInput(c.boxWidth ?? CHIP_INSTANCE_WIDTH, (v) => {
+          this.editor?.setChipAppearance(c.id, { boxWidth: v });
+          this.changed();
+        }, 48, 240),
+      );
       this.appendPinOrderEditor(body, c);
       body.appendChild(
         this.mkBtn('Dive in', 'Open chip internals (same as dblclick)', () => {
@@ -478,7 +518,7 @@ export class ObjectInspector {
     }
 
     if (isOrientable(c)) {
-      const { rotation, mirrorX } = getOrientation(c);
+      const { rotation, mirrorX, mirrorY } = getOrientation(c);
       const row = document.createElement('div');
       row.style.display = 'flex';
       row.style.flexWrap = 'wrap';
@@ -486,17 +526,15 @@ export class ObjectInspector {
       row.style.marginTop = '4px';
 
       row.append(
-        this.mkBtn('↻ 90°', 'Rotate clockwise (R)', () => setOrientation(c, rotateCw(rotation as Rotation), mirrorX)),
-        this.mkBtn('↺ 90°', 'Rotate counter-clockwise (Shift+R)', () =>
-          setOrientation(c, rotateCcw(rotation as Rotation), mirrorX),
-        ),
-        this.mkBtn(mirrorX ? 'Mirror ✓' : 'Mirror', 'Mirror horizontally (M)', () =>
-          setOrientation(c, rotation as Rotation, !mirrorX),
-        ),
+        this.mkBtn('↻ 90°', 'Rotate clockwise (R)', () => this.orientTargets('cw')),
+        this.mkBtn('↺ 90°', 'Rotate counter-clockwise (Shift+R)', () => this.orientTargets('ccw')),
+        this.mkBtn(mirrorX ? 'Flip H ✓' : 'Flip H', 'Flip horizontally (M)', () => this.orientTargets('flipH')),
+        this.mkBtn(mirrorY ? 'Flip V ✓' : 'Flip V', 'Flip vertically (Shift+M)', () => this.orientTargets('flipV')),
       );
       const hint = document.createElement('div');
       hint.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:2px';
-      hint.textContent = `orient ${rotation}°${mirrorX ? ' · mirrored' : ''} · R / Shift+R / M`;
+      const flips = [mirrorX ? 'H' : '', mirrorY ? 'V' : ''].filter(Boolean).join('+');
+      hint.textContent = `orient ${rotation}°${flips ? ` · flip ${flips}` : ''} · R / Shift+R / M / Shift+M`;
       body.append(row, hint);
     }
 
@@ -511,6 +549,11 @@ export class ObjectInspector {
         })(),
       );
       this.appendPinOrderEditor(body, c);
+      body.appendChild(
+        this.mkBtn('Add channel', 'Grow the analyzer by one sense pin', () => {
+          this.editor?.addAnalyzerChannel(c.id);
+        }),
+      );
       body.appendChild(
         this.mkBtn(c.armed ? 'Disarm' : 'Arm', 'Toggle analyzer sampling', () => {
           c.armed = !c.armed;
@@ -561,6 +604,19 @@ export class ObjectInspector {
       up.disabled = i === 0;
       down.disabled = i === c.pinOrder.length - 1;
       row.append(lab, up, down);
+      if (c.kind === 'chip' && this.editor) {
+        const ed = this.editor;
+        const chipId = c.id;
+        const pinName = name;
+        row.append(
+          this.mkBtn('L', 'Pin on left stack', () => {
+            ed.setChipPinSide(chipId, pinName, -1);
+          }),
+          this.mkBtn('R', 'Pin on right stack', () => {
+            ed.setChipPinSide(chipId, pinName, 1);
+          }),
+        );
+      }
       body.appendChild(row);
     }
   }

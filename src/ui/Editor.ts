@@ -8,16 +8,20 @@ import {
   makeInput,
   makeLabel,
   makeLed,
+  makePort,
   makeProbe,
   makeSource,
   makeTransistor,
   makeTty,
+  nextAutoPortName,
+  parseBusPortSpec,
 } from '../sim/library.js';
 import { firePulse } from '../sim/labTick.js';
+import { applyPinLayout } from '../sim/orientation.js';
 import { captureCircuit, type CircuitSnapshot } from '../sim/serialize.js';
 import type { Component, Pin, Point } from '../sim/types.js';
 import { showPrompt } from './Dialog.js';
-import { findComponentNear, findPinNear, findWaypointNear, findWireNear, GRID, routeWirePoints, snap } from './geometry.js';
+import { findComponentNear, findPinNear, findWaypointNear, findWireNear, GRID, routeWirePoints, snap, wirePolyline } from './geometry.js';
 
 export type Tool =
   | { kind: 'select' }
@@ -35,6 +39,7 @@ export type Tool =
   | { kind: 'tty' }
   | { kind: 'probe' }
   | { kind: 'label' }
+  | { kind: 'port'; promptName?: boolean }
   | { kind: 'place-chip'; defId: string }; // place an instance of an existing ChipDef
 
 const DRAG_THRESHOLD = 4; // px of mouse movement before a mousedown becomes a drag, not a click
@@ -67,8 +72,8 @@ export class Editor {
   /** Bend points committed so far for the wire currently being drawn, in order from the start pin. Cosmetic only — see Wire in types.ts. */
   wireWaypoints: Point[] = [];
   selectedIds = new Set<string>();
-  /** At most one wire selected at a time — dragging a bend point or deleting a wire only ever concerns one. */
-  selectedWireId: string | null = null;
+  /** Selected wires (marquee can take several; click selects one). */
+  selectedWireIds = new Set<string>();
   /** Net id (from Circuit.computeNets) to highlight — set when selecting a wire or pressing H. */
   highlightedNetId: string | null = null;
   mouse: Point = { x: 0, y: 0 };
@@ -91,10 +96,21 @@ export class Editor {
   private pendingComponentDrag: { ids: string[]; downPoint: Point } | null = null;
   /** The component(s) actually being dragged right now, and where the pointer was last frame (moves are applied as deltas, never absolute jumps). */
   private draggingComponents: { ids: string[]; lastPoint: Point } | null = null;
+  /** Drag a chip pin across the body center to flip left/right stack. */
+  private pinSideDrag: { componentId: string; pinName: string; startX: number } | null = null;
 
   /** True while a component or a wire's bend point is being actively dragged — for cursor feedback, see main.ts. */
   get isDragging(): boolean {
     return this.draggingComponents !== null || this.dragWaypoint !== null;
+  }
+
+  /** First selected wire id, if any — bend-point drag still targets one wire. */
+  get selectedWireId(): string | null {
+    return this.selectedWireIds.values().next().value ?? null;
+  }
+  set selectedWireId(id: string | null) {
+    this.selectedWireIds.clear();
+    if (id) this.selectedWireIds.add(id);
   }
 
   constructor(circuit: Circuit, readonly library: ChipLibrary) {
@@ -107,7 +123,9 @@ export class Editor {
 
   handleMouseMove(p: Point): void {
     this.hoveredComponentId = findComponentNear(this.circuit, p)?.id ?? null;
-    this.hoveredPinId = findPinNear(this.circuit, p)?.id ?? null;
+    // Wire tool: larger magnet radius so pins are easier to hit while routing.
+    const pinRadius = this.tool.kind === 'wire' ? 22 : 10;
+    this.hoveredPinId = findPinNear(this.circuit, p, pinRadius)?.id ?? null;
     this.hoveredWireId = (findWaypointNear(this.circuit, p)?.wireId ?? findWireNear(this.circuit, p)?.wireId) ?? null;
     // Snap the rubber-band cursor to a nearby pin while routing.
     if (this.tool.kind === 'wire' && this.hoveredPinId) {
@@ -121,6 +139,18 @@ export class Editor {
   handleMouseDown(p: Point): void {
     if (this.tool.kind !== 'select') return;
     this.dragCheckpointTaken = false;
+
+    // Chip pin → drag across center to flip side (before body hit-test).
+    const nearPin = findPinNear(this.circuit, p, 12);
+    if (nearPin) {
+      const host = this.circuit.components.get(nearPin.componentId);
+      if (host?.kind === 'chip') {
+        this.pinSideDrag = { componentId: host.id, pinName: nearPin.name, startX: p.x };
+        this.selectedIds = new Set([host.id]);
+        this.selectedWireId = null;
+        return;
+      }
+    }
 
     const hit = findComponentNear(this.circuit, p);
     if (hit) {
@@ -225,6 +255,16 @@ export class Editor {
   handleMouseUp(p: Point, additive: boolean): void {
     let didDrag = false;
 
+    if (this.pinSideDrag) {
+      const { componentId, pinName, startX } = this.pinSideDrag;
+      this.pinSideDrag = null;
+      const chip = this.circuit.components.get(componentId);
+      if (chip?.kind === 'chip' && Math.abs(p.x - startX) > DRAG_THRESHOLD) {
+        const side: -1 | 1 = p.x < chip.pos.x ? -1 : 1;
+        if (this.setChipPinSide(componentId, pinName, side)) didDrag = true;
+      }
+    }
+
     if (this.draggingComponents) {
       // Snap every dragged component's final position to the grid — the
       // same finishing touch placement already gets, so a dragged part
@@ -239,6 +279,7 @@ export class Editor {
       this.selectedWireId = null;
       this.draggingComponents = null;
       didDrag = true;
+      this.tidySelectedWires(false);
     }
     this.pendingComponentDrag = null; // never promoted past the threshold — a plain click, see performClick
 
@@ -255,10 +296,20 @@ export class Editor {
       const x1 = Math.max(this.marqueeStart.x, p.x);
       const y0 = Math.min(this.marqueeStart.y, p.y);
       const y1 = Math.max(this.marqueeStart.y, p.y);
-      if (!additive) this.selectedIds.clear();
+      if (!additive) {
+        this.selectedIds.clear();
+        this.selectedWireIds.clear();
+      }
       for (const c of this.circuit.components.values()) {
         if (c.pos.x >= x0 && c.pos.x <= x1 && c.pos.y >= y0 && c.pos.y <= y1) {
           this.selectedIds.add(c.id);
+        }
+      }
+      for (const w of this.circuit.wires.values()) {
+        const poly = wirePolyline(this.circuit, w);
+        if (!poly) continue;
+        if (poly.some((pt) => pt.x >= x0 && pt.x <= x1 && pt.y >= y0 && pt.y <= y1)) {
+          this.selectedWireIds.add(w.id);
         }
       }
       didDrag = true;
@@ -294,11 +345,11 @@ export class Editor {
   }
 
   handleDelete(): void {
-    if (!this.selectedWireId && this.selectedIds.size === 0) return;
+    if (this.selectedWireIds.size === 0 && this.selectedIds.size === 0) return;
     this.noteEdit();
-    if (this.selectedWireId) {
-      this.circuit.removeWire(this.selectedWireId);
-      this.selectedWireId = null;
+    if (this.selectedWireIds.size > 0) {
+      for (const id of this.selectedWireIds) this.circuit.removeWire(id);
+      this.selectedWireIds.clear();
       return;
     }
     for (const id of this.selectedIds) this.circuit.removeComponent(id);
@@ -332,13 +383,31 @@ export class Editor {
   pasteClipboard(): boolean {
     if (!this.clipboard || this.clipboard.components.length === 0) return false;
     this.noteEdit();
+    return this.pasteSnapshot(this.clipboard, GRID * 2, GRID * 2);
+  }
+
+  /**
+   * Duplicate the selection in place (offset by two grid steps) without
+   * disturbing the clipboard — Ctrl+D.
+   */
+  duplicateSelection(): boolean {
+    if (this.selectedIds.size === 0) return false;
+    const saved = this.clipboard;
+    if (!this.copySelection()) return false;
+    const snap = this.clipboard;
+    this.clipboard = saved;
+    if (!snap) return false;
+    this.noteEdit();
+    return this.pasteSnapshot(snap, GRID * 2, GRID * 2);
+  }
+
+  private pasteSnapshot(snap: CircuitSnapshot, dx: number, dy: number): boolean {
+    if (snap.components.length === 0) return false;
     const idMap = new Map<string, string>();
     const pinMap = new Map<string, string>();
     const newIds: string[] = [];
-    const dx = GRID * 2;
-    const dy = GRID * 2;
 
-    for (const sc of this.clipboard.components) {
+    for (const sc of snap.components) {
       const raw = structuredClone(sc) as Component;
       const prefix =
         raw.kind === 'transistor'
@@ -367,7 +436,7 @@ export class Editor {
       this.circuit.addComponent(raw);
     }
 
-    for (const w of this.clipboard.wires) {
+    for (const w of snap.wires) {
       const a = pinMap.get(w.a);
       const b = pinMap.get(w.b);
       if (!a || !b) continue;
@@ -383,11 +452,25 @@ export class Editor {
     return true;
   }
 
-  /** Clears every kind of selection at once (components and the selected wire) — e.g. after clearing the circuit or navigating levels. */
+  /** Clears every kind of selection at once (components and selected wires) — e.g. after clearing the circuit or navigating levels. */
   clearSelection(): void {
     this.selectedIds.clear();
-    this.selectedWireId = null;
+    this.selectedWireIds.clear();
     this.highlightedNetId = null;
+  }
+
+  /**
+   * Escape while routing: drop the last bend point, or abandon the wire if
+   * there are none left (KiCad-style).
+   */
+  escapeWireStep(): boolean {
+    if (!this.wireStartPinId) return false;
+    if (this.wireWaypoints.length > 0) {
+      this.wireWaypoints.pop();
+      return true;
+    }
+    this.cancelWire();
+    return true;
   }
 
   /** Highlight the electrical net of a wire (same net labels / pin connectivity). */
@@ -424,8 +507,9 @@ export class Editor {
 
   /** Highlight the net of the first pin on a selected component (H key). */
   highlightSelectionNet(): void {
-    if (this.selectedWireId) {
-      this.highlightNetOfWire(this.selectedWireId);
+    if (this.selectedWireIds.size > 0) {
+      const first = this.selectedWireIds.values().next().value!;
+      this.highlightNetOfWire(first);
       return;
     }
     const id = [...this.selectedIds][0];
@@ -491,12 +575,14 @@ export class Editor {
    * Re-route selected wires (or wires attached to selected components) with
    * fresh orthogonal waypoints — drops manual kinks.
    */
-  tidySelectedWires(): number {
+  tidySelectedWires(checkpoint = true): number {
     const pinById = new Map<string, Pin>();
     for (const p of this.circuit.allPins()) pinById.set(p.id, p);
 
     const wireIds = new Set<string>();
-    if (this.selectedWireId) wireIds.add(this.selectedWireId);
+    if (this.selectedWireIds.size > 0) {
+      for (const id of this.selectedWireIds) wireIds.add(id);
+    }
     if (this.selectedIds.size > 0) {
       for (const w of this.circuit.wires.values()) {
         const aComp = w.a.split(':')[0];
@@ -506,7 +592,7 @@ export class Editor {
     }
     if (wireIds.size === 0) return 0;
 
-    this.noteEdit();
+    if (checkpoint) this.noteEdit();
     let n = 0;
     for (const id of wireIds) {
       const w = this.circuit.wires.get(id);
@@ -521,6 +607,57 @@ export class Editor {
       n++;
     }
     return n;
+  }
+
+  /**
+   * Flip a chip pin between left/right stacks (pinSide). Returns true if changed.
+   */
+  setChipPinSide(componentId: string, pinName: string, side: -1 | 1): boolean {
+    const c = this.circuit.components.get(componentId);
+    if (!c || c.kind !== 'chip') return false;
+    if (!c.pinSide) c.pinSide = {};
+    if (c.pinSide[pinName] === side) return false;
+    this.noteEdit();
+    c.pinSide[pinName] = side;
+    applyPinLayout(c);
+    this.tidySelectedWires(false);
+    return true;
+  }
+
+  /** Grow an analyzer by one channel; returns the new pin id or null. */
+  addAnalyzerChannel(analyzerId: string): string | null {
+    const c = this.circuit.components.get(analyzerId);
+    if (!c || c.kind !== 'analyzer') return null;
+    this.noteEdit();
+    const i = c.channelCount;
+    c.channelCount = i + 1;
+    const name = `ch${i}`;
+    c.pins[name] = {
+      id: `${c.id}:${name}`,
+      componentId: c.id,
+      name,
+      pos: { ...c.pos },
+    };
+    if (!c.pinOrder.includes(name)) c.pinOrder.push(name);
+    applyPinLayout(c);
+    return c.pins[name]!.id;
+  }
+
+  /** Optional custom chip body width / silkscreen marking. */
+  setChipAppearance(componentId: string, opts: { boxWidth?: number; marking?: string }): boolean {
+    const c = this.circuit.components.get(componentId);
+    if (!c || c.kind !== 'chip') return false;
+    this.noteEdit();
+    if (opts.boxWidth != null) {
+      c.boxWidth = Math.max(48, Math.min(240, Math.round(opts.boxWidth / GRID) * GRID));
+    }
+    if (opts.marking != null) {
+      const m = opts.marking.trim();
+      if (m) c.marking = m;
+      else delete c.marking;
+    }
+    applyPinLayout(c);
+    return true;
   }
 
   /** Abandon the wire currently being drawn, if any. Called on tool switch, Escape, or level navigation. */
@@ -581,7 +718,7 @@ export class Editor {
    * electrical net is exactly the same regardless of how the wire is routed.
    */
   private handleWireClick(p: Point): void {
-    const pin = findPinNear(this.circuit, p);
+    const pin = findPinNear(this.circuit, p, 22);
     if (!this.wireStartPinId) {
       if (pin) this.wireStartPinId = pin.id;
       return;
@@ -650,6 +787,26 @@ export class Editor {
             makeLabel(this.circuit, name, p);
           }
         });
+        break;
+      }
+      case 'port': {
+        if (this.tool.promptName) {
+          void showPrompt('Port name or bus (D[7:0]):', 'D[7:0]').then((name) => {
+            const trimmed = name?.trim();
+            if (!trimmed) return;
+            this.noteEdit();
+            const bus = parseBusPortSpec(trimmed);
+            if (bus) {
+              for (let i = 0; i < bus.names.length; i++) {
+                makePort(this.circuit, bus.names[i]!, { x: p.x, y: p.y + i * GRID });
+              }
+            } else {
+              makePort(this.circuit, trimmed, p);
+            }
+          });
+        } else {
+          place(() => makePort(this.circuit, nextAutoPortName(this.circuit), p));
+        }
         break;
       }
       case 'place-chip': {

@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:file": "vite build --config vite.config.file.ts",
+    "build:file": "npm run build:dist-file",
+    "build:dist-file": "bash scripts/build-dist-file.sh",
+    "gen:examples": "npx vite-node scripts/gen-examples.ts",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"

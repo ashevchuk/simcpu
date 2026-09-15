@@ -35,7 +35,8 @@ function seedTwoInputGate(
   library: ChipLibrary,
   name: string,
   build: (circuit: Circuit) => TwoInputGate,
-): ChipDef {
+): ChipDef | undefined {
+  if (library.findByName(name)) return undefined;
   const circuit = scratch();
   const g = build(circuit);
   // NAND/NOR are CMOS primitives — keep drawn wires. AND/OR/XOR are
@@ -48,9 +49,48 @@ function seedTwoInputGate(
   ], { labelize });
 }
 
-/** Registers NOT, NAND, AND, NOR, OR, XOR, MUX2, MUX4, HALF_ADDER, FULL_ADDER, D_LATCH, D_FF and TRI_BUF as placeable chips. */
+/**
+ * Drop extra chip defs that share a display name with another def and are
+ * not referenced by any instance. Sessions used to re-seed stdcells on every
+ * load, leaving orphan duplicates (same name, new id) in the Library menu.
+ */
+export function pruneDuplicateChipNames(library: ChipLibrary, roots: Circuit[]): number {
+  const referenced = new Set<string>();
+  const mark = (circuit: Circuit): void => {
+    for (const c of circuit.components.values()) {
+      if (c.kind === 'chip') referenced.add(c.defId);
+    }
+  };
+  for (const root of roots) mark(root);
+  for (const def of library.list()) mark(def.circuit);
+
+  const byName = new Map<string, ChipDef[]>();
+  for (const def of library.list()) {
+    const list = byName.get(def.name) ?? [];
+    list.push(def);
+    byName.set(def.name, list);
+  }
+
+  let removed = 0;
+  for (const defs of byName.values()) {
+    if (defs.length < 2) continue;
+    const keep = new Set<string>();
+    for (const d of defs) {
+      if (referenced.has(d.id)) keep.add(d.id);
+    }
+    if (keep.size === 0) keep.add(defs[0]!.id);
+    for (const d of defs) {
+      if (keep.has(d.id)) continue;
+      library.remove(d.id);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+/** Registers NOT, NAND, AND, NOR, OR, XOR, MUX2, MUX4, HALF_ADDER, FULL_ADDER, D_LATCH, D_FF and TRI_BUF as placeable chips. Idempotent by name. */
 export function seedStandardCells(library: ChipLibrary): void {
-  {
+  if (!library.findByName('NOT')) {
     const circuit = scratch();
     const g = buildNot(circuit);
     foldExposing(circuit, 'NOT', library, [
@@ -65,7 +105,7 @@ export function seedStandardCells(library: ChipLibrary): void {
   seedTwoInputGate(library, 'OR', buildOr);
   seedTwoInputGate(library, 'XOR', buildXor);
 
-  {
+  if (!library.findByName('MUX2')) {
     const circuit = scratch();
     const m = buildMux2(circuit);
     foldExposing(circuit, 'MUX2', library, [
@@ -76,7 +116,7 @@ export function seedStandardCells(library: ChipLibrary): void {
     ]);
   }
 
-  {
+  if (!library.findByName('MUX4')) {
     const circuit = scratch();
     const m = buildMux4(circuit);
     foldExposing(circuit, 'MUX4', library, [
@@ -90,7 +130,7 @@ export function seedStandardCells(library: ChipLibrary): void {
     ]);
   }
 
-  {
+  if (!library.findByName('HALF_ADDER')) {
     const circuit = scratch();
     const h = buildHalfAdder(circuit);
     foldExposing(circuit, 'HALF_ADDER', library, [
@@ -101,7 +141,7 @@ export function seedStandardCells(library: ChipLibrary): void {
     ]);
   }
 
-  {
+  if (!library.findByName('FULL_ADDER')) {
     const circuit = scratch();
     const f = buildFullAdder(circuit);
     foldExposing(circuit, 'FULL_ADDER', library, [
@@ -113,7 +153,7 @@ export function seedStandardCells(library: ChipLibrary): void {
     ]);
   }
 
-  {
+  if (!library.findByName('D_LATCH')) {
     const circuit = scratch();
     const l = buildDLatch(circuit);
     foldExposing(circuit, 'D_LATCH', library, [
@@ -124,7 +164,7 @@ export function seedStandardCells(library: ChipLibrary): void {
     ]);
   }
 
-  {
+  if (!library.findByName('D_FF')) {
     const circuit = scratch();
     const f = buildDFlipFlop(circuit);
     foldExposing(circuit, 'D_FF', library, [
@@ -135,7 +175,7 @@ export function seedStandardCells(library: ChipLibrary): void {
     ]);
   }
 
-  {
+  if (!library.findByName('TRI_BUF')) {
     const circuit = scratch();
     const b = buildTriStateBuffer(circuit);
     foldExposing(circuit, 'TRI_BUF', library, [

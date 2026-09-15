@@ -12,7 +12,7 @@ function ensureStyles(): void {
   style.textContent = `
     .float-win {
       position: fixed;
-      z-index: 50;
+      z-index: 50; /* stack stays below #chrome (5000) so menus stay on top */
       min-width: 280px;
       max-width: min(92vw, 640px);
       max-height: min(88vh, 720px);
@@ -25,6 +25,22 @@ function ensureStyles(): void {
       color: #e7e9ef;
       font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
       overflow: hidden;
+    }
+    .float-win.memory-editor {
+      max-width: min(96vw, 720px);
+      width: min(96vw, 640px);
+      height: min(70vh, 480px);
+      min-height: 280px;
+      max-height: min(92vh, 900px);
+      resize: vertical;
+    }
+    .float-win.memory-editor .float-win-body {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+      overflow: hidden;
+      flex: 1 1 auto;
     }
     .float-win[hidden] { display: none !important; }
     .float-win-titlebar {
@@ -70,6 +86,10 @@ function ensureStyles(): void {
 }
 
 let cascade = 0;
+/** Rising z-index so the last focused float-win stacks above the others — capped below menubar. */
+const FLOAT_Z_MIN = 50;
+const FLOAT_Z_MAX = 400;
+let stackZ = FLOAT_Z_MIN;
 
 export class FloatingWindow {
   readonly root: HTMLElement;
@@ -96,10 +116,15 @@ export class FloatingWindow {
     this.body = this.root.querySelector('.float-win-body')!;
     this.titleEl.textContent = title;
 
+    // Capture so a click anywhere in the window (hex grid, inspector fields)
+    // raises it before child handlers run.
+    this.root.addEventListener('pointerdown', () => this.bringToFront(), true);
+
     const bar = this.root.querySelector('.float-win-titlebar')!;
     bar.addEventListener('pointerdown', (ev: Event) => {
       const e = ev as PointerEvent;
       if ((e.target as HTMLElement).closest('button')) return;
+      this.bringToFront();
       const rect = this.root.getBoundingClientRect();
       this.drag = { ox: e.clientX, oy: e.clientY, left: rect.left, top: rect.top };
       (bar as HTMLElement).setPointerCapture(e.pointerId);
@@ -122,6 +147,13 @@ export class FloatingWindow {
     document.body.appendChild(this.root);
   }
 
+  /** Raise this window above sibling float-wins (never above the menubar). */
+  bringToFront(): void {
+    stackZ += 1;
+    if (stackZ > FLOAT_Z_MAX) stackZ = FLOAT_Z_MIN + 1;
+    this.root.style.zIndex = String(stackZ);
+  }
+
   setTitle(title: string, meta = ''): void {
     this.titleEl.textContent = title;
     this.metaEl.textContent = meta;
@@ -136,6 +168,9 @@ export class FloatingWindow {
         this.root.style.left = `${left}px`;
         this.root.style.top = `${top}px`;
       }
+      this.bringToFront();
+    } else if (show) {
+      this.bringToFront();
     }
     this.root.hidden = !show;
   }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import { Circuit } from '../src/sim/Circuit.js';
-import { makeButton, makeChipInstance, makeLed, makeRam } from '../src/sim/library.js';
+import { makeButton, makeChipInstance, makeLed, makeRam, makeSource } from '../src/sim/library.js';
 import {
   applyPinLayout,
   getOrientation,
@@ -19,6 +19,35 @@ describe('orientation', () => {
     expect(transformOffset(16, 0, 90, false)).toEqual({ x: 0, y: 16 });
     expect(transformOffset(16, 0, 180, false)).toEqual({ x: -16, y: 0 });
     expect(transformOffset(16, 0, 180, true)).toEqual({ x: 16, y: 0 });
+  });
+
+  it('transformOffset flips H and V before rotation', () => {
+    expect(transformOffset(10, 4, 0, true, false)).toEqual({ x: -10, y: 4 });
+    expect(transformOffset(10, 4, 0, false, true)).toEqual({ x: 10, y: -4 });
+    expect(transformOffset(10, 4, 0, true, true)).toEqual({ x: -10, y: -4 });
+    expect(transformOffset(0, 15, 90, false, false)).toEqual({ x: -15, y: 0 });
+    expect(transformOffset(0, 15, 90, true, false)).toEqual({ x: -15, y: 0 });
+    expect(transformOffset(0, 15, 90, false, true)).toEqual({ x: 15, y: 0 });
+  });
+
+  it('source pin swings with rotation and flips', () => {
+    const c = new Circuit();
+    const src = makeSource(c, 1, { x: 0, y: 0 });
+    expect(src.pins.out.pos).toEqual({ x: 0, y: 15 });
+    setOrientation(src, 90, false, false);
+    expect(src.pins.out.pos).toEqual({ x: -15, y: 0 });
+    setOrientation(src, 0, false, true);
+    expect(src.pins.out.pos).toEqual({ x: 0, y: -15 });
+    setOrientation(src, 0, true, false);
+    expect(src.pins.out.pos).toEqual({ x: 0, y: 15 });
+  });
+
+  it('rotate preserves flip flags', () => {
+    const c = new Circuit();
+    const led = makeLed(c, { x: 0, y: 0 });
+    setOrientation(led, 0, true, true);
+    setOrientation(led, rotateCw(0), true, true);
+    expect(getOrientation(led)).toEqual({ rotation: 90, mirrorX: true, mirrorY: true });
   });
 
   it('LED pin swings with rotation so it can face a chip', () => {

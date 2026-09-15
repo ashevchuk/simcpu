@@ -1,0 +1,932 @@
+{
+  "format": "z80-sim-project",
+  "version": 1,
+  "topCircuit": {
+    "components": [
+      {
+        "id": "rom13837",
+        "kind": "rom",
+        "addrBits": 8,
+        "dataBits": 8,
+        "bytes": [
+          72,
+          101,
+          108,
+          108,
+          111,
+          33,
+          10,
+          90,
+          56,
+          48,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "pos": {
+          "x": 320,
+          "y": 180
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pinOrder": [
+          "addr0",
+          "addr1",
+          "addr2",
+          "addr3",
+          "addr4",
+          "addr5",
+          "addr6",
+          "addr7",
+          "data0",
+          "data1",
+          "data2",
+          "data3",
+          "data4",
+          "data5",
+          "data6",
+          "data7",
+          "oe"
+        ],
+        "pins": {
+          "addr0": {
+            "id": "rom13837:addr0",
+            "componentId": "rom13837",
+            "name": "addr0",
+            "pos": {
+              "x": 280,
+              "y": 20
+            }
+          },
+          "addr1": {
+            "id": "rom13837:addr1",
+            "componentId": "rom13837",
+            "name": "addr1",
+            "pos": {
+              "x": 280,
+              "y": 40
+            }
+          },
+          "addr2": {
+            "id": "rom13837:addr2",
+            "componentId": "rom13837",
+            "name": "addr2",
+            "pos": {
+              "x": 280,
+              "y": 60
+            }
+          },
+          "addr3": {
+            "id": "rom13837:addr3",
+            "componentId": "rom13837",
+            "name": "addr3",
+            "pos": {
+              "x": 280,
+              "y": 80
+            }
+          },
+          "addr4": {
+            "id": "rom13837:addr4",
+            "componentId": "rom13837",
+            "name": "addr4",
+            "pos": {
+              "x": 280,
+              "y": 100
+            }
+          },
+          "addr5": {
+            "id": "rom13837:addr5",
+            "componentId": "rom13837",
+            "name": "addr5",
+            "pos": {
+              "x": 280,
+              "y": 120
+            }
+          },
+          "addr6": {
+            "id": "rom13837:addr6",
+            "componentId": "rom13837",
+            "name": "addr6",
+            "pos": {
+              "x": 280,
+              "y": 140
+            }
+          },
+          "addr7": {
+            "id": "rom13837:addr7",
+            "componentId": "rom13837",
+            "name": "addr7",
+            "pos": {
+              "x": 280,
+              "y": 160
+            }
+          },
+          "data0": {
+            "id": "rom13837:data0",
+            "componentId": "rom13837",
+            "name": "data0",
+            "pos": {
+              "x": 280,
+              "y": 180
+            }
+          },
+          "data1": {
+            "id": "rom13837:data1",
+            "componentId": "rom13837",
+            "name": "data1",
+            "pos": {
+              "x": 280,
+              "y": 200
+            }
+          },
+          "data2": {
+            "id": "rom13837:data2",
+            "componentId": "rom13837",
+            "name": "data2",
+            "pos": {
+              "x": 280,
+              "y": 220
+            }
+          },
+          "data3": {
+            "id": "rom13837:data3",
+            "componentId": "rom13837",
+            "name": "data3",
+            "pos": {
+              "x": 280,
+              "y": 240
+            }
+          },
+          "data4": {
+            "id": "rom13837:data4",
+            "componentId": "rom13837",
+            "name": "data4",
+            "pos": {
+              "x": 280,
+              "y": 260
+            }
+          },
+          "data5": {
+            "id": "rom13837:data5",
+            "componentId": "rom13837",
+            "name": "data5",
+            "pos": {
+              "x": 280,
+              "y": 280
+            }
+          },
+          "data6": {
+            "id": "rom13837:data6",
+            "componentId": "rom13837",
+            "name": "data6",
+            "pos": {
+              "x": 280,
+              "y": 300
+            }
+          },
+          "data7": {
+            "id": "rom13837:data7",
+            "componentId": "rom13837",
+            "name": "data7",
+            "pos": {
+              "x": 280,
+              "y": 320
+            }
+          },
+          "oe": {
+            "id": "rom13837:oe",
+            "componentId": "rom13837",
+            "name": "oe",
+            "pos": {
+              "x": 280,
+              "y": 340
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "in13838",
+        "kind": "input",
+        "value": 1,
+        "pos": {
+          "x": 160,
+          "y": 300
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "in13838:out",
+            "componentId": "in13838",
+            "name": "out",
+            "pos": {
+              "x": 175,
+              "y": 300
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "in13840",
+        "kind": "input",
+        "value": 0,
+        "pos": {
+          "x": 160,
+          "y": 40
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "in13840:out",
+            "componentId": "in13840",
+            "name": "out",
+            "pos": {
+              "x": 175,
+              "y": 40
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "in13842",
+        "kind": "input",
+        "value": 0,
+        "pos": {
+          "x": 160,
+          "y": 68
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "in13842:out",
+            "componentId": "in13842",
+            "name": "out",
+            "pos": {
+              "x": 175,
+              "y": 68
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "in13844",
+        "kind": "input",
+        "value": 0,
+        "pos": {
+          "x": 160,
+          "y": 96
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "in13844:out",
+            "componentId": "in13844",
+            "name": "out",
+            "pos": {
+              "x": 175,
+              "y": 96
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "in13846",
+        "kind": "input",
+        "value": 0,
+        "pos": {
+          "x": 160,
+          "y": 124
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "in13846:out",
+            "componentId": "in13846",
+            "name": "out",
+            "pos": {
+              "x": 175,
+              "y": 124
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "in13848",
+        "kind": "input",
+        "value": 0,
+        "pos": {
+          "x": 160,
+          "y": 152
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "in13848:out",
+            "componentId": "in13848",
+            "name": "out",
+            "pos": {
+              "x": 175,
+              "y": 152
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "in13850",
+        "kind": "input",
+        "value": 0,
+        "pos": {
+          "x": 160,
+          "y": 180
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "in13850:out",
+            "componentId": "in13850",
+            "name": "out",
+            "pos": {
+              "x": 175,
+              "y": 180
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "in13852",
+        "kind": "input",
+        "value": 0,
+        "pos": {
+          "x": 160,
+          "y": 208
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "in13852:out",
+            "componentId": "in13852",
+            "name": "out",
+            "pos": {
+              "x": 175,
+              "y": 208
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "in13854",
+        "kind": "input",
+        "value": 0,
+        "pos": {
+          "x": 160,
+          "y": 236
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "in13854:out",
+            "componentId": "in13854",
+            "name": "out",
+            "pos": {
+              "x": 175,
+              "y": 236
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "probe13856",
+        "kind": "probe",
+        "label": "D0",
+        "pos": {
+          "x": 480,
+          "y": 60
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "probe13856:in",
+            "componentId": "probe13856",
+            "name": "in",
+            "pos": {
+              "x": 465,
+              "y": 60
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "probe13858",
+        "kind": "probe",
+        "label": "D1",
+        "pos": {
+          "x": 480,
+          "y": 88
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "probe13858:in",
+            "componentId": "probe13858",
+            "name": "in",
+            "pos": {
+              "x": 465,
+              "y": 88
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "probe13860",
+        "kind": "probe",
+        "label": "D2",
+        "pos": {
+          "x": 480,
+          "y": 116
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "probe13860:in",
+            "componentId": "probe13860",
+            "name": "in",
+            "pos": {
+              "x": 465,
+              "y": 116
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "probe13862",
+        "kind": "probe",
+        "label": "D3",
+        "pos": {
+          "x": 480,
+          "y": 144
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "probe13862:in",
+            "componentId": "probe13862",
+            "name": "in",
+            "pos": {
+              "x": 465,
+              "y": 144
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "probe13864",
+        "kind": "probe",
+        "label": "D4",
+        "pos": {
+          "x": 480,
+          "y": 172
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "probe13864:in",
+            "componentId": "probe13864",
+            "name": "in",
+            "pos": {
+              "x": 465,
+              "y": 172
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "probe13866",
+        "kind": "probe",
+        "label": "D5",
+        "pos": {
+          "x": 480,
+          "y": 200
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "probe13866:in",
+            "componentId": "probe13866",
+            "name": "in",
+            "pos": {
+              "x": 465,
+              "y": 200
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "probe13868",
+        "kind": "probe",
+        "label": "D6",
+        "pos": {
+          "x": 480,
+          "y": 228
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "probe13868:in",
+            "componentId": "probe13868",
+            "name": "in",
+            "pos": {
+              "x": 465,
+              "y": 228
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "probe13870",
+        "kind": "probe",
+        "label": "D7",
+        "pos": {
+          "x": 480,
+          "y": 256
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "probe13870:in",
+            "componentId": "probe13870",
+            "name": "in",
+            "pos": {
+              "x": 465,
+              "y": 256
+            }
+          }
+        },
+        "mirrorY": false
+      }
+    ],
+    "wires": [
+      {
+        "id": "w13839",
+        "a": "in13838:out",
+        "b": "rom13837:oe"
+      },
+      {
+        "id": "w13841",
+        "a": "in13840:out",
+        "b": "rom13837:addr0"
+      },
+      {
+        "id": "w13843",
+        "a": "in13842:out",
+        "b": "rom13837:addr1"
+      },
+      {
+        "id": "w13845",
+        "a": "in13844:out",
+        "b": "rom13837:addr2"
+      },
+      {
+        "id": "w13847",
+        "a": "in13846:out",
+        "b": "rom13837:addr3"
+      },
+      {
+        "id": "w13849",
+        "a": "in13848:out",
+        "b": "rom13837:addr4"
+      },
+      {
+        "id": "w13851",
+        "a": "in13850:out",
+        "b": "rom13837:addr5"
+      },
+      {
+        "id": "w13853",
+        "a": "in13852:out",
+        "b": "rom13837:addr6"
+      },
+      {
+        "id": "w13855",
+        "a": "in13854:out",
+        "b": "rom13837:addr7"
+      },
+      {
+        "id": "w13857",
+        "a": "rom13837:data0",
+        "b": "probe13856:in"
+      },
+      {
+        "id": "w13859",
+        "a": "rom13837:data1",
+        "b": "probe13858:in"
+      },
+      {
+        "id": "w13861",
+        "a": "rom13837:data2",
+        "b": "probe13860:in"
+      },
+      {
+        "id": "w13863",
+        "a": "rom13837:data3",
+        "b": "probe13862:in"
+      },
+      {
+        "id": "w13865",
+        "a": "rom13837:data4",
+        "b": "probe13864:in"
+      },
+      {
+        "id": "w13867",
+        "a": "rom13837:data5",
+        "b": "probe13866:in"
+      },
+      {
+        "id": "w13869",
+        "a": "rom13837:data6",
+        "b": "probe13868:in"
+      },
+      {
+        "id": "w13871",
+        "a": "rom13837:data7",
+        "b": "probe13870:in"
+      }
+    ]
+  },
+  "chipDefs": []
+}

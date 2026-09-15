@@ -1,4 +1,4 @@
-import { CHIP_INSTANCE_WIDTH, chipInstanceHeight, ramPortCount, romPortCount } from '../sim/library.js';
+import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from '../sim/library.js';
 import type { Circuit } from '../sim/Circuit.js';
 import type { Component, Pin, Point, Wire } from '../sim/types.js';
 
@@ -112,7 +112,7 @@ function boundsHalfSize(c: Component): [number, number] {
   const [hw, hh] = ((): [number, number] => {
     switch (c.kind) {
       case 'chip':
-        return [CHIP_INSTANCE_WIDTH / 2, chipInstanceHeight(Object.keys(c.pins).length) / 2];
+        return [chipBodyWidth(c) / 2, chipBoxHeight(c) / 2];
       case 'ram':
         return [CHIP_INSTANCE_WIDTH / 2, chipInstanceHeight(ramPortCount(c)) / 2];
       case 'rom':

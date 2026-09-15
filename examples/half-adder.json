@@ -1,0 +1,3398 @@
+{
+  "format": "z80-sim-project",
+  "version": 1,
+  "topCircuit": {
+    "components": [
+      {
+        "id": "btn8301",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 120,
+          "y": 60
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "btn8301:out",
+            "componentId": "btn8301",
+            "name": "out",
+            "pos": {
+              "x": 136,
+              "y": 60
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "btn8302",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 120,
+          "y": 140
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "out": {
+            "id": "btn8302:out",
+            "componentId": "btn8302",
+            "name": "out",
+            "pos": {
+              "x": 136,
+              "y": 140
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "chip8303",
+        "kind": "chip",
+        "defId": "chipdef6911",
+        "pos": {
+          "x": 280,
+          "y": 100
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pinOrder": [
+          "a",
+          "b",
+          "sum",
+          "cout"
+        ],
+        "pinSide": {
+          "a": -1,
+          "b": -1,
+          "sum": 1,
+          "cout": 1
+        },
+        "defRevision": 0,
+        "pins": {
+          "a": {
+            "id": "chip8303:a",
+            "componentId": "chip8303",
+            "name": "a",
+            "pos": {
+              "x": 240,
+              "y": 90
+            }
+          },
+          "b": {
+            "id": "chip8303:b",
+            "componentId": "chip8303",
+            "name": "b",
+            "pos": {
+              "x": 240,
+              "y": 110
+            }
+          },
+          "sum": {
+            "id": "chip8303:sum",
+            "componentId": "chip8303",
+            "name": "sum",
+            "pos": {
+              "x": 320,
+              "y": 90
+            }
+          },
+          "cout": {
+            "id": "chip8303:cout",
+            "componentId": "chip8303",
+            "name": "cout",
+            "pos": {
+              "x": 320,
+              "y": 110
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "led8304",
+        "kind": "led",
+        "label": "sum",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 460,
+          "y": 60
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "led8304:in",
+            "componentId": "led8304",
+            "name": "in",
+            "pos": {
+              "x": 446,
+              "y": 60
+            }
+          }
+        },
+        "mirrorY": false
+      },
+      {
+        "id": "led8305",
+        "kind": "led",
+        "label": "cout",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 460,
+          "y": 140
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "pins": {
+          "in": {
+            "id": "led8305:in",
+            "componentId": "led8305",
+            "name": "in",
+            "pos": {
+              "x": 446,
+              "y": 140
+            }
+          }
+        },
+        "mirrorY": false
+      }
+    ],
+    "wires": [
+      {
+        "id": "w8306",
+        "a": "btn8301:out",
+        "b": "chip8303:a"
+      },
+      {
+        "id": "w8307",
+        "a": "btn8302:out",
+        "b": "chip8303:b"
+      },
+      {
+        "id": "w8308",
+        "a": "chip8303:sum",
+        "b": "led8304:in"
+      },
+      {
+        "id": "w8309",
+        "a": "chip8303:cout",
+        "b": "led8305:in"
+      }
+    ]
+  },
+  "chipDefs": [
+    {
+      "id": "chipdef6911",
+      "name": "HALF_ADDER",
+      "ports": [
+        "a",
+        "b",
+        "sum",
+        "cout"
+      ],
+      "circuit": {
+        "components": [
+          {
+            "id": "src6801",
+            "kind": "source",
+            "value": 1,
+            "pos": {
+              "x": 0,
+              "y": 0
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "out": {
+                "id": "src6801:out",
+                "componentId": "src6801",
+                "name": "out",
+                "pos": {
+                  "x": 0,
+                  "y": 15
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "src6802",
+            "kind": "source",
+            "value": 0,
+            "pos": {
+              "x": 0,
+              "y": 0
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "out": {
+                "id": "src6802:out",
+                "componentId": "src6802",
+                "name": "out",
+                "pos": {
+                  "x": 0,
+                  "y": 15
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6803",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 0,
+              "y": 0
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6803:gate",
+                "componentId": "t6803",
+                "name": "gate",
+                "pos": {
+                  "x": -28,
+                  "y": 0
+                }
+              },
+              "drain": {
+                "id": "t6803:drain",
+                "componentId": "t6803",
+                "name": "drain",
+                "pos": {
+                  "x": 0,
+                  "y": 28
+                }
+              },
+              "source": {
+                "id": "t6803:source",
+                "componentId": "t6803",
+                "name": "source",
+                "pos": {
+                  "x": 0,
+                  "y": -28
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6804",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 80,
+              "y": 0
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6804:gate",
+                "componentId": "t6804",
+                "name": "gate",
+                "pos": {
+                  "x": 52,
+                  "y": 0
+                }
+              },
+              "drain": {
+                "id": "t6804:drain",
+                "componentId": "t6804",
+                "name": "drain",
+                "pos": {
+                  "x": 80,
+                  "y": 28
+                }
+              },
+              "source": {
+                "id": "t6804:source",
+                "componentId": "t6804",
+                "name": "source",
+                "pos": {
+                  "x": 80,
+                  "y": -28
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6805",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 40,
+              "y": 64
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6805:gate",
+                "componentId": "t6805",
+                "name": "gate",
+                "pos": {
+                  "x": 12,
+                  "y": 64
+                }
+              },
+              "drain": {
+                "id": "t6805:drain",
+                "componentId": "t6805",
+                "name": "drain",
+                "pos": {
+                  "x": 40,
+                  "y": 36
+                }
+              },
+              "source": {
+                "id": "t6805:source",
+                "componentId": "t6805",
+                "name": "source",
+                "pos": {
+                  "x": 40,
+                  "y": 92
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6806",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 40,
+              "y": 128
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6806:gate",
+                "componentId": "t6806",
+                "name": "gate",
+                "pos": {
+                  "x": 12,
+                  "y": 128
+                }
+              },
+              "drain": {
+                "id": "t6806:drain",
+                "componentId": "t6806",
+                "name": "drain",
+                "pos": {
+                  "x": 40,
+                  "y": 100
+                }
+              },
+              "source": {
+                "id": "t6806:source",
+                "componentId": "t6806",
+                "name": "source",
+                "pos": {
+                  "x": 40,
+                  "y": 156
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "lbl6807",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 0,
+              "y": -46
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6807:net",
+                "componentId": "lbl6807",
+                "name": "net",
+                "pos": {
+                  "x": 0,
+                  "y": -46
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6809",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 80,
+              "y": -46
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6809:net",
+                "componentId": "lbl6809",
+                "name": "net",
+                "pos": {
+                  "x": 80,
+                  "y": -46
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6814",
+            "kind": "label",
+            "name": "GND",
+            "pos": {
+              "x": 40,
+              "y": 174
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6814:net",
+                "componentId": "lbl6814",
+                "name": "net",
+                "pos": {
+                  "x": 40,
+                  "y": 174
+                }
+              }
+            }
+          },
+          {
+            "id": "t6818",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 0,
+              "y": 150
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6818:gate",
+                "componentId": "t6818",
+                "name": "gate",
+                "pos": {
+                  "x": -28,
+                  "y": 150
+                }
+              },
+              "drain": {
+                "id": "t6818:drain",
+                "componentId": "t6818",
+                "name": "drain",
+                "pos": {
+                  "x": 0,
+                  "y": 178
+                }
+              },
+              "source": {
+                "id": "t6818:source",
+                "componentId": "t6818",
+                "name": "source",
+                "pos": {
+                  "x": 0,
+                  "y": 122
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6819",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 80,
+              "y": 150
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6819:gate",
+                "componentId": "t6819",
+                "name": "gate",
+                "pos": {
+                  "x": 52,
+                  "y": 150
+                }
+              },
+              "drain": {
+                "id": "t6819:drain",
+                "componentId": "t6819",
+                "name": "drain",
+                "pos": {
+                  "x": 80,
+                  "y": 178
+                }
+              },
+              "source": {
+                "id": "t6819:source",
+                "componentId": "t6819",
+                "name": "source",
+                "pos": {
+                  "x": 80,
+                  "y": 122
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6820",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 40,
+              "y": 214
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6820:gate",
+                "componentId": "t6820",
+                "name": "gate",
+                "pos": {
+                  "x": 12,
+                  "y": 214
+                }
+              },
+              "drain": {
+                "id": "t6820:drain",
+                "componentId": "t6820",
+                "name": "drain",
+                "pos": {
+                  "x": 40,
+                  "y": 186
+                }
+              },
+              "source": {
+                "id": "t6820:source",
+                "componentId": "t6820",
+                "name": "source",
+                "pos": {
+                  "x": 40,
+                  "y": 242
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6821",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 40,
+              "y": 278
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6821:gate",
+                "componentId": "t6821",
+                "name": "gate",
+                "pos": {
+                  "x": 12,
+                  "y": 278
+                }
+              },
+              "drain": {
+                "id": "t6821:drain",
+                "componentId": "t6821",
+                "name": "drain",
+                "pos": {
+                  "x": 40,
+                  "y": 250
+                }
+              },
+              "source": {
+                "id": "t6821:source",
+                "componentId": "t6821",
+                "name": "source",
+                "pos": {
+                  "x": 40,
+                  "y": 306
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "lbl6822",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 0,
+              "y": 104
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6822:net",
+                "componentId": "lbl6822",
+                "name": "net",
+                "pos": {
+                  "x": 0,
+                  "y": 104
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6824",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 80,
+              "y": 104
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6824:net",
+                "componentId": "lbl6824",
+                "name": "net",
+                "pos": {
+                  "x": 80,
+                  "y": 104
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6829",
+            "kind": "label",
+            "name": "GND",
+            "pos": {
+              "x": 40,
+              "y": 324
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6829:net",
+                "componentId": "lbl6829",
+                "name": "net",
+                "pos": {
+                  "x": 40,
+                  "y": 324
+                }
+              }
+            }
+          },
+          {
+            "id": "t6833",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 150,
+              "y": 150
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6833:gate",
+                "componentId": "t6833",
+                "name": "gate",
+                "pos": {
+                  "x": 122,
+                  "y": 150
+                }
+              },
+              "drain": {
+                "id": "t6833:drain",
+                "componentId": "t6833",
+                "name": "drain",
+                "pos": {
+                  "x": 150,
+                  "y": 178
+                }
+              },
+              "source": {
+                "id": "t6833:source",
+                "componentId": "t6833",
+                "name": "source",
+                "pos": {
+                  "x": 150,
+                  "y": 122
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6834",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 230,
+              "y": 150
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6834:gate",
+                "componentId": "t6834",
+                "name": "gate",
+                "pos": {
+                  "x": 202,
+                  "y": 150
+                }
+              },
+              "drain": {
+                "id": "t6834:drain",
+                "componentId": "t6834",
+                "name": "drain",
+                "pos": {
+                  "x": 230,
+                  "y": 178
+                }
+              },
+              "source": {
+                "id": "t6834:source",
+                "componentId": "t6834",
+                "name": "source",
+                "pos": {
+                  "x": 230,
+                  "y": 122
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6835",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 190,
+              "y": 214
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6835:gate",
+                "componentId": "t6835",
+                "name": "gate",
+                "pos": {
+                  "x": 162,
+                  "y": 214
+                }
+              },
+              "drain": {
+                "id": "t6835:drain",
+                "componentId": "t6835",
+                "name": "drain",
+                "pos": {
+                  "x": 190,
+                  "y": 186
+                }
+              },
+              "source": {
+                "id": "t6835:source",
+                "componentId": "t6835",
+                "name": "source",
+                "pos": {
+                  "x": 190,
+                  "y": 242
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6836",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 190,
+              "y": 278
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6836:gate",
+                "componentId": "t6836",
+                "name": "gate",
+                "pos": {
+                  "x": 162,
+                  "y": 278
+                }
+              },
+              "drain": {
+                "id": "t6836:drain",
+                "componentId": "t6836",
+                "name": "drain",
+                "pos": {
+                  "x": 190,
+                  "y": 250
+                }
+              },
+              "source": {
+                "id": "t6836:source",
+                "componentId": "t6836",
+                "name": "source",
+                "pos": {
+                  "x": 190,
+                  "y": 306
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "lbl6837",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 150,
+              "y": 104
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6837:net",
+                "componentId": "lbl6837",
+                "name": "net",
+                "pos": {
+                  "x": 150,
+                  "y": 104
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6839",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 230,
+              "y": 104
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6839:net",
+                "componentId": "lbl6839",
+                "name": "net",
+                "pos": {
+                  "x": 230,
+                  "y": 104
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6844",
+            "kind": "label",
+            "name": "GND",
+            "pos": {
+              "x": 190,
+              "y": 324
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6844:net",
+                "componentId": "lbl6844",
+                "name": "net",
+                "pos": {
+                  "x": 190,
+                  "y": 324
+                }
+              }
+            }
+          },
+          {
+            "id": "t6848",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 150,
+              "y": 300
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6848:gate",
+                "componentId": "t6848",
+                "name": "gate",
+                "pos": {
+                  "x": 122,
+                  "y": 300
+                }
+              },
+              "drain": {
+                "id": "t6848:drain",
+                "componentId": "t6848",
+                "name": "drain",
+                "pos": {
+                  "x": 150,
+                  "y": 328
+                }
+              },
+              "source": {
+                "id": "t6848:source",
+                "componentId": "t6848",
+                "name": "source",
+                "pos": {
+                  "x": 150,
+                  "y": 272
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6849",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 230,
+              "y": 300
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6849:gate",
+                "componentId": "t6849",
+                "name": "gate",
+                "pos": {
+                  "x": 202,
+                  "y": 300
+                }
+              },
+              "drain": {
+                "id": "t6849:drain",
+                "componentId": "t6849",
+                "name": "drain",
+                "pos": {
+                  "x": 230,
+                  "y": 328
+                }
+              },
+              "source": {
+                "id": "t6849:source",
+                "componentId": "t6849",
+                "name": "source",
+                "pos": {
+                  "x": 230,
+                  "y": 272
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6850",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 190,
+              "y": 364
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6850:gate",
+                "componentId": "t6850",
+                "name": "gate",
+                "pos": {
+                  "x": 162,
+                  "y": 364
+                }
+              },
+              "drain": {
+                "id": "t6850:drain",
+                "componentId": "t6850",
+                "name": "drain",
+                "pos": {
+                  "x": 190,
+                  "y": 336
+                }
+              },
+              "source": {
+                "id": "t6850:source",
+                "componentId": "t6850",
+                "name": "source",
+                "pos": {
+                  "x": 190,
+                  "y": 392
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6851",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 190,
+              "y": 428
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6851:gate",
+                "componentId": "t6851",
+                "name": "gate",
+                "pos": {
+                  "x": 162,
+                  "y": 428
+                }
+              },
+              "drain": {
+                "id": "t6851:drain",
+                "componentId": "t6851",
+                "name": "drain",
+                "pos": {
+                  "x": 190,
+                  "y": 400
+                }
+              },
+              "source": {
+                "id": "t6851:source",
+                "componentId": "t6851",
+                "name": "source",
+                "pos": {
+                  "x": 190,
+                  "y": 456
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "lbl6852",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 150,
+              "y": 254
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6852:net",
+                "componentId": "lbl6852",
+                "name": "net",
+                "pos": {
+                  "x": 150,
+                  "y": 254
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6854",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 230,
+              "y": 254
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6854:net",
+                "componentId": "lbl6854",
+                "name": "net",
+                "pos": {
+                  "x": 230,
+                  "y": 254
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6859",
+            "kind": "label",
+            "name": "GND",
+            "pos": {
+              "x": 190,
+              "y": 474
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6859:net",
+                "componentId": "lbl6859",
+                "name": "net",
+                "pos": {
+                  "x": 190,
+                  "y": 474
+                }
+              }
+            }
+          },
+          {
+            "id": "t6869",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 0,
+              "y": 500
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6869:gate",
+                "componentId": "t6869",
+                "name": "gate",
+                "pos": {
+                  "x": -28,
+                  "y": 500
+                }
+              },
+              "drain": {
+                "id": "t6869:drain",
+                "componentId": "t6869",
+                "name": "drain",
+                "pos": {
+                  "x": 0,
+                  "y": 528
+                }
+              },
+              "source": {
+                "id": "t6869:source",
+                "componentId": "t6869",
+                "name": "source",
+                "pos": {
+                  "x": 0,
+                  "y": 472
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6870",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 80,
+              "y": 500
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6870:gate",
+                "componentId": "t6870",
+                "name": "gate",
+                "pos": {
+                  "x": 52,
+                  "y": 500
+                }
+              },
+              "drain": {
+                "id": "t6870:drain",
+                "componentId": "t6870",
+                "name": "drain",
+                "pos": {
+                  "x": 80,
+                  "y": 528
+                }
+              },
+              "source": {
+                "id": "t6870:source",
+                "componentId": "t6870",
+                "name": "source",
+                "pos": {
+                  "x": 80,
+                  "y": 472
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6871",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 40,
+              "y": 564
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6871:gate",
+                "componentId": "t6871",
+                "name": "gate",
+                "pos": {
+                  "x": 12,
+                  "y": 564
+                }
+              },
+              "drain": {
+                "id": "t6871:drain",
+                "componentId": "t6871",
+                "name": "drain",
+                "pos": {
+                  "x": 40,
+                  "y": 536
+                }
+              },
+              "source": {
+                "id": "t6871:source",
+                "componentId": "t6871",
+                "name": "source",
+                "pos": {
+                  "x": 40,
+                  "y": 592
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6872",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 40,
+              "y": 628
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6872:gate",
+                "componentId": "t6872",
+                "name": "gate",
+                "pos": {
+                  "x": 12,
+                  "y": 628
+                }
+              },
+              "drain": {
+                "id": "t6872:drain",
+                "componentId": "t6872",
+                "name": "drain",
+                "pos": {
+                  "x": 40,
+                  "y": 600
+                }
+              },
+              "source": {
+                "id": "t6872:source",
+                "componentId": "t6872",
+                "name": "source",
+                "pos": {
+                  "x": 40,
+                  "y": 656
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "lbl6873",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 0,
+              "y": 454
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6873:net",
+                "componentId": "lbl6873",
+                "name": "net",
+                "pos": {
+                  "x": 0,
+                  "y": 454
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6875",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 80,
+              "y": 454
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6875:net",
+                "componentId": "lbl6875",
+                "name": "net",
+                "pos": {
+                  "x": 80,
+                  "y": 454
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6880",
+            "kind": "label",
+            "name": "GND",
+            "pos": {
+              "x": 40,
+              "y": 674
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6880:net",
+                "componentId": "lbl6880",
+                "name": "net",
+                "pos": {
+                  "x": 40,
+                  "y": 674
+                }
+              }
+            }
+          },
+          {
+            "id": "t6884",
+            "kind": "transistor",
+            "type": "P",
+            "pos": {
+              "x": 120,
+              "y": 500
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6884:gate",
+                "componentId": "t6884",
+                "name": "gate",
+                "pos": {
+                  "x": 92,
+                  "y": 500
+                }
+              },
+              "drain": {
+                "id": "t6884:drain",
+                "componentId": "t6884",
+                "name": "drain",
+                "pos": {
+                  "x": 120,
+                  "y": 528
+                }
+              },
+              "source": {
+                "id": "t6884:source",
+                "componentId": "t6884",
+                "name": "source",
+                "pos": {
+                  "x": 120,
+                  "y": 472
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "t6885",
+            "kind": "transistor",
+            "type": "N",
+            "pos": {
+              "x": 120,
+              "y": 564
+            },
+            "rotation": 0,
+            "mirrorX": false,
+            "pins": {
+              "gate": {
+                "id": "t6885:gate",
+                "componentId": "t6885",
+                "name": "gate",
+                "pos": {
+                  "x": 92,
+                  "y": 564
+                }
+              },
+              "drain": {
+                "id": "t6885:drain",
+                "componentId": "t6885",
+                "name": "drain",
+                "pos": {
+                  "x": 120,
+                  "y": 536
+                }
+              },
+              "source": {
+                "id": "t6885:source",
+                "componentId": "t6885",
+                "name": "source",
+                "pos": {
+                  "x": 120,
+                  "y": 592
+                }
+              }
+            },
+            "mirrorY": false
+          },
+          {
+            "id": "lbl6886",
+            "kind": "label",
+            "name": "VCC",
+            "pos": {
+              "x": 120,
+              "y": 454
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6886:net",
+                "componentId": "lbl6886",
+                "name": "net",
+                "pos": {
+                  "x": 120,
+                  "y": 454
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6888",
+            "kind": "label",
+            "name": "GND",
+            "pos": {
+              "x": 120,
+              "y": 610
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6888:net",
+                "componentId": "lbl6888",
+                "name": "net",
+                "pos": {
+                  "x": 120,
+                  "y": 610
+                }
+              }
+            }
+          },
+          {
+            "id": "port6903",
+            "kind": "port",
+            "name": "a",
+            "dir": "in",
+            "pos": {
+              "x": 40,
+              "y": 80
+            },
+            "pins": {
+              "io": {
+                "id": "port6903:io",
+                "componentId": "port6903",
+                "name": "io",
+                "pos": {
+                  "x": 40,
+                  "y": 80
+                }
+              }
+            }
+          },
+          {
+            "id": "port6905",
+            "kind": "port",
+            "name": "b",
+            "dir": "in",
+            "pos": {
+              "x": 40,
+              "y": 120
+            },
+            "pins": {
+              "io": {
+                "id": "port6905:io",
+                "componentId": "port6905",
+                "name": "io",
+                "pos": {
+                  "x": 40,
+                  "y": 120
+                }
+              }
+            }
+          },
+          {
+            "id": "port6907",
+            "kind": "port",
+            "name": "sum",
+            "dir": "out",
+            "pos": {
+              "x": 40,
+              "y": 160
+            },
+            "pins": {
+              "io": {
+                "id": "port6907:io",
+                "componentId": "port6907",
+                "name": "io",
+                "pos": {
+                  "x": 40,
+                  "y": 160
+                }
+              }
+            }
+          },
+          {
+            "id": "port6909",
+            "kind": "port",
+            "name": "cout",
+            "dir": "out",
+            "pos": {
+              "x": 40,
+              "y": 200
+            },
+            "pins": {
+              "io": {
+                "id": "port6909:io",
+                "componentId": "port6909",
+                "name": "io",
+                "pos": {
+                  "x": 40,
+                  "y": 200
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6917",
+            "kind": "label",
+            "name": "_N0",
+            "pos": {
+              "x": 8,
+              "y": 28
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6917:net",
+                "componentId": "lbl6917",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 28
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6919",
+            "kind": "label",
+            "name": "_N0",
+            "pos": {
+              "x": 88,
+              "y": 28
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6919:net",
+                "componentId": "lbl6919",
+                "name": "net",
+                "pos": {
+                  "x": 88,
+                  "y": 28
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6921",
+            "kind": "label",
+            "name": "_N1",
+            "pos": {
+              "x": 8,
+              "y": 28
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6921:net",
+                "componentId": "lbl6921",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 28
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6923",
+            "kind": "label",
+            "name": "_N1",
+            "pos": {
+              "x": 48,
+              "y": 36
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6923:net",
+                "componentId": "lbl6923",
+                "name": "net",
+                "pos": {
+                  "x": 48,
+                  "y": 36
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6925",
+            "kind": "label",
+            "name": "_N2",
+            "pos": {
+              "x": -20,
+              "y": 0
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6925:net",
+                "componentId": "lbl6925",
+                "name": "net",
+                "pos": {
+                  "x": -20,
+                  "y": 0
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6927",
+            "kind": "label",
+            "name": "_N2",
+            "pos": {
+              "x": 20,
+              "y": 64
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6927:net",
+                "componentId": "lbl6927",
+                "name": "net",
+                "pos": {
+                  "x": 20,
+                  "y": 64
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6929",
+            "kind": "label",
+            "name": "_N3",
+            "pos": {
+              "x": 60,
+              "y": 0
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6929:net",
+                "componentId": "lbl6929",
+                "name": "net",
+                "pos": {
+                  "x": 60,
+                  "y": 0
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6931",
+            "kind": "label",
+            "name": "_N3",
+            "pos": {
+              "x": 20,
+              "y": 128
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6931:net",
+                "componentId": "lbl6931",
+                "name": "net",
+                "pos": {
+                  "x": 20,
+                  "y": 128
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6933",
+            "kind": "label",
+            "name": "_N4",
+            "pos": {
+              "x": 8,
+              "y": 178
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6933:net",
+                "componentId": "lbl6933",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 178
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6935",
+            "kind": "label",
+            "name": "_N4",
+            "pos": {
+              "x": 88,
+              "y": 178
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6935:net",
+                "componentId": "lbl6935",
+                "name": "net",
+                "pos": {
+                  "x": 88,
+                  "y": 178
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6937",
+            "kind": "label",
+            "name": "_N5",
+            "pos": {
+              "x": 8,
+              "y": 178
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6937:net",
+                "componentId": "lbl6937",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 178
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6939",
+            "kind": "label",
+            "name": "_N5",
+            "pos": {
+              "x": 48,
+              "y": 186
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6939:net",
+                "componentId": "lbl6939",
+                "name": "net",
+                "pos": {
+                  "x": 48,
+                  "y": 186
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6941",
+            "kind": "label",
+            "name": "_N6",
+            "pos": {
+              "x": -20,
+              "y": 150
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6941:net",
+                "componentId": "lbl6941",
+                "name": "net",
+                "pos": {
+                  "x": -20,
+                  "y": 150
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6943",
+            "kind": "label",
+            "name": "_N6",
+            "pos": {
+              "x": 20,
+              "y": 214
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6943:net",
+                "componentId": "lbl6943",
+                "name": "net",
+                "pos": {
+                  "x": 20,
+                  "y": 214
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6945",
+            "kind": "label",
+            "name": "_N7",
+            "pos": {
+              "x": 60,
+              "y": 150
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6945:net",
+                "componentId": "lbl6945",
+                "name": "net",
+                "pos": {
+                  "x": 60,
+                  "y": 150
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6947",
+            "kind": "label",
+            "name": "_N7",
+            "pos": {
+              "x": 20,
+              "y": 278
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6947:net",
+                "componentId": "lbl6947",
+                "name": "net",
+                "pos": {
+                  "x": 20,
+                  "y": 278
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6949",
+            "kind": "label",
+            "name": "_N8",
+            "pos": {
+              "x": 158,
+              "y": 178
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6949:net",
+                "componentId": "lbl6949",
+                "name": "net",
+                "pos": {
+                  "x": 158,
+                  "y": 178
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6951",
+            "kind": "label",
+            "name": "_N8",
+            "pos": {
+              "x": 238,
+              "y": 178
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6951:net",
+                "componentId": "lbl6951",
+                "name": "net",
+                "pos": {
+                  "x": 238,
+                  "y": 178
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6953",
+            "kind": "label",
+            "name": "_N9",
+            "pos": {
+              "x": 158,
+              "y": 178
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6953:net",
+                "componentId": "lbl6953",
+                "name": "net",
+                "pos": {
+                  "x": 158,
+                  "y": 178
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6955",
+            "kind": "label",
+            "name": "_N9",
+            "pos": {
+              "x": 198,
+              "y": 186
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6955:net",
+                "componentId": "lbl6955",
+                "name": "net",
+                "pos": {
+                  "x": 198,
+                  "y": 186
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6957",
+            "kind": "label",
+            "name": "_N10",
+            "pos": {
+              "x": 130,
+              "y": 150
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6957:net",
+                "componentId": "lbl6957",
+                "name": "net",
+                "pos": {
+                  "x": 130,
+                  "y": 150
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6959",
+            "kind": "label",
+            "name": "_N10",
+            "pos": {
+              "x": 170,
+              "y": 214
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6959:net",
+                "componentId": "lbl6959",
+                "name": "net",
+                "pos": {
+                  "x": 170,
+                  "y": 214
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6961",
+            "kind": "label",
+            "name": "_N11",
+            "pos": {
+              "x": 210,
+              "y": 150
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6961:net",
+                "componentId": "lbl6961",
+                "name": "net",
+                "pos": {
+                  "x": 210,
+                  "y": 150
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6963",
+            "kind": "label",
+            "name": "_N11",
+            "pos": {
+              "x": 170,
+              "y": 278
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6963:net",
+                "componentId": "lbl6963",
+                "name": "net",
+                "pos": {
+                  "x": 170,
+                  "y": 278
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6965",
+            "kind": "label",
+            "name": "_N12",
+            "pos": {
+              "x": 158,
+              "y": 328
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6965:net",
+                "componentId": "lbl6965",
+                "name": "net",
+                "pos": {
+                  "x": 158,
+                  "y": 328
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6967",
+            "kind": "label",
+            "name": "_N12",
+            "pos": {
+              "x": 238,
+              "y": 328
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6967:net",
+                "componentId": "lbl6967",
+                "name": "net",
+                "pos": {
+                  "x": 238,
+                  "y": 328
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6969",
+            "kind": "label",
+            "name": "_N13",
+            "pos": {
+              "x": 158,
+              "y": 328
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6969:net",
+                "componentId": "lbl6969",
+                "name": "net",
+                "pos": {
+                  "x": 158,
+                  "y": 328
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6971",
+            "kind": "label",
+            "name": "_N13",
+            "pos": {
+              "x": 198,
+              "y": 336
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6971:net",
+                "componentId": "lbl6971",
+                "name": "net",
+                "pos": {
+                  "x": 198,
+                  "y": 336
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6973",
+            "kind": "label",
+            "name": "_N14",
+            "pos": {
+              "x": 130,
+              "y": 300
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6973:net",
+                "componentId": "lbl6973",
+                "name": "net",
+                "pos": {
+                  "x": 130,
+                  "y": 300
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6975",
+            "kind": "label",
+            "name": "_N14",
+            "pos": {
+              "x": 170,
+              "y": 364
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6975:net",
+                "componentId": "lbl6975",
+                "name": "net",
+                "pos": {
+                  "x": 170,
+                  "y": 364
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6977",
+            "kind": "label",
+            "name": "_N15",
+            "pos": {
+              "x": 210,
+              "y": 300
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6977:net",
+                "componentId": "lbl6977",
+                "name": "net",
+                "pos": {
+                  "x": 210,
+                  "y": 300
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6979",
+            "kind": "label",
+            "name": "_N15",
+            "pos": {
+              "x": 170,
+              "y": 428
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6979:net",
+                "componentId": "lbl6979",
+                "name": "net",
+                "pos": {
+                  "x": 170,
+                  "y": 428
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6981",
+            "kind": "label",
+            "name": "_N16",
+            "pos": {
+              "x": -20,
+              "y": 0
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6981:net",
+                "componentId": "lbl6981",
+                "name": "net",
+                "pos": {
+                  "x": -20,
+                  "y": 0
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6983",
+            "kind": "label",
+            "name": "_N16",
+            "pos": {
+              "x": -20,
+              "y": 150
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6983:net",
+                "componentId": "lbl6983",
+                "name": "net",
+                "pos": {
+                  "x": -20,
+                  "y": 150
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6985",
+            "kind": "label",
+            "name": "_N17",
+            "pos": {
+              "x": 60,
+              "y": 0
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6985:net",
+                "componentId": "lbl6985",
+                "name": "net",
+                "pos": {
+                  "x": 60,
+                  "y": 0
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6987",
+            "kind": "label",
+            "name": "_N17",
+            "pos": {
+              "x": 130,
+              "y": 150
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6987:net",
+                "componentId": "lbl6987",
+                "name": "net",
+                "pos": {
+                  "x": 130,
+                  "y": 150
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6989",
+            "kind": "label",
+            "name": "_N18",
+            "pos": {
+              "x": 8,
+              "y": 28
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6989:net",
+                "componentId": "lbl6989",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 28
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6991",
+            "kind": "label",
+            "name": "_N18",
+            "pos": {
+              "x": 60,
+              "y": 150
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6991:net",
+                "componentId": "lbl6991",
+                "name": "net",
+                "pos": {
+                  "x": 60,
+                  "y": 150
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6993",
+            "kind": "label",
+            "name": "_N19",
+            "pos": {
+              "x": 8,
+              "y": 28
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6993:net",
+                "componentId": "lbl6993",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 28
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6995",
+            "kind": "label",
+            "name": "_N19",
+            "pos": {
+              "x": 210,
+              "y": 150
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6995:net",
+                "componentId": "lbl6995",
+                "name": "net",
+                "pos": {
+                  "x": 210,
+                  "y": 150
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6997",
+            "kind": "label",
+            "name": "_N20",
+            "pos": {
+              "x": 8,
+              "y": 178
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6997:net",
+                "componentId": "lbl6997",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 178
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl6999",
+            "kind": "label",
+            "name": "_N20",
+            "pos": {
+              "x": 130,
+              "y": 300
+            },
+            "pins": {
+              "net": {
+                "id": "lbl6999:net",
+                "componentId": "lbl6999",
+                "name": "net",
+                "pos": {
+                  "x": 130,
+                  "y": 300
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7001",
+            "kind": "label",
+            "name": "_N21",
+            "pos": {
+              "x": 158,
+              "y": 178
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7001:net",
+                "componentId": "lbl7001",
+                "name": "net",
+                "pos": {
+                  "x": 158,
+                  "y": 178
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7003",
+            "kind": "label",
+            "name": "_N21",
+            "pos": {
+              "x": 210,
+              "y": 300
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7003:net",
+                "componentId": "lbl7003",
+                "name": "net",
+                "pos": {
+                  "x": 210,
+                  "y": 300
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7005",
+            "kind": "label",
+            "name": "_N22",
+            "pos": {
+              "x": 8,
+              "y": 528
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7005:net",
+                "componentId": "lbl7005",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 528
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7007",
+            "kind": "label",
+            "name": "_N22",
+            "pos": {
+              "x": 88,
+              "y": 528
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7007:net",
+                "componentId": "lbl7007",
+                "name": "net",
+                "pos": {
+                  "x": 88,
+                  "y": 528
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7009",
+            "kind": "label",
+            "name": "_N23",
+            "pos": {
+              "x": 8,
+              "y": 528
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7009:net",
+                "componentId": "lbl7009",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 528
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7011",
+            "kind": "label",
+            "name": "_N23",
+            "pos": {
+              "x": 48,
+              "y": 536
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7011:net",
+                "componentId": "lbl7011",
+                "name": "net",
+                "pos": {
+                  "x": 48,
+                  "y": 536
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7013",
+            "kind": "label",
+            "name": "_N24",
+            "pos": {
+              "x": -20,
+              "y": 500
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7013:net",
+                "componentId": "lbl7013",
+                "name": "net",
+                "pos": {
+                  "x": -20,
+                  "y": 500
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7015",
+            "kind": "label",
+            "name": "_N24",
+            "pos": {
+              "x": 20,
+              "y": 564
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7015:net",
+                "componentId": "lbl7015",
+                "name": "net",
+                "pos": {
+                  "x": 20,
+                  "y": 564
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7017",
+            "kind": "label",
+            "name": "_N25",
+            "pos": {
+              "x": 60,
+              "y": 500
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7017:net",
+                "componentId": "lbl7017",
+                "name": "net",
+                "pos": {
+                  "x": 60,
+                  "y": 500
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7019",
+            "kind": "label",
+            "name": "_N25",
+            "pos": {
+              "x": 20,
+              "y": 628
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7019:net",
+                "componentId": "lbl7019",
+                "name": "net",
+                "pos": {
+                  "x": 20,
+                  "y": 628
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7021",
+            "kind": "label",
+            "name": "_N26",
+            "pos": {
+              "x": 100,
+              "y": 500
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7021:net",
+                "componentId": "lbl7021",
+                "name": "net",
+                "pos": {
+                  "x": 100,
+                  "y": 500
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7023",
+            "kind": "label",
+            "name": "_N26",
+            "pos": {
+              "x": 100,
+              "y": 564
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7023:net",
+                "componentId": "lbl7023",
+                "name": "net",
+                "pos": {
+                  "x": 100,
+                  "y": 564
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7025",
+            "kind": "label",
+            "name": "_N27",
+            "pos": {
+              "x": 8,
+              "y": 528
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7025:net",
+                "componentId": "lbl7025",
+                "name": "net",
+                "pos": {
+                  "x": 8,
+                  "y": 528
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7027",
+            "kind": "label",
+            "name": "_N27",
+            "pos": {
+              "x": 100,
+              "y": 500
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7027:net",
+                "componentId": "lbl7027",
+                "name": "net",
+                "pos": {
+                  "x": 100,
+                  "y": 500
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7029",
+            "kind": "label",
+            "name": "_N28",
+            "pos": {
+              "x": -20,
+              "y": 0
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7029:net",
+                "componentId": "lbl7029",
+                "name": "net",
+                "pos": {
+                  "x": -20,
+                  "y": 0
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7031",
+            "kind": "label",
+            "name": "_N28",
+            "pos": {
+              "x": -20,
+              "y": 500
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7031:net",
+                "componentId": "lbl7031",
+                "name": "net",
+                "pos": {
+                  "x": -20,
+                  "y": 500
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7033",
+            "kind": "label",
+            "name": "_N29",
+            "pos": {
+              "x": 60,
+              "y": 0
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7033:net",
+                "componentId": "lbl7033",
+                "name": "net",
+                "pos": {
+                  "x": 60,
+                  "y": 0
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7035",
+            "kind": "label",
+            "name": "_N29",
+            "pos": {
+              "x": 60,
+              "y": 500
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7035:net",
+                "componentId": "lbl7035",
+                "name": "net",
+                "pos": {
+                  "x": 60,
+                  "y": 500
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7037",
+            "kind": "label",
+            "name": "_N30",
+            "pos": {
+              "x": -20,
+              "y": 0
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7037:net",
+                "componentId": "lbl7037",
+                "name": "net",
+                "pos": {
+                  "x": -20,
+                  "y": 0
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7039",
+            "kind": "label",
+            "name": "_N30",
+            "pos": {
+              "x": 48,
+              "y": 80
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7039:net",
+                "componentId": "lbl7039",
+                "name": "net",
+                "pos": {
+                  "x": 48,
+                  "y": 80
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7041",
+            "kind": "label",
+            "name": "_N31",
+            "pos": {
+              "x": 60,
+              "y": 0
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7041:net",
+                "componentId": "lbl7041",
+                "name": "net",
+                "pos": {
+                  "x": 60,
+                  "y": 0
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7043",
+            "kind": "label",
+            "name": "_N31",
+            "pos": {
+              "x": 48,
+              "y": 120
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7043:net",
+                "componentId": "lbl7043",
+                "name": "net",
+                "pos": {
+                  "x": 48,
+                  "y": 120
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7045",
+            "kind": "label",
+            "name": "_N32",
+            "pos": {
+              "x": 158,
+              "y": 328
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7045:net",
+                "componentId": "lbl7045",
+                "name": "net",
+                "pos": {
+                  "x": 158,
+                  "y": 328
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7047",
+            "kind": "label",
+            "name": "_N32",
+            "pos": {
+              "x": 48,
+              "y": 160
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7047:net",
+                "componentId": "lbl7047",
+                "name": "net",
+                "pos": {
+                  "x": 48,
+                  "y": 160
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7049",
+            "kind": "label",
+            "name": "_N33",
+            "pos": {
+              "x": 128,
+              "y": 528
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7049:net",
+                "componentId": "lbl7049",
+                "name": "net",
+                "pos": {
+                  "x": 128,
+                  "y": 528
+                }
+              }
+            }
+          },
+          {
+            "id": "lbl7051",
+            "kind": "label",
+            "name": "_N33",
+            "pos": {
+              "x": 48,
+              "y": 200
+            },
+            "pins": {
+              "net": {
+                "id": "lbl7051:net",
+                "componentId": "lbl7051",
+                "name": "net",
+                "pos": {
+                  "x": 48,
+                  "y": 200
+                }
+              }
+            }
+          }
+        ],
+        "wires": [
+          {
+            "id": "w6808",
+            "a": "t6803:source",
+            "b": "lbl6807:net"
+          },
+          {
+            "id": "w6810",
+            "a": "t6804:source",
+            "b": "lbl6809:net"
+          },
+          {
+            "id": "w6813",
+            "a": "t6805:source",
+            "b": "t6806:drain"
+          },
+          {
+            "id": "w6815",
+            "a": "t6806:source",
+            "b": "lbl6814:net"
+          },
+          {
+            "id": "w6823",
+            "a": "t6818:source",
+            "b": "lbl6822:net"
+          },
+          {
+            "id": "w6825",
+            "a": "t6819:source",
+            "b": "lbl6824:net"
+          },
+          {
+            "id": "w6828",
+            "a": "t6820:source",
+            "b": "t6821:drain"
+          },
+          {
+            "id": "w6830",
+            "a": "t6821:source",
+            "b": "lbl6829:net"
+          },
+          {
+            "id": "w6838",
+            "a": "t6833:source",
+            "b": "lbl6837:net"
+          },
+          {
+            "id": "w6840",
+            "a": "t6834:source",
+            "b": "lbl6839:net"
+          },
+          {
+            "id": "w6843",
+            "a": "t6835:source",
+            "b": "t6836:drain"
+          },
+          {
+            "id": "w6845",
+            "a": "t6836:source",
+            "b": "lbl6844:net"
+          },
+          {
+            "id": "w6853",
+            "a": "t6848:source",
+            "b": "lbl6852:net"
+          },
+          {
+            "id": "w6855",
+            "a": "t6849:source",
+            "b": "lbl6854:net"
+          },
+          {
+            "id": "w6858",
+            "a": "t6850:source",
+            "b": "t6851:drain"
+          },
+          {
+            "id": "w6860",
+            "a": "t6851:source",
+            "b": "lbl6859:net"
+          },
+          {
+            "id": "w6874",
+            "a": "t6869:source",
+            "b": "lbl6873:net"
+          },
+          {
+            "id": "w6876",
+            "a": "t6870:source",
+            "b": "lbl6875:net"
+          },
+          {
+            "id": "w6879",
+            "a": "t6871:source",
+            "b": "t6872:drain"
+          },
+          {
+            "id": "w6881",
+            "a": "t6872:source",
+            "b": "lbl6880:net"
+          },
+          {
+            "id": "w6887",
+            "a": "t6884:source",
+            "b": "lbl6886:net"
+          },
+          {
+            "id": "w6889",
+            "a": "t6885:source",
+            "b": "lbl6888:net"
+          },
+          {
+            "id": "w6890",
+            "a": "t6884:drain",
+            "b": "t6885:drain"
+          },
+          {
+            "id": "w6918",
+            "a": "t6803:drain",
+            "b": "lbl6917:net"
+          },
+          {
+            "id": "w6920",
+            "a": "t6804:drain",
+            "b": "lbl6919:net"
+          },
+          {
+            "id": "w6922",
+            "a": "t6803:drain",
+            "b": "lbl6921:net"
+          },
+          {
+            "id": "w6924",
+            "a": "t6805:drain",
+            "b": "lbl6923:net"
+          },
+          {
+            "id": "w6926",
+            "a": "t6803:gate",
+            "b": "lbl6925:net"
+          },
+          {
+            "id": "w6928",
+            "a": "t6805:gate",
+            "b": "lbl6927:net"
+          },
+          {
+            "id": "w6930",
+            "a": "t6804:gate",
+            "b": "lbl6929:net"
+          },
+          {
+            "id": "w6932",
+            "a": "t6806:gate",
+            "b": "lbl6931:net"
+          },
+          {
+            "id": "w6934",
+            "a": "t6818:drain",
+            "b": "lbl6933:net"
+          },
+          {
+            "id": "w6936",
+            "a": "t6819:drain",
+            "b": "lbl6935:net"
+          },
+          {
+            "id": "w6938",
+            "a": "t6818:drain",
+            "b": "lbl6937:net"
+          },
+          {
+            "id": "w6940",
+            "a": "t6820:drain",
+            "b": "lbl6939:net"
+          },
+          {
+            "id": "w6942",
+            "a": "t6818:gate",
+            "b": "lbl6941:net"
+          },
+          {
+            "id": "w6944",
+            "a": "t6820:gate",
+            "b": "lbl6943:net"
+          },
+          {
+            "id": "w6946",
+            "a": "t6819:gate",
+            "b": "lbl6945:net"
+          },
+          {
+            "id": "w6948",
+            "a": "t6821:gate",
+            "b": "lbl6947:net"
+          },
+          {
+            "id": "w6950",
+            "a": "t6833:drain",
+            "b": "lbl6949:net"
+          },
+          {
+            "id": "w6952",
+            "a": "t6834:drain",
+            "b": "lbl6951:net"
+          },
+          {
+            "id": "w6954",
+            "a": "t6833:drain",
+            "b": "lbl6953:net"
+          },
+          {
+            "id": "w6956",
+            "a": "t6835:drain",
+            "b": "lbl6955:net"
+          },
+          {
+            "id": "w6958",
+            "a": "t6833:gate",
+            "b": "lbl6957:net"
+          },
+          {
+            "id": "w6960",
+            "a": "t6835:gate",
+            "b": "lbl6959:net"
+          },
+          {
+            "id": "w6962",
+            "a": "t6834:gate",
+            "b": "lbl6961:net"
+          },
+          {
+            "id": "w6964",
+            "a": "t6836:gate",
+            "b": "lbl6963:net"
+          },
+          {
+            "id": "w6966",
+            "a": "t6848:drain",
+            "b": "lbl6965:net"
+          },
+          {
+            "id": "w6968",
+            "a": "t6849:drain",
+            "b": "lbl6967:net"
+          },
+          {
+            "id": "w6970",
+            "a": "t6848:drain",
+            "b": "lbl6969:net"
+          },
+          {
+            "id": "w6972",
+            "a": "t6850:drain",
+            "b": "lbl6971:net"
+          },
+          {
+            "id": "w6974",
+            "a": "t6848:gate",
+            "b": "lbl6973:net"
+          },
+          {
+            "id": "w6976",
+            "a": "t6850:gate",
+            "b": "lbl6975:net"
+          },
+          {
+            "id": "w6978",
+            "a": "t6849:gate",
+            "b": "lbl6977:net"
+          },
+          {
+            "id": "w6980",
+            "a": "t6851:gate",
+            "b": "lbl6979:net"
+          },
+          {
+            "id": "w6982",
+            "a": "t6803:gate",
+            "b": "lbl6981:net"
+          },
+          {
+            "id": "w6984",
+            "a": "t6818:gate",
+            "b": "lbl6983:net"
+          },
+          {
+            "id": "w6986",
+            "a": "t6804:gate",
+            "b": "lbl6985:net"
+          },
+          {
+            "id": "w6988",
+            "a": "t6833:gate",
+            "b": "lbl6987:net"
+          },
+          {
+            "id": "w6990",
+            "a": "t6803:drain",
+            "b": "lbl6989:net"
+          },
+          {
+            "id": "w6992",
+            "a": "t6819:gate",
+            "b": "lbl6991:net"
+          },
+          {
+            "id": "w6994",
+            "a": "t6803:drain",
+            "b": "lbl6993:net"
+          },
+          {
+            "id": "w6996",
+            "a": "t6834:gate",
+            "b": "lbl6995:net"
+          },
+          {
+            "id": "w6998",
+            "a": "t6818:drain",
+            "b": "lbl6997:net"
+          },
+          {
+            "id": "w7000",
+            "a": "t6848:gate",
+            "b": "lbl6999:net"
+          },
+          {
+            "id": "w7002",
+            "a": "t6833:drain",
+            "b": "lbl7001:net"
+          },
+          {
+            "id": "w7004",
+            "a": "t6849:gate",
+            "b": "lbl7003:net"
+          },
+          {
+            "id": "w7006",
+            "a": "t6869:drain",
+            "b": "lbl7005:net"
+          },
+          {
+            "id": "w7008",
+            "a": "t6870:drain",
+            "b": "lbl7007:net"
+          },
+          {
+            "id": "w7010",
+            "a": "t6869:drain",
+            "b": "lbl7009:net"
+          },
+          {
+            "id": "w7012",
+            "a": "t6871:drain",
+            "b": "lbl7011:net"
+          },
+          {
+            "id": "w7014",
+            "a": "t6869:gate",
+            "b": "lbl7013:net"
+          },
+          {
+            "id": "w7016",
+            "a": "t6871:gate",
+            "b": "lbl7015:net"
+          },
+          {
+            "id": "w7018",
+            "a": "t6870:gate",
+            "b": "lbl7017:net"
+          },
+          {
+            "id": "w7020",
+            "a": "t6872:gate",
+            "b": "lbl7019:net"
+          },
+          {
+            "id": "w7022",
+            "a": "t6884:gate",
+            "b": "lbl7021:net"
+          },
+          {
+            "id": "w7024",
+            "a": "t6885:gate",
+            "b": "lbl7023:net"
+          },
+          {
+            "id": "w7026",
+            "a": "t6869:drain",
+            "b": "lbl7025:net"
+          },
+          {
+            "id": "w7028",
+            "a": "t6884:gate",
+            "b": "lbl7027:net"
+          },
+          {
+            "id": "w7030",
+            "a": "t6803:gate",
+            "b": "lbl7029:net"
+          },
+          {
+            "id": "w7032",
+            "a": "t6869:gate",
+            "b": "lbl7031:net"
+          },
+          {
+            "id": "w7034",
+            "a": "t6804:gate",
+            "b": "lbl7033:net"
+          },
+          {
+            "id": "w7036",
+            "a": "t6870:gate",
+            "b": "lbl7035:net"
+          },
+          {
+            "id": "w7038",
+            "a": "t6803:gate",
+            "b": "lbl7037:net"
+          },
+          {
+            "id": "w7040",
+            "a": "port6903:io",
+            "b": "lbl7039:net"
+          },
+          {
+            "id": "w7042",
+            "a": "t6804:gate",
+            "b": "lbl7041:net"
+          },
+          {
+            "id": "w7044",
+            "a": "port6905:io",
+            "b": "lbl7043:net"
+          },
+          {
+            "id": "w7046",
+            "a": "t6848:drain",
+            "b": "lbl7045:net"
+          },
+          {
+            "id": "w7048",
+            "a": "port6907:io",
+            "b": "lbl7047:net"
+          },
+          {
+            "id": "w7050",
+            "a": "t6884:drain",
+            "b": "lbl7049:net"
+          },
+          {
+            "id": "w7052",
+            "a": "port6909:io",
+            "b": "lbl7051:net"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -98,6 +98,7 @@ describe('project serialize/deserialize round-trip', () => {
       pos: { x: 0, y: 0 },
       rotation: 0,
       mirrorX: false,
+      mirrorY: false,
       pins: { out: { id: `${highId}:out`, componentId: highId, name: 'out', pos: { x: 0, y: 0 } } },
     });
     const project: SerializedProject = {

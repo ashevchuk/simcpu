@@ -48,6 +48,9 @@ function fromSerializedComponent(c: SerializedComponent): Component {
   if (c.kind === 'ram' || c.kind === 'rom') {
     return { ...c, bytes: Uint8Array.from(c.bytes) };
   }
+  if (c.kind === 'port') {
+    return { ...c, dir: c.dir ?? 'inout' };
+  }
   if (c.kind === 'clock') {
     const raw = c as ClockComponent & {
       mode?: ClockComponent['mode'];
@@ -55,6 +58,7 @@ function fromSerializedComponent(c: SerializedComponent): Component {
       lastTrig?: Level;
       rotation?: ClockComponent['rotation'];
       mirrorX?: boolean;
+      mirrorY?: boolean;
       pins: { out: Pin; trig?: Pin };
     };
     const trig =
@@ -79,6 +83,7 @@ function fromSerializedComponent(c: SerializedComponent): Component {
       pos: raw.pos,
       rotation: raw.rotation ?? 0,
       mirrorX: raw.mirrorX ?? false,
+      mirrorY: raw.mirrorY ?? false,
       pins: { out: raw.pins.out, trig },
     };
     applyPinLayout(clock);
@@ -86,9 +91,10 @@ function fromSerializedComponent(c: SerializedComponent): Component {
   }
   const comp = c as Component;
   if (isOrientable(comp)) {
-    const o = comp as Component & { rotation?: number; mirrorX?: boolean };
+    const o = comp as Component & { rotation?: number; mirrorX?: boolean; mirrorY?: boolean };
     (o as { rotation: number }).rotation = o.rotation ?? 0;
     (o as { mirrorX: boolean }).mirrorX = o.mirrorX ?? false;
+    (o as { mirrorY: boolean }).mirrorY = o.mirrorY ?? false;
     applyPinLayout(o);
   }
   return comp;
@@ -104,6 +110,7 @@ export interface SerializedChipDef {
   name: string;
   ports: string[];
   circuit: SerializedCircuit;
+  revision?: number;
 }
 
 const PROJECT_FORMAT = 'z80-sim-project';
@@ -162,7 +169,13 @@ export function restoreCircuit(circuit: Circuit, snap: CircuitSnapshot): void {
 }
 
 function serializeChipDefPlain(def: ChipDef): SerializedChipDef {
-  return { id: def.id, name: def.name, ports: [...def.ports], circuit: serializeCircuit(def.circuit) };
+  return {
+    id: def.id,
+    name: def.name,
+    ports: [...def.ports],
+    circuit: serializeCircuit(def.circuit),
+    ...(def.revision ? { revision: def.revision } : {}),
+  };
 }
 
 // --- Whole-project export/import (replaces the running session's state) ---
@@ -195,7 +208,13 @@ export function deserializeProject(data: SerializedProject): { topCircuit: Circu
   if (data.format !== PROJECT_FORMAT) throw new Error('Not a project file (missing/wrong "format" field).');
   const library = new ChipLibrary();
   for (const d of data.chipDefs) {
-    library.register({ id: d.id, name: d.name, ports: [...d.ports], circuit: loadCircuit(d.circuit) });
+    library.register({
+      id: d.id,
+      name: d.name,
+      ports: [...d.ports],
+      circuit: loadCircuit(d.circuit),
+      ...(d.revision ? { revision: d.revision } : {}),
+    });
     noteUsedId(d.id);
   }
   const topCircuit = loadCircuit(data.topCircuit);
@@ -285,7 +304,13 @@ export function importChipDef(bundle: SerializedChipBundle, library: ChipLibrary
       circuit.addRawWire({ id: nextId('w'), a, b, ...(w.waypoints ? { waypoints: w.waypoints.map((p) => ({ ...p })) } : {}) });
     }
 
-    const def: ChipDef = { id: defIdMap.get(sd.id)!, name: sd.name, ports: [...sd.ports], circuit };
+    const def: ChipDef = {
+      id: defIdMap.get(sd.id)!,
+      name: sd.name,
+      ports: [...sd.ports],
+      circuit,
+      ...(sd.revision ? { revision: sd.revision } : {}),
+    };
     library.register(def);
     if (sd.id === bundle.rootId) rootDef = def;
   }

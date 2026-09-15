@@ -17,6 +17,7 @@ import type {
   Pin,
   Point,
   PortComponent,
+  PortDir,
   ProbeComponent,
   RamComponent,
   RomComponent,
@@ -39,6 +40,8 @@ function pin(componentId: string, name: string, pos: Point, dx: number, dy: numb
 const chipPinDyByCount: number[][] = [];
 /** Horizontal offset of chip/RAM/ROM pins from body center (left edge). */
 export const CHIP_PIN_DX = -40;
+/** Right-edge pin offset (mirror of CHIP_PIN_DX). */
+export const CHIP_PIN_DX_RIGHT = -CHIP_PIN_DX;
 /** Analyzer channel stack uses a tighter pitch. */
 export const ANALYZER_PIN_DX = -28;
 export const ANALYZER_PIN_PITCH = 16;
@@ -134,6 +137,7 @@ export function makeTransistor(
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pins: {
       gate: { id: id + ':gate', componentId: id, name: 'gate', pos: { x: x + off.gate[0], y: y + off.gate[1] } },
       drain: { id: id + ':drain', componentId: id, name: 'drain', pos: { x: x + off.drain[0], y: y + off.drain[1] } },
@@ -157,6 +161,7 @@ export function makeSource(
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pins: { out: pin(id, 'out', pos, ...LAYOUT.source.out) },
   };
   circuit.addComponent(c);
@@ -176,6 +181,7 @@ export function makeInput(
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pins: { out: pin(id, 'out', pos, ...LAYOUT.input.out) },
   };
   circuit.addComponent(c);
@@ -198,6 +204,7 @@ export function makeButton(
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pins: { out: pin(id, 'out', pos, ...LAYOUT.button.out) },
   };
   circuit.addComponent(c);
@@ -219,6 +226,7 @@ export function makeLed(
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pins: { in: pin(id, 'in', pos, ...LAYOUT.led.in) },
   };
   circuit.addComponent(c);
@@ -248,6 +256,7 @@ export function makeClock(
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pins: {
       out: pin(id, 'out', pos, ...LAYOUT.clock.out),
       trig: pin(id, 'trig', pos, ...LAYOUT.clock.trig),
@@ -281,6 +290,7 @@ export function makeAnalyzer(
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pinOrder,
     pins,
   };
@@ -351,6 +361,7 @@ export function makeProbe(circuit: Circuit, pos: Point = { x: 0, y: 0 }, label?:
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pins: { in: pin(id, 'in', pos, ...LAYOUT.probe.in) },
   };
   circuit.addComponent(c);
@@ -362,15 +373,98 @@ export function wire(circuit: Circuit, a: Pin, b: Pin, waypoints?: Point[]): voi
 }
 
 /** Boundary marker inside a ChipDef's internal circuit — see fold() in hierarchy.ts. */
-export function makePort(circuit: Circuit, name: string, pos: Point = { x: 0, y: 0 }): PortComponent {
+export function makePort(
+  circuit: Circuit,
+  name: string,
+  pos: Point = { x: 0, y: 0 },
+  dir: PortDir = 'inout',
+): PortComponent {
   const id = nextId('port');
-  const c: PortComponent = { id, kind: 'port', name, pos, pins: { io: pin(id, 'io', pos, 0, 0) } };
+  const c: PortComponent = { id, kind: 'port', name, dir, pos, pins: { io: pin(id, 'io', pos, 0, 0) } };
   circuit.addComponent(c);
   return c;
 }
 
+/** Next free `pN` name among existing ports on `circuit`. */
+export function nextAutoPortName(circuit: Circuit): string {
+  const used = new Set<string>();
+  for (const c of circuit.components.values()) {
+    if (c.kind === 'port') used.add(c.name);
+  }
+  let i = 0;
+  while (used.has(`p${i}`)) i++;
+  return `p${i}`;
+}
+
+/**
+ * Parse a bus port spec: `D[7:0]` → D7…D0, or `D[8]` → D0…D7.
+ * Returns null if `spec` is a plain single port name.
+ */
+export function parseBusPortSpec(spec: string): { names: string[] } | null {
+  const s = spec.trim();
+  const range = /^([A-Za-z_][\w]*)\[(\d+):(\d+)\]$/.exec(s);
+  if (range) {
+    const base = range[1]!;
+    const a = Number(range[2]);
+    const b = Number(range[3]);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+    const names: string[] = [];
+    if (a >= b) {
+      for (let i = a; i >= b; i--) names.push(`${base}${i}`);
+    } else {
+      for (let i = a; i <= b; i++) names.push(`${base}${i}`);
+    }
+    if (names.length < 1 || names.length > 64) return null;
+    return { names };
+  }
+  const width = /^([A-Za-z_][\w]*)\[(\d+)\]$/.exec(s);
+  if (width) {
+    const base = width[1]!;
+    const n = Number(width[2]);
+    if (!Number.isFinite(n) || n < 1 || n > 64) return null;
+    return { names: Array.from({ length: n }, (_, i) => `${base}${i}`) };
+  }
+  return null;
+}
+
+/** Build left/right pinSide map from PortComponents inside a ChipDef. */
+export function pinSidesFromDef(def: ChipDef): Record<string, -1 | 1> {
+  const dirs = new Map<string, PortDir>();
+  for (const c of def.circuit.components.values()) {
+    if (c.kind === 'port') dirs.set(c.name, c.dir ?? 'inout');
+  }
+  const sides: Record<string, -1 | 1> = {};
+  for (const name of def.ports) {
+    const d = dirs.get(name) ?? 'inout';
+    sides[name] = d === 'out' ? 1 : -1;
+  }
+  return sides;
+}
+
+/** Visual height from the taller of the left/right stacks. */
+export function chipBoxHeight(c: ChipInstanceComponent): number {
+  if (!c.pinSide) return chipInstanceHeight(Math.max(Object.keys(c.pins).length, 1));
+  let left = 0;
+  let right = 0;
+  for (const name of c.pinOrder) {
+    if (c.pinSide[name] === 1) right++;
+    else left++;
+  }
+  return chipInstanceHeight(Math.max(left, right, 1));
+}
+
 /** Fixed visual width of every chip / RAM / ROM instance box. Tall enough for pin labels inside. */
 export const CHIP_INSTANCE_WIDTH = 96;
+
+export function chipBodyWidth(c: { boxWidth?: number }): number {
+  return c.boxWidth ?? CHIP_INSTANCE_WIDTH;
+}
+
+/** Local X offsets for left/right pin stacks given body width. */
+export function chipPinDxPair(width: number): { left: number; right: number } {
+  const half = width / 2;
+  return { left: -(half - 8), right: half - 8 };
+}
 
 /**
  * Visual height of a chip instance box with `portCount` pins, stacked at
@@ -384,24 +478,38 @@ export function chipInstanceHeight(portCount: number): number {
 }
 
 /**
- * Place one instance of a chip definition. Pins are stacked vertically
- * along the instance's left edge, in `def.ports` order, centered on `pos`.
+ * Place one instance of a chip definition. IN/inout pins on the left, OUT on
+ * the right (from PortComponent.dir inside the def).
  */
 export function makeChipInstance(circuit: Circuit, def: ChipDef, pos: Point = { x: 0, y: 0 }): ChipInstanceComponent {
   const id = nextId('chip');
   const ports = def.ports;
-  const n = ports.length;
-  const dys = chipPinDys(n);
+  const pinSide = pinSidesFromDef(def);
+  const left: string[] = [];
+  const right: string[] = [];
+  for (const name of ports) {
+    if (pinSide[name] === 1) right.push(name);
+    else left.push(name);
+  }
+  const leftDys = chipPinDys(left.length);
+  const rightDys = chipPinDys(right.length);
   const pins: Record<string, Pin> = {};
-  const px = pos.x + CHIP_PIN_DX;
-  const py = pos.y;
-  for (let i = 0; i < n; i++) {
-    const name = ports[i]!;
+  for (let i = 0; i < left.length; i++) {
+    const name = left[i]!;
     pins[name] = {
       id: id + ':' + name,
       componentId: id,
       name,
-      pos: { x: px, y: py + dys[i]! },
+      pos: { x: pos.x + CHIP_PIN_DX, y: pos.y + leftDys[i]! },
+    };
+  }
+  for (let i = 0; i < right.length; i++) {
+    const name = right[i]!;
+    pins[name] = {
+      id: id + ':' + name,
+      componentId: id,
+      name,
+      pos: { x: pos.x + CHIP_PIN_DX_RIGHT, y: pos.y + rightDys[i]! },
     };
   }
   const c: ChipInstanceComponent = {
@@ -411,7 +519,10 @@ export function makeChipInstance(circuit: Circuit, def: ChipDef, pos: Point = { 
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pinOrder: [...ports],
+    pinSide,
+    defRevision: def.revision ?? 0,
     pins,
   };
   circuit.addComponent(c);
@@ -480,6 +591,7 @@ export function makeRam(
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pinOrder,
     pins,
   };
@@ -533,6 +645,7 @@ export function makeRom(
     pos,
     rotation: 0,
     mirrorX: false,
+    mirrorY: false,
     pinOrder,
     pins,
   };

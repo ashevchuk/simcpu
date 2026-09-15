@@ -271,6 +271,13 @@ export function step(
   // per pass below.
   driverMask.fill(0);
   for (const d of driverPins) driverMask[d.netIdx]! |= d.comp.value === 1 ? 2 : 1;
+  // Implicit global rails: a net named VCC/GND is driven even with no Source
+  // on the sheet (labels alone are enough to join and power that rail).
+  for (let i = 0; i < n; i++) {
+    const id = netIds[i]!;
+    if (id === 'VCC') driverMask[i]! |= 2;
+    else if (id === 'GND') driverMask[i]! |= 1;
+  }
 
   // Oscillation bookkeeping is per-step (same semantics as a fresh buffer).
   histLen.fill(0);
