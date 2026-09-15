@@ -557,6 +557,9 @@ function cloneComponent(c: Component): Component {
         channelCount: c.channelCount,
         armed: c.armed,
         pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        pinOrder: [...c.pinOrder],
         pins,
       };
     }
@@ -591,6 +594,9 @@ function cloneComponent(c: Component): Component {
         dataBits: c.dataBits,
         bytes: c.bytes,
         pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        pinOrder: [...c.pinOrder],
         pins: clonePinsRecord(c.pins),
       };
     case 'rom':
@@ -601,10 +607,22 @@ function cloneComponent(c: Component): Component {
         dataBits: c.dataBits,
         bytes: c.bytes,
         pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        pinOrder: [...c.pinOrder],
         pins: clonePinsRecord(c.pins),
       };
     case 'chip':
-      return { id: c.id, kind: 'chip', defId: c.defId, pos, pins: clonePinsRecord(c.pins) };
+      return {
+        id: c.id,
+        kind: 'chip',
+        defId: c.defId,
+        pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        pinOrder: [...c.pinOrder],
+        pins: clonePinsRecord(c.pins),
+      };
   }
 }
 

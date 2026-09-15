@@ -1,6 +1,7 @@
 /**
  * Object inspector — configure the selected component (labels, button mode,
- * pulse timing, orientation, …) without modal prompts.
+ * pulse timing, orientation, …) without modal prompts. Multi-select shows
+ * bulk rotate/mirror when every selected part is orientable.
  */
 
 import type { Circuit } from '../sim/Circuit.js';
@@ -14,13 +15,14 @@ import {
   setOrientation,
   type Rotation,
 } from '../sim/orientation.js';
-import type { Component } from '../sim/types.js';
+import type { ChipInstanceComponent, Component } from '../sim/types.js';
 import { FloatingWindow } from './FloatingWindow.js';
 
 export class ObjectInspector {
   private readonly win = new FloatingWindow('Inspector');
   private target: Component | null = null;
-  private lastSyncedId: string | null = null;
+  private targets: Component[] = [];
+  private lastSyncedKey: string | null = null;
   private circuit: Circuit | null = null;
   private library: ChipLibrary | null = null;
   /** ChipDef id when editing inside a folded chip (for port rename). */
@@ -28,6 +30,8 @@ export class ObjectInspector {
   private allCircuits: Circuit[] = [];
   onChange: (() => void) | null = null;
   onBeforeEdit: (() => void) | null = null;
+  /** Dive into a chip instance from the inspector. */
+  onDive: ((inst: ChipInstanceComponent) => void) | null = null;
 
   constructor() {
     this.win.setTitle('Inspector', '');
@@ -46,29 +50,39 @@ export class ObjectInspector {
     this.allCircuits = opts.allCircuits;
   }
 
-  /** Show inspector for one component, or hide when nothing / multi-select. */
-  sync(selected: Component | null, force = false): void {
-    const id = selected?.id ?? null;
-    if (!force && id === this.lastSyncedId) {
-      this.target = selected;
-      if (!selected) this.win.setVisible(false);
+  /**
+   * Show inspector for one component, a multi-selection, or hide when empty.
+   */
+  sync(selected: Component | Component[] | null, force = false): void {
+    const list = selected == null ? [] : Array.isArray(selected) ? selected : [selected];
+    const key = list.map((c) => c.id).sort().join(',') || null;
+    if (!force && key === this.lastSyncedKey) {
+      this.targets = list;
+      this.target = list.length === 1 ? list[0]! : null;
+      if (list.length === 0) this.win.setVisible(false);
       return;
     }
-    this.lastSyncedId = id;
-    if (!selected) {
-      this.target = null;
+    this.lastSyncedKey = key;
+    this.targets = list;
+    this.target = list.length === 1 ? list[0]! : null;
+    if (list.length === 0) {
       this.win.setVisible(false);
       return;
     }
-    this.target = selected;
-    this.win.setTitle('Inspector', selected.kind);
-    this.render();
+    if (list.length === 1) {
+      this.win.setTitle('Inspector', list[0]!.kind);
+      this.render();
+    } else {
+      this.win.setTitle('Inspector', `${list.length} selected`);
+      this.renderMulti();
+    }
     this.win.setVisible(true);
   }
 
   /** Rebuild form for the current target (after rotate from keyboard, etc.). */
   refresh(): void {
-    if (this.target) this.render();
+    if (this.targets.length > 1) this.renderMulti();
+    else if (this.target) this.render();
   }
 
   private noteEdit(): void {
@@ -77,7 +91,68 @@ export class ObjectInspector {
 
   private changed(): void {
     this.onChange?.();
-    this.render();
+    if (this.targets.length > 1) this.renderMulti();
+    else this.render();
+  }
+
+  private mkBtn(label: string, title: string, fn: () => void): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.title = title;
+    b.style.cssText =
+      'background:#20242f;border:1px solid #333a48;border-radius:6px;color:#e7e9ef;padding:5px 10px;font:12px ui-monospace,monospace;cursor:pointer';
+    b.addEventListener('click', () => {
+      this.noteEdit();
+      fn();
+      this.changed();
+    });
+    return b;
+  }
+
+  private renderMulti(): void {
+    const body = this.win.body;
+    body.replaceChildren();
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.gap = '8px';
+
+    const orientable = this.targets.filter(isOrientable);
+    const summary = document.createElement('div');
+    summary.style.cssText = 'font:12px ui-monospace,monospace;color:#9aa1b3';
+    summary.textContent = `${this.targets.length} parts · ${orientable.length} rotatable`;
+    body.appendChild(summary);
+
+    if (orientable.length === 0) return;
+
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.flexWrap = 'wrap';
+    row.style.gap = '6px';
+    row.append(
+      this.mkBtn('↻ 90°', 'Rotate all clockwise (R)', () => {
+        for (const c of orientable) {
+          const { rotation, mirrorX } = getOrientation(c);
+          setOrientation(c, rotateCw(rotation as Rotation), mirrorX);
+        }
+      }),
+      this.mkBtn('↺ 90°', 'Rotate all counter-clockwise (Shift+R)', () => {
+        for (const c of orientable) {
+          const { rotation, mirrorX } = getOrientation(c);
+          setOrientation(c, rotateCcw(rotation as Rotation), mirrorX);
+        }
+      }),
+      this.mkBtn('Mirror', 'Mirror all horizontally (M)', () => {
+        for (const c of orientable) {
+          const { rotation, mirrorX } = getOrientation(c);
+          setOrientation(c, rotation as Rotation, !mirrorX);
+        }
+      }),
+    );
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3';
+    hint.textContent = 'bulk orient · R / Shift+R / M';
+    body.append(row, hint);
   }
 
   private render(): void {
@@ -333,6 +408,42 @@ export class ObjectInspector {
       );
     }
 
+    if (c.kind === 'chip') {
+      const defName = this.library?.has(c.defId) ? this.library.get(c.defId).name : c.defId;
+      addRow(
+        'def',
+        (() => {
+          const span = document.createElement('span');
+          span.style.color = '#e7e9ef';
+          span.style.fontFamily = 'ui-monospace, monospace';
+          span.textContent = defName;
+          return span;
+        })(),
+      );
+      const ports = c.pinOrder?.length ? c.pinOrder : Object.keys(c.pins);
+      const portNote = document.createElement('div');
+      portNote.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;word-break:break-all';
+      portNote.textContent = `ports: ${ports.join(', ')}`;
+      body.appendChild(portNote);
+      body.appendChild(
+        this.mkBtn('Dive in', 'Open chip internals (same as dblclick)', () => {
+          this.onDive?.(c);
+        }),
+      );
+    }
+
+    if (c.kind === 'ram' || c.kind === 'rom') {
+      addRow(
+        'size',
+        (() => {
+          const span = document.createElement('span');
+          span.style.color = '#e7e9ef';
+          span.textContent = `${1 << c.addrBits}×${c.dataBits}`;
+          return span;
+        })(),
+      );
+    }
+
     if (isOrientable(c)) {
       const { rotation, mirrorX } = getOrientation(c);
       const row = document.createElement('div');
@@ -341,27 +452,12 @@ export class ObjectInspector {
       row.style.gap = '6px';
       row.style.marginTop = '4px';
 
-      const mkBtn = (label: string, title: string, fn: () => void) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.textContent = label;
-        b.title = title;
-        b.style.cssText =
-          'background:#20242f;border:1px solid #333a48;border-radius:6px;color:#e7e9ef;padding:5px 10px;font:12px ui-monospace,monospace;cursor:pointer';
-        b.addEventListener('click', () => {
-          this.noteEdit();
-          fn();
-          this.changed();
-        });
-        return b;
-      };
-
       row.append(
-        mkBtn('↻ 90°', 'Rotate clockwise (R)', () => setOrientation(c, rotateCw(rotation as Rotation), mirrorX)),
-        mkBtn('↺ 90°', 'Rotate counter-clockwise (Shift+R)', () =>
+        this.mkBtn('↻ 90°', 'Rotate clockwise (R)', () => setOrientation(c, rotateCw(rotation as Rotation), mirrorX)),
+        this.mkBtn('↺ 90°', 'Rotate counter-clockwise (Shift+R)', () =>
           setOrientation(c, rotateCcw(rotation as Rotation), mirrorX),
         ),
-        mkBtn(mirrorX ? 'Mirror ✓' : 'Mirror', 'Mirror horizontally (M)', () =>
+        this.mkBtn(mirrorX ? 'Mirror ✓' : 'Mirror', 'Mirror horizontally (M)', () =>
           setOrientation(c, rotation as Rotation, !mirrorX),
         ),
       );
@@ -374,15 +470,17 @@ export class ObjectInspector {
     if (c.kind === 'analyzer') {
       addRow(
         'channels',
-        numInput(
-          c.channelCount,
-          (n) => {
-            // Channel count is structural (pins); keep read-only here — use place dialog.
-            void n;
-          },
-          1,
-          64,
-        ),
+        (() => {
+          const span = document.createElement('span');
+          span.style.color = '#e7e9ef';
+          span.textContent = String(c.channelCount);
+          return span;
+        })(),
+      );
+      body.appendChild(
+        this.mkBtn(c.armed ? 'Disarm' : 'Arm', 'Toggle analyzer sampling', () => {
+          c.armed = !c.armed;
+        }),
       );
       const note = document.createElement('div');
       note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3';

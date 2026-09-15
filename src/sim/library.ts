@@ -37,7 +37,13 @@ function pin(componentId: string, name: string, pos: Point, dx: number, dy: numb
 
 /** Precomputed pin dy offsets for makeChipInstance — keyed by port count. */
 const chipPinDyByCount: number[][] = [];
-function chipPinDys(portCount: number): number[] {
+/** Horizontal offset of chip/RAM/ROM pins from body center (left edge). */
+export const CHIP_PIN_DX = -40;
+/** Analyzer channel stack uses a tighter pitch. */
+export const ANALYZER_PIN_DX = -28;
+export const ANALYZER_PIN_PITCH = 16;
+
+export function chipPinDys(portCount: number): number[] {
   let dys = chipPinDyByCount[portCount];
   if (dys) return dys;
   dys = new Array(portCount);
@@ -45,6 +51,11 @@ function chipPinDys(portCount: number): number[] {
   for (let i = 0; i < portCount; i++) dys[i] = (i - mid) * 20;
   chipPinDyByCount[portCount] = dys;
   return dys;
+}
+
+export function analyzerPinDys(channelCount: number): number[] {
+  const mid = (channelCount - 1) / 2;
+  return Array.from({ length: channelCount }, (_, i) => (i - mid) * ANALYZER_PIN_PITCH);
 }
 
 /**
@@ -256,9 +267,11 @@ export function makeAnalyzer(
   const id = nextId('la');
   const pins: Record<string, Pin> = {};
   const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
   for (let i = 0; i < n; i++) {
     const name = `ch${i}`;
-    pins[name] = pin(id, name, pos, -28, (i - mid) * 16);
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, ANALYZER_PIN_DX, (i - mid) * ANALYZER_PIN_PITCH);
   }
   const c: AnalyzerComponent = {
     id,
@@ -266,6 +279,9 @@ export function makeAnalyzer(
     channelCount: n,
     armed: false,
     pos,
+    rotation: 0,
+    mirrorX: false,
+    pinOrder,
     pins,
   };
   circuit.addComponent(c);
@@ -377,7 +393,7 @@ export function makeChipInstance(circuit: Circuit, def: ChipDef, pos: Point = { 
   const n = ports.length;
   const dys = chipPinDys(n);
   const pins: Record<string, Pin> = {};
-  const px = pos.x - 40;
+  const px = pos.x + CHIP_PIN_DX;
   const py = pos.y;
   for (let i = 0; i < n; i++) {
     const name = ports[i]!;
@@ -388,7 +404,16 @@ export function makeChipInstance(circuit: Circuit, def: ChipDef, pos: Point = { 
       pos: { x: px, y: py + dys[i]! },
     };
   }
-  const c: ChipInstanceComponent = { id, kind: 'chip', defId: def.id, pos, pins };
+  const c: ChipInstanceComponent = {
+    id,
+    kind: 'chip',
+    defId: def.id,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    pinOrder: [...ports],
+    pins,
+  };
   circuit.addComponent(c);
   return c;
 }
@@ -430,13 +455,34 @@ export function makeRam(
   const nextDy = () => (i++ - (n - 1) / 2) * 20;
 
   const pins: Record<string, Pin> = {};
-  for (let k = 0; k < addrBits; k++) pins[`addr${k}`] = pin(id, `addr${k}`, pos, -40, nextDy());
-  for (let k = 0; k < dataBits; k++) pins[`data${k}`] = pin(id, `data${k}`, pos, -40, nextDy());
-  pins.we = pin(id, 'we', pos, -40, nextDy());
-  pins.oe = pin(id, 'oe', pos, -40, nextDy());
-  pins.clk = pin(id, 'clk', pos, -40, nextDy());
+  const pinOrder: string[] = [];
+  for (let k = 0; k < addrBits; k++) {
+    const name = `addr${k}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, CHIP_PIN_DX, nextDy());
+  }
+  for (let k = 0; k < dataBits; k++) {
+    const name = `data${k}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, CHIP_PIN_DX, nextDy());
+  }
+  pins.we = pin(id, 'we', pos, CHIP_PIN_DX, nextDy());
+  pins.oe = pin(id, 'oe', pos, CHIP_PIN_DX, nextDy());
+  pins.clk = pin(id, 'clk', pos, CHIP_PIN_DX, nextDy());
+  pinOrder.push('we', 'oe', 'clk');
 
-  const c: RamComponent = { id, kind: 'ram', addrBits, dataBits, bytes, pos, pins };
+  const c: RamComponent = {
+    id,
+    kind: 'ram',
+    addrBits,
+    dataBits,
+    bytes,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    pinOrder,
+    pins,
+  };
   circuit.addComponent(c);
   return c;
 }
@@ -464,11 +510,32 @@ export function makeRom(
   const nextDy = () => (i++ - (n - 1) / 2) * 20;
 
   const pins: Record<string, Pin> = {};
-  for (let k = 0; k < addrBits; k++) pins[`addr${k}`] = pin(id, `addr${k}`, pos, -40, nextDy());
-  for (let k = 0; k < dataBits; k++) pins[`data${k}`] = pin(id, `data${k}`, pos, -40, nextDy());
-  pins.oe = pin(id, 'oe', pos, -40, nextDy());
+  const pinOrder: string[] = [];
+  for (let k = 0; k < addrBits; k++) {
+    const name = `addr${k}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, CHIP_PIN_DX, nextDy());
+  }
+  for (let k = 0; k < dataBits; k++) {
+    const name = `data${k}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, CHIP_PIN_DX, nextDy());
+  }
+  pins.oe = pin(id, 'oe', pos, CHIP_PIN_DX, nextDy());
+  pinOrder.push('oe');
 
-  const c: RomComponent = { id, kind: 'rom', addrBits, dataBits, bytes, pos, pins };
+  const c: RomComponent = {
+    id,
+    kind: 'rom',
+    addrBits,
+    dataBits,
+    bytes,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    pinOrder,
+    pins,
+  };
   circuit.addComponent(c);
   return c;
 }

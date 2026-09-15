@@ -123,7 +123,8 @@ function seedDefaultRegs(cpu: Z80Cpu, seedReg: SeedReg, sp: number): void {
 /**
  * Run the same program bytes on softZ80 and on buildZ80Cpu (via makeZ80Harness).
  * Soft runs until HALT (or maxSteps); gate catch-up follows each soft step.
- * Gate HALT (0x76) is inert but still advances PC like a 1-byte NOP — matching
+ * Gate HALT (0x76) latches `halted` (MachineRunner stop-clock); PC still
+ * sits past the HALT byte after fetch/increment, matching soft.
  * soft's fetch-then-halt PC.
  */
 function runBoth(program: Uint8Array, ramAddrs: number[], maxSteps = 16, sp = SP0) {

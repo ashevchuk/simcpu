@@ -1150,9 +1150,11 @@ export interface Z80Cpu {
   rIXL: Register; // IX low — same contract
   rIYH: Register; // IY high — seed-path contract like rIXH; FD LD IY,nn / POP IY write internally (see "FD: IY")
   rIYL: Register; // IY low — same contract
-  iff1: Pin[]; // IFF1 (q only) — EI/DI/INT-accept/RETI write it; no external seed (same contract as rI)
-  iff2: Pin[]; // IFF2 (q only) — EI/DI/INT-accept write it; RETI copies iff2→iff1
+  iff1: Pin[]; // IFF1 (q only) — EI-commit/DI/INT-accept/RETI write it; no external seed (same contract as rI)
+  iff2: Pin[]; // IFF2 (q only) — EI-commit/DI/INT-accept write it; RETI copies iff2→iff1
   im1: Pin[]; // IM 1 latch (q only) — `ED 0x56` sets it
+  /** HALT latch (q only) — set by opcode 0x76; cleared by INT accept / CPU_RESET. */
+  halted: Pin[];
   int: Pin; // maskable-INT net (active high), driven by the internal `intDrive` Input (defaults to 0)
   intDrive: { value: 0 | 1 }; // raise/clear INT by writing `.value` (same Input contract clocks use)
   bP: Register; // B'/C'/D'/E'/H'/L' — EXX's own shadow register-pair set, identical seed-path contract (see "x=11: EXX")
@@ -1185,8 +1187,8 @@ export interface Z80Cpu {
  * Z80 opcodes, not a made-up encoding, for two opcode groups: `x=10` (the
  * ALU-operation-on-a-register group, real opcodes `0x80`-`0xBF`) and `x=01`
  * (`LD r,r'`, real opcodes `0x40`-`0x7F`, register-to-register and
- * register<->`(HL)` moves — everything this group can do except the one
- * `0x76` slot, `HALT`, this slice deliberately leaves inert). Built from
+ * register<->`(HL)` moves — including `HALT` at `0x76`, which latches
+ * `halted` rather than pretending to be `LD (HL),(HL)`). Built from
  * exactly the same pieces `buildMinimalCpu` already proved out (PC/RAM/IR,
  * a 3-phase FETCH/INCREMENT/DECODE_EXECUTE `buildRingCounter`,
  * `buildTriStateBuffer` banks sharing one bus) plus `buildZ80Decoder` for
@@ -1236,13 +1238,10 @@ export interface Z80Cpu {
  * `0x76`) is the one hole in this otherwise-complete 8x8 grid: real Z80
  * silicon special-cases that exact byte as `HALT` rather than the
  * pointless "read a byte from memory and write the same byte back" a
- * literal `LD (HL),(HL)` would be. This slice doesn't implement `HALT`
- * either, so it leaves the slot genuinely inert rather than guessing at
- * one behavior or the other: `ramWriteNow` (below) explicitly excludes
- * `z=110`, so `0x76` reads `(HL)` onto the bus for no reason and writes
- * nowhere — the same "a pattern matching no control signal does nothing,
- * by construction, not by being special-cased" discipline `buildMinimalCpu`'s
- * own reserved `111` opcode already established.
+ * literal `LD (HL),(HL)` would be. This slice matches that: `ramWriteNow`
+ * (below) explicitly excludes `z=110`, and a separate `haltNow` latch
+ * sets `halted` so the machine runner can stop the clock (INT-accept /
+ * `CPU_RESET` clear it again).
  *
  * `LD (HL),r` is this slice's first instruction that *writes* RAM —
  * `ram.pins.we` was hardwired to `gnd` ("read-only") before this group
@@ -2313,14 +2312,21 @@ function buildZ80CpuInner(
   const rIXL = buildRegister(parent, library, 8, { x: pos.x + 1400, y: pos.y + 4600 });
   const rIYH = buildRegister(parent, library, 8, { x: pos.x + 800, y: pos.y + 3800 });
   const rIYL = buildRegister(parent, library, 8, { x: pos.x + 800, y: pos.y + 4600 });
-  // Thin IM1 IRQ state — IFF1/IFF2, IM 1 latch, and a one-instruction
-  // "serving" latch that suppresses PHASE1's PC advance while RST 38h
-  // reuses the existing stack/jump path. Seed contract matches rB
-  // (external d/we); INT is a genuine external sink like ioPortDataIn.
+  // Thin IM1 IRQ state — IFF1/IFF2, IM 1 latch, HALT latch, EI delay arms,
+  // and a one-instruction "serving" latch that suppresses PHASE1's PC
+  // advance while RST 38h reuses the existing stack/jump path. Seed
+  // contract matches rB (external d/we); INT is a genuine external sink
+  // like ioPortDataIn.
   const iff1 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 3800 });
   const iff2 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4000 });
   const im1 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4200 });
   const intServing = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4400 });
+  // Soft-style one-instruction EI delay: EI arms arm1; next PHASE0 moves
+  // arm1→arm2; following PHASE0 commits IFF (arm2.q from prior cycle).
+  // HALT sticks until INT-accept / CPU_RESET.
+  const halted = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4800 });
+  const eiArm1 = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 3800 });
+  const eiArm2 = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 4000 });
   const alu = buildAlu(parent, library, 8, { x: pos.x + 3400, y: pos.y + 2400 });
   const fsm = buildRingCounter(parent, library, 10, { x: pos.x, y: pos.y + 3600 }); // FETCH/INCREMENT/EXEC1-EXEC8 — see the doc comment above ("x=11: SP, PUSH/POP, RET, RST n" for why a 4th phase exists; "x=00, z=1: LD dd,nn" for why a 5th and 6th do too; "x=11: CALL nn" for why a 7th and 8th do too; DD/FD CB SET/RES/rot (IX+d)/(IY+d) for why a 9th and 10th do too — BIT fit in 8, but read+write after op needs PHASE8 and op-advance moved to PHASE9). Widening is, again, a pure parameter change — buildRingCounter is fully generic (any N>=2), and every existing PHASE0-PHASE7 label keeps its exact ring position, the two new phases appended after EXEC6, before the wrap back to FETCH.
   const dec = buildZ80Decoder(parent, ir.q, { x: pos.x + 8600, y: pos.y });
@@ -6871,7 +6877,7 @@ function buildZ80CpuInner(
   const eiNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 3010 });
   wire(parent, isEi.out, eiNow.a);
   tieToLabel('PHASE2', eiNow.b, { x: pos.x + 9200, y: pos.y - 2990 });
-  tieToLabel('EI_NOW', eiNow.out, { x: pos.x + 9400, y: pos.y - 3010 }); // anchor — IFF1/IFF2 set
+  tieToLabel('EI_NOW', eiNow.out, { x: pos.x + 9400, y: pos.y - 3010 }); // anchor — eiArm1 set (IFF via EI_COMMIT)
   const isJpNn = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2900 });
   wire(parent, isX11Z3.out, isJpNn.a);
   wire(parent, dec.y[0]!, isJpNn.b);
@@ -7452,9 +7458,8 @@ function buildZ80CpuInner(
   wire(parent, groupActive.out, hlNow.a);
   wire(parent, dec.z[6]!, hlNow.b);
 
-  // LD (HL),r: destination is (HL) (y=6) — excluding z=6 leaves the 0x76
-  // HALT slot inert rather than treating it as LD (HL),(HL); see the doc
-  // comment above.
+  // LD (HL),r: destination is (HL) (y=6) — excluding z=6 keeps HALT from
+  // becoming LD (HL),(HL); haltNow below latches halted instead.
   const notZ6 = buildNot(parent, { x: pos.x + 9350, y: pos.y + 350 });
   wire(parent, dec.z[6]!, notZ6.in);
   const ldWritesHl = buildAnd(parent, { x: pos.x + 9450, y: pos.y + 250 });
@@ -7463,6 +7468,11 @@ function buildZ80CpuInner(
   const ramWriteNow = buildAnd(parent, { x: pos.x + 9550, y: pos.y + 250 });
   wire(parent, ldWritesHl.out, ramWriteNow.a);
   wire(parent, notZ6.out, ramWriteNow.b);
+  // HALT (0x76 = x=01,y=6,z=6): latch halted — soft parity stop-clock.
+  const haltNow = buildAnd(parent, { x: pos.x + 9550, y: pos.y + 280 });
+  wire(parent, ldWritesHl.out, haltNow.a);
+  wire(parent, dec.z[6]!, haltNow.b);
+  tieToLabel('HALT_NOW', haltNow.out, { x: pos.x + 9650, y: pos.y + 280 });
   // Side-folds for RAM WE — stay outside RAM_WE_OR and feed as single
   // inputs (same discipline as RAM_OE_OR). INC/DEC/SET/RES/CB-rot (HL),
   // EX (SP),HL/IX/IY, ED LD (nn),dd, and DD/FD mem writes are reduced
@@ -9212,8 +9222,44 @@ function buildZ80CpuInner(
   fP.q.forEach((q, i) => tieToLabel(`FPOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 300 + i * 20 })); // anchor — F's own write mux (far) reads this
 
   // Thin IRQ: IFF1/IFF2/IM1 write-back — seed path on the exposed Register,
-  // internal commits via DI/EI/INT-accept/RETI/IM1_NOW. Mux priority for
-  // IFF1: clear (DI|accept) > EI=1 > RETI←IFF2 > seed. IFF2 omits RETI.
+  // internal commits via DI/EI-commit/INT-accept/RETI/IM1_NOW. Mux priority for
+  // IFF1: clear (DI|accept) > EI_COMMIT=1 > RETI←IFF2 > seed. IFF2 omits RETI.
+  // Soft-parity EI delay: eiArm1 is the pending latch. Every PHASE2 writes
+  // d←EI_NOW (1 only on the EI instruction); EI_COMMIT = PHASE2 ∧ pending ∧ ¬EI_NOW
+  // so IFF sets on the following instruction's PHASE2 (same edge that clears pending).
+  const notEi = buildNot(parent, { x: pos.x + 12000, y: pos.y - 1000 });
+  tieToLabel('EI_NOW', notEi.in, { x: pos.x + 11900, y: pos.y - 1000 });
+  const eiCommitGate = buildAnd(parent, { x: pos.x + 12050, y: pos.y - 980 });
+  tieToLabel('PHASE2', eiCommitGate.a, { x: pos.x + 11950, y: pos.y - 980 });
+  wire(parent, eiArm1.q[0]!, eiCommitGate.b);
+  const eiCommit = buildAnd(parent, { x: pos.x + 12100, y: pos.y - 980 });
+  wire(parent, eiCommitGate.out, eiCommit.a);
+  wire(parent, notEi.out, eiCommit.b);
+  tieToLabel('EI_COMMIT', eiCommit.out, { x: pos.x + 12200, y: pos.y - 980 });
+
+  const eiPendingWe = buildOr(parent, { x: pos.x + 12050, y: pos.y - 940 });
+  tieToLabel('PHASE2', eiPendingWe.a, { x: pos.x + 11950, y: pos.y - 940 });
+  tieToLabel('DI_NOW', eiPendingWe.b, { x: pos.x + 11950, y: pos.y - 920 });
+  const eiPendingWe2 = buildOr(parent, { x: pos.x + 12100, y: pos.y - 940 });
+  wire(parent, eiPendingWe.out, eiPendingWe2.a);
+  tieToLabel('INT_ACCEPT_NOW', eiPendingWe2.b, { x: pos.x + 12000, y: pos.y - 920 });
+  wire(parent, eiPendingWe2.out, eiArm1.we);
+  tieToLabel('EI_NOW', eiArm1.d[0]!, { x: pos.x + 11950, y: pos.y - 900 });
+
+  // eiArm2 unused in this simplified delay — tie quiescent.
+  tiePowerRail(parent, 'GND', eiArm2.we);
+  tiePowerRail(parent, 'GND', eiArm2.d[0]!);
+
+  // HALT latch — set on HALT_NOW; clear on INT accept / reset.
+  const haltClear = buildOr(parent, { x: pos.x + 11950, y: pos.y - 860 });
+  tieToLabel('INT_ACCEPT_NOW', haltClear.a, { x: pos.x + 11850, y: pos.y - 860 });
+  tieToLabel('CPU_RESET', haltClear.b, { x: pos.x + 11850, y: pos.y - 840 });
+  const haltWe = buildOr(parent, { x: pos.x + 12050, y: pos.y - 860 });
+  tieToLabel('HALT_NOW', haltWe.a, { x: pos.x + 11950, y: pos.y - 860 });
+  wire(parent, haltClear.out, haltWe.b);
+  wire(parent, haltWe.out, halted.we);
+  tieToLabel('HALT_NOW', halted.d[0]!, { x: pos.x + 11950, y: pos.y - 820 });
+
   const iff1Clear = buildOr(parent, { x: pos.x + 12100, y: pos.y - 900 });
   tieToLabel('DI_NOW', iff1Clear.a, { x: pos.x + 12000, y: pos.y - 900 });
   tieToLabel('INT_ACCEPT_NOW', iff1Clear.b, { x: pos.x + 12000, y: pos.y - 880 });
@@ -9222,7 +9268,7 @@ function buildZ80CpuInner(
   const iff1SeedD = iff1RetiMux.pins[muxDef.ports[1]!]!; // in0: seed (or fall-through)
   wire(parent, iff2.q[0]!, iff1RetiMux.pins[muxDef.ports[2]!]!); // in1: IFF2
   const iff1EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12300, y: pos.y - 900 });
-  tieToLabel('EI_NOW', iff1EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12200, y: pos.y - 900 });
+  tieToLabel('EI_COMMIT', iff1EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12200, y: pos.y - 900 });
   wire(parent, iff1RetiMux.pins[muxDef.ports[3]!]!, iff1EiMux.pins[muxDef.ports[1]!]!);
   tiePowerRail(parent, 'VCC', iff1EiMux.pins[muxDef.ports[2]!]!);
   const iff1ClearMux = makeChipInstance(parent, muxDef, { x: pos.x + 12400, y: pos.y - 900 });
@@ -9232,7 +9278,7 @@ function buildZ80CpuInner(
   wire(parent, iff1ClearMux.pins[muxDef.ports[3]!]!, iff1.d[0]!);
   const iff1We1 = buildOr(parent, { x: pos.x + 12100, y: pos.y - 820 });
   tieToLabel('DI_NOW', iff1We1.a, { x: pos.x + 12000, y: pos.y - 820 });
-  tieToLabel('EI_NOW', iff1We1.b, { x: pos.x + 12000, y: pos.y - 800 });
+  tieToLabel('EI_COMMIT', iff1We1.b, { x: pos.x + 12000, y: pos.y - 800 });
   const iff1We2 = buildOr(parent, { x: pos.x + 12200, y: pos.y - 820 });
   wire(parent, iff1We1.out, iff1We2.a);
   tieToLabel('INT_ACCEPT_NOW', iff1We2.b, { x: pos.x + 12100, y: pos.y - 800 });
@@ -9249,7 +9295,7 @@ function buildZ80CpuInner(
   tieToLabel('DI_NOW', iff2Clear.a, { x: pos.x + 12000, y: pos.y - 700 });
   tieToLabel('INT_ACCEPT_NOW', iff2Clear.b, { x: pos.x + 12000, y: pos.y - 680 });
   const iff2EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 700 });
-  tieToLabel('EI_NOW', iff2EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 700 });
+  tieToLabel('EI_COMMIT', iff2EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 700 });
   const iff2SeedD = iff2EiMux.pins[muxDef.ports[1]!]!;
   tiePowerRail(parent, 'VCC', iff2EiMux.pins[muxDef.ports[2]!]!);
   const iff2ClearMux = makeChipInstance(parent, muxDef, { x: pos.x + 12300, y: pos.y - 700 });
@@ -9259,7 +9305,7 @@ function buildZ80CpuInner(
   wire(parent, iff2ClearMux.pins[muxDef.ports[3]!]!, iff2.d[0]!);
   const iff2We1 = buildOr(parent, { x: pos.x + 12100, y: pos.y - 620 });
   tieToLabel('DI_NOW', iff2We1.a, { x: pos.x + 12000, y: pos.y - 620 });
-  tieToLabel('EI_NOW', iff2We1.b, { x: pos.x + 12000, y: pos.y - 600 });
+  tieToLabel('EI_COMMIT', iff2We1.b, { x: pos.x + 12000, y: pos.y - 600 });
   const iff2We2 = buildOr(parent, { x: pos.x + 12200, y: pos.y - 620 });
   wire(parent, iff2We1.out, iff2We2.a);
   tieToLabel('INT_ACCEPT_NOW', iff2We2.b, { x: pos.x + 12100, y: pos.y - 600 });
@@ -10711,6 +10757,9 @@ function buildZ80CpuInner(
   tieToLabel('CLK', iff2.clk, { x: pos.x + 2000, y: pos.y + 3940 });
   tieToLabel('CLK', im1.clk, { x: pos.x + 2000, y: pos.y + 4140 });
   tieToLabel('CLK', intServing.clk, { x: pos.x + 2000, y: pos.y + 4340 });
+  tieToLabel('CLK', halted.clk, { x: pos.x + 2000, y: pos.y + 4740 });
+  tieToLabel('CLK', eiArm1.clk, { x: pos.x + 2200, y: pos.y + 3740 });
+  tieToLabel('CLK', eiArm2.clk, { x: pos.x + 2200, y: pos.y + 3940 });
   tieToLabel('CLK', bP.clk, { x: pos.x + 5000, y: pos.y + 3740 }); // same checklist item, every time, no exceptions — see "x=11: EXX" below
   tieToLabel('CLK', cP.clk, { x: pos.x + 5000, y: pos.y + 4540 });
   tieToLabel('CLK', dP.clk, { x: pos.x + 6200, y: pos.y + 3740 });
@@ -10944,6 +10993,7 @@ function buildZ80CpuInner(
     iff1: iff1.q,
     iff2: iff2.q,
     im1: im1.q,
+    halted: halted.q,
     int: intPin,
     intDrive,
     bP: bPExt,

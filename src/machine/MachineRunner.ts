@@ -72,6 +72,8 @@ export class MachineRunner {
   softError: string | null = null;
   running = false;
   speed: RunSpeed = 'soft';
+  /** Optional gate-level pin reader (from last settle) for halt detection. */
+  private readPin: ((pin: Pin) => 0 | 1 | 'Z') | null = null;
 
   get attached(): boolean {
     return this.circuit !== null && this.cpu !== null;
@@ -123,12 +125,19 @@ export class MachineRunner {
    * Connections use net labels so the post-fold top view does not grow a
    * "noodle" of Input→chip-port wires across the canvas.
    */
-  attach(circuit: Circuit, _library: ChipLibrary, cpu: Z80Cpu, tick: TickFn): void {
+  attach(
+    circuit: Circuit,
+    _library: ChipLibrary,
+    cpu: Z80Cpu,
+    tick: TickFn,
+    opts?: { readPin?: (pin: Pin) => 0 | 1 | 'Z' },
+  ): void {
     this.detach();
     this.circuit = circuit;
     this.cpu = cpu;
     this.ram = cpu.ram;
     this.tick = tick;
+    this.readPin = opts?.readPin ?? null;
 
     // Beside RAM / the eventual folded chip — old `y - 12000` parked seeds
     // far above the sprawling flat composite and became the visible spaghetti
@@ -209,6 +218,7 @@ export class MachineRunner {
     this.cpu = null;
     this.ram = null;
     this.tick = null;
+    this.readPin = null;
   }
 
   /** Gate-level boot (FSM seed, reset, first fetch) + soft CPU reset. */
@@ -288,6 +298,7 @@ export class MachineRunner {
       try {
         softStep(this.soft, this.ram.bytes, this.softHooks());
         this.softDesynced = true;
+        if (this.soft.halted) this.running = false;
       } catch (e) {
         this.running = false;
         this.softError = e instanceof Error ? e.message : String(e);
@@ -296,6 +307,12 @@ export class MachineRunner {
       return;
     }
     for (let i = 0; i < 10; i++) this.stepPhase();
+    this.stopIfGateHalted();
+  }
+
+  private stopIfGateHalted(): void {
+    if (!this.cpu || !this.readPin) return;
+    if (this.readPin(this.cpu.halted[0]!) === 1) this.running = false;
   }
 
   /**
@@ -309,6 +326,7 @@ export class MachineRunner {
       try {
         softRun(this.soft, this.ram.bytes, SOFT_OPS_PER_FRAME, this.softHooks());
         this.softDesynced = true;
+        if (this.soft.halted) this.running = false;
       } catch (e) {
         this.running = false;
         this.softError = e instanceof Error ? e.message : String(e);
@@ -320,10 +338,12 @@ export class MachineRunner {
     const budgetMs = this.speed === 'free' ? FREE_BUDGET_MS : GATE_BUDGET_MS;
     const deadline = performance.now() + budgetMs;
     let n = 0;
-    while (n < maxPhases && performance.now() < deadline) {
+    while (n < maxPhases && performance.now() < deadline && this.running) {
       this.stepPhase();
       n++;
+      if (n % 10 === 0) this.stopIfGateHalted();
     }
+    this.stopIfGateHalted();
     return n > 0;
   }
 

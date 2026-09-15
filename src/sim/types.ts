@@ -133,6 +133,9 @@ export interface AnalyzerComponent {
   channelCount: number;
   armed: boolean;
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
+  pinOrder: string[];
   /** ch0 .. ch{channelCount-1} */
   pins: Record<string, Pin>;
 }
@@ -189,6 +192,10 @@ export interface ChipInstanceComponent {
   kind: 'chip';
   defId: string; // ChipDef.id in the ChipLibrary this circuit is edited against
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
+  /** Port names in stack order (same as ChipDef.ports at place time). */
+  pinOrder: string[];
   pins: Record<string, Pin>; // keyed by port name
 }
 
@@ -224,6 +231,9 @@ export interface RamComponent {
   dataBits: number;
   bytes: Uint8Array; // length === 2 ** addrBits; index i holds the byte at address i
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
+  pinOrder: string[];
   pins: Record<string, Pin>;
 }
 
@@ -239,6 +249,9 @@ export interface RomComponent {
   dataBits: number;
   bytes: Uint8Array;
   pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
+  pinOrder: string[];
   pins: Record<string, Pin>;
 }
 

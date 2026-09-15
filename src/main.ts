@@ -130,7 +130,10 @@ const editor = new Editor(topCircuit, library);
 const editHistory = new EditHistory();
 editor.onBeforeEdit = () => editHistory.checkpoint(editor.circuit);
 objectInspector.onBeforeEdit = () => editHistory.checkpoint(editor.circuit);
+objectInspector.onDive = (inst) => diveInto(inst);
 let simState: SimState = initialState();
+/** Last flat net map — used by MachineRunner gate halt detection. */
+let lastFlatNetMap: ReturnType<Circuit['computeNets']> | null = null;
 
 // A single window-level, capture-phase tap on every event type that could
 // possibly change what the next frame ought to look like — mouse/keyboard
@@ -156,12 +159,18 @@ objectInspector.setContext({
 });
 
 function syncInspector(): void {
-  if (editor.selectedIds.size !== 1) {
+  if (editor.selectedIds.size === 0) {
     objectInspector.sync(null);
     return;
   }
-  const id = [...editor.selectedIds][0]!;
-  objectInspector.sync(editor.circuit.components.get(id) ?? null);
+  const comps = [...editor.selectedIds]
+    .map((id) => editor.circuit.components.get(id))
+    .filter((c): c is Component => !!c);
+  if (comps.length === 0) {
+    objectInspector.sync(null);
+    return;
+  }
+  objectInspector.sync(comps.length === 1 ? comps[0]! : comps);
 }
 memoryEditor.setOnChange(() => {
   uiDirty = true;
@@ -598,6 +607,7 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
     const simTick = () => {
       const flat = flatten(topCircuit, library);
       const flatNetMap = flat.computeNets();
+      lastFlatNetMap = flatNetMap;
       simState = step(flat, flatNetMap, simState);
       // Do not set uiDirty here — tickBudget used to force a redraw every
       // clock edge and doubled work with frame()'s own step+draw.
@@ -605,7 +615,14 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
     machinePanel.attach(cpu.ram);
     machinePanel.bindRunner(machineRunner);
     // Wire Inputs *before* fold so clocks/seeds become chip ports.
-    machineRunner.attach(editor.circuit, library, cpu, simTick);
+    machineRunner.attach(editor.circuit, library, cpu, simTick, {
+      readPin: (pin) => {
+        if (!lastFlatNetMap) return 'Z';
+        const net = lastFlatNetMap.netOf.get(pin.id);
+        if (!net) return 'Z';
+        return simState.levelOf.get(net) ?? 'Z';
+      },
+    });
     machineRunner.boot();
     machineRunner.setSpeed('soft');
     machineRunner.setRunning(true);
@@ -899,6 +916,11 @@ window.addEventListener('keydown', (ev) => {
     editHistory.checkpoint(editor.circuit);
     const [dx, dy] = NUDGE_KEYS[ev.key]!;
     for (const id of editor.selectedIds) editor.circuit.moveComponent(id, dx, dy);
+  } else if (noModifiers && ev.key.toLowerCase() === 'h') {
+    editor.highlightSelectionNet();
+    uiDirty = true;
+  } else if (noModifiers && ev.key.toLowerCase() === 't') {
+    if (editor.tidySelectedWires() > 0) uiDirty = true;
   } else if (noModifiers && (ev.key === 'r' || ev.key === 'R')) {
     const ids = [...editor.selectedIds];
     const comps = ids
@@ -1054,6 +1076,7 @@ function frame(): void {
       } else {
         const flat = flatten(topCircuit, library);
         const flatNetMap = flat.computeNets();
+        lastFlatNetMap = flatNetMap;
         if (!softRun) {
           simState = step(flat, flatNetMap, simState);
         }

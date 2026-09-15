@@ -17,7 +17,7 @@ import { firePulse } from '../sim/labTick.js';
 import { captureCircuit, type CircuitSnapshot } from '../sim/serialize.js';
 import type { Component, Pin, Point } from '../sim/types.js';
 import { showPrompt } from './Dialog.js';
-import { findComponentNear, findPinNear, findWaypointNear, findWireNear, GRID, snap } from './geometry.js';
+import { findComponentNear, findPinNear, findWaypointNear, findWireNear, GRID, routeWirePoints, snap } from './geometry.js';
 
 export type Tool =
   | { kind: 'select' }
@@ -69,6 +69,8 @@ export class Editor {
   selectedIds = new Set<string>();
   /** At most one wire selected at a time — dragging a bend point or deleting a wire only ever concerns one. */
   selectedWireId: string | null = null;
+  /** Net id (from Circuit.computeNets) to highlight — set when selecting a wire or pressing H. */
+  highlightedNetId: string | null = null;
   mouse: Point = { x: 0, y: 0 };
   marqueeStart: Point | null = null;
   dragging = false;
@@ -104,10 +106,16 @@ export class Editor {
   }
 
   handleMouseMove(p: Point): void {
-    this.mouse = p;
     this.hoveredComponentId = findComponentNear(this.circuit, p)?.id ?? null;
     this.hoveredPinId = findPinNear(this.circuit, p)?.id ?? null;
     this.hoveredWireId = (findWaypointNear(this.circuit, p)?.wireId ?? findWireNear(this.circuit, p)?.wireId) ?? null;
+    // Snap the rubber-band cursor to a nearby pin while routing.
+    if (this.tool.kind === 'wire' && this.hoveredPinId) {
+      const pin = this.circuit.allPins().find((x) => x.id === this.hoveredPinId);
+      this.mouse = pin ? { ...pin.pos } : p;
+    } else {
+      this.mouse = p;
+    }
   }
 
   handleMouseDown(p: Point): void {
@@ -139,11 +147,13 @@ export class Editor {
       this.pendingWireGrab = { ...wireHit, downPoint: p };
       this.selectedWireId = wireHit.wireId;
       this.selectedIds.clear();
+      this.highlightNetOfWire(wireHit.wireId);
       return;
     }
 
     this.marqueeStart = p;
     this.dragging = false;
+    this.highlightedNetId = null;
   }
 
   handleMouseDrag(p: Point): void {
@@ -377,6 +387,73 @@ export class Editor {
   clearSelection(): void {
     this.selectedIds.clear();
     this.selectedWireId = null;
+    this.highlightedNetId = null;
+  }
+
+  /** Highlight the electrical net of a wire (same net labels / pin connectivity). */
+  highlightNetOfWire(wireId: string): void {
+    const w = this.circuit.wires.get(wireId);
+    if (!w) {
+      this.highlightedNetId = null;
+      return;
+    }
+    const nets = this.circuit.computeNets();
+    this.highlightedNetId = nets.netOf.get(w.a) ?? null;
+  }
+
+  /** Highlight the net of the first pin on a selected component (H key). */
+  highlightSelectionNet(): void {
+    if (this.selectedWireId) {
+      this.highlightNetOfWire(this.selectedWireId);
+      return;
+    }
+    const id = [...this.selectedIds][0];
+    if (!id) {
+      this.highlightedNetId = null;
+      return;
+    }
+    const c = this.circuit.components.get(id);
+    if (!c) return;
+    const pin = Object.values(c.pins)[0] as Pin | undefined;
+    if (!pin) return;
+    const nets = this.circuit.computeNets();
+    this.highlightedNetId = nets.netOf.get(pin.id) ?? null;
+  }
+
+  /**
+   * Re-route selected wires (or wires attached to selected components) with
+   * fresh orthogonal waypoints — drops manual kinks.
+   */
+  tidySelectedWires(): number {
+    const pinById = new Map<string, Pin>();
+    for (const p of this.circuit.allPins()) pinById.set(p.id, p);
+
+    const wireIds = new Set<string>();
+    if (this.selectedWireId) wireIds.add(this.selectedWireId);
+    if (this.selectedIds.size > 0) {
+      for (const w of this.circuit.wires.values()) {
+        const aComp = w.a.split(':')[0];
+        const bComp = w.b.split(':')[0];
+        if (this.selectedIds.has(aComp!) || this.selectedIds.has(bComp!)) wireIds.add(w.id);
+      }
+    }
+    if (wireIds.size === 0) return 0;
+
+    this.noteEdit();
+    let n = 0;
+    for (const id of wireIds) {
+      const w = this.circuit.wires.get(id);
+      if (!w) continue;
+      const a = pinById.get(w.a);
+      const b = pinById.get(w.b);
+      if (!a || !b) continue;
+      const routed = routeWirePoints([a.pos, b.pos]);
+      const mid = routed.slice(1, -1);
+      if (mid.length > 0) w.waypoints = mid;
+      else delete w.waypoints;
+      n++;
+    }
+    return n;
   }
 
   /** Abandon the wire currently being drawn, if any. Called on tool switch, Escape, or level navigation. */

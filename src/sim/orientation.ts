@@ -1,10 +1,17 @@
 /**
  * Component orientation — rotates/mirrors pin offsets around the body center
- * so LEDs, buttons, etc. can face a chip for cleaner routing.
+ * so LEDs, buttons, chips, etc. can face each other for cleaner routing.
  */
 
 import type { Component, Pin, Point } from './types.js';
-import { LAYOUT, transistorPinOffsets } from './library.js';
+import {
+  ANALYZER_PIN_DX,
+  analyzerPinDys,
+  CHIP_PIN_DX,
+  chipPinDys,
+  LAYOUT,
+  transistorPinOffsets,
+} from './library.js';
 
 export type Rotation = 0 | 90 | 180 | 270;
 
@@ -59,7 +66,11 @@ export function isOrientable(c: Component): boolean {
     c.kind === 'probe' ||
     c.kind === 'input' ||
     c.kind === 'source' ||
-    c.kind === 'clock'
+    c.kind === 'clock' ||
+    c.kind === 'chip' ||
+    c.kind === 'ram' ||
+    c.kind === 'rom' ||
+    c.kind === 'analyzer'
   );
 }
 
@@ -77,6 +88,22 @@ export function setOrientation(c: Component, rotation: Rotation, mirrorX: boolea
   (c as { rotation: Rotation }).rotation = rotation;
   (c as { mirrorX: boolean }).mirrorX = mirrorX;
   applyPinLayout(c);
+}
+
+function applyStackedPins(
+  c: { pinOrder: string[]; pins: Record<string, Pin>; pos: Point },
+  dx: number,
+  dys: number[],
+  rotation: Rotation,
+  mirrorX: boolean,
+): void {
+  const { x: cx, y: cy } = c.pos;
+  for (let i = 0; i < c.pinOrder.length; i++) {
+    const name = c.pinOrder[i]!;
+    const p = c.pins[name];
+    if (!p) continue;
+    setPin(p, cx, cy, dx, dys[i] ?? 0, rotation, mirrorX);
+  }
 }
 
 /**
@@ -114,6 +141,20 @@ export function applyPinLayout(c: Component): void {
       setPin(c.pins.out, cx, cy, LAYOUT.clock.out[0], LAYOUT.clock.out[1], rotation, mirrorX);
       setPin(c.pins.trig, cx, cy, LAYOUT.clock.trig[0], LAYOUT.clock.trig[1], rotation, mirrorX);
       break;
+    case 'chip':
+    case 'ram':
+    case 'rom': {
+      const order = c.pinOrder?.length ? c.pinOrder : Object.keys(c.pins);
+      if (!c.pinOrder?.length) c.pinOrder = order;
+      applyStackedPins(c, CHIP_PIN_DX, chipPinDys(order.length), rotation, mirrorX);
+      break;
+    }
+    case 'analyzer': {
+      const order = c.pinOrder?.length ? c.pinOrder : Object.keys(c.pins);
+      if (!c.pinOrder?.length) c.pinOrder = order;
+      applyStackedPins(c, ANALYZER_PIN_DX, analyzerPinDys(order.length), rotation, mirrorX);
+      break;
+    }
     default:
       break;
   }

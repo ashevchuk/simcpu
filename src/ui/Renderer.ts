@@ -191,6 +191,9 @@ export function draw(
   const pinById = new Map<string, Pin>();
   for (const p of circuit.allPins()) pinById.set(p.id, p);
 
+  const highlightNet = editor.highlightedNetId;
+  const netOf = highlightNet ? circuit.computeNets().netOf : null;
+
   // Wires first, so component bodies sit on top of the lines meeting them.
   const routedWires: Point[][] = [];
   for (const w of circuit.wires.values()) {
@@ -202,8 +205,15 @@ export function draw(
     routedWires.push(points);
     if (!isWireVisible(points, visible)) continue;
     const { level, contended } = resolve(w.a);
+    const netHit = netOf != null && highlightNet != null && netOf.get(w.a) === highlightNet;
     const emphasis =
-      w.id === editor.selectedWireId ? 'selected' : editor.tool.kind === 'select' && w.id === editor.hoveredWireId ? 'hover' : 'none';
+      w.id === editor.selectedWireId
+        ? 'selected'
+        : netHit
+          ? 'net'
+          : editor.tool.kind === 'select' && w.id === editor.hoveredWireId
+            ? 'hover'
+            : 'none';
     drawWire(ctx, points, levelColor(level, contended), contended, emphasis);
   }
 
@@ -325,15 +335,17 @@ function drawWire(
   points: { x: number; y: number }[],
   color: string,
   contended: boolean,
-  emphasis: 'none' | 'hover' | 'selected' = 'none',
+  emphasis: 'none' | 'hover' | 'selected' | 'net' = 'none',
 ): void {
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   const path = () => strokeRoundedPolyline(ctx, points, 7);
   if (emphasis !== 'none') {
-    ctx.globalAlpha = emphasis === 'selected' ? 0.45 : 0.28;
-    ctx.strokeStyle = emphasis === 'selected' ? COLOR.selected : COLOR.hover;
+    const glow =
+      emphasis === 'selected' ? COLOR.selected : emphasis === 'net' ? '#5ec8ff' : COLOR.hover;
+    ctx.globalAlpha = emphasis === 'selected' ? 0.45 : emphasis === 'net' ? 0.38 : 0.28;
+    ctx.strokeStyle = glow;
     ctx.lineWidth = contended ? 13 : 10;
     path();
     ctx.stroke();
@@ -395,18 +407,24 @@ export function formatPinLabel(name: string): string {
   return name.length <= 6 ? name.toUpperCase() : name;
 }
 
-/** Pin name drawn inside a left-pinned chip/RAM/ROM body. */
+/** Pin name drawn just inside the body, toward the center from the pin. */
 function drawBodyPinLabel(
   ctx: CanvasRenderingContext2D,
   pin: Pin,
-  bodyLeft: number,
+  cx: number,
+  cy: number,
 ): void {
+  const dx = cx - pin.pos.x;
+  const dy = cy - pin.pos.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const lx = pin.pos.x + (dx / len) * 12;
+  const ly = pin.pos.y + (dy / len) * 12;
   ctx.save();
   ctx.font = '9px ui-monospace, "SF Mono", monospace';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
+  ctx.textAlign = Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 'left' : 'right') : 'center';
+  ctx.textBaseline = Math.abs(dy) > Math.abs(dx) ? (dy > 0 ? 'top' : 'bottom') : 'middle';
   ctx.fillStyle = COLOR.textDim;
-  ctx.fillText(formatPinLabel(pin.name), bodyLeft + 6, pin.pos.y);
+  ctx.fillText(formatPinLabel(pin.name), lx, ly);
   ctx.restore();
 }
 
@@ -697,9 +715,9 @@ function drawComponent(
       for (let i = 0; i < n; i++) {
         const p = c.pins[`ch${i}`];
         if (!p) continue;
-        stub(x - w / 2, p.pos.y, p);
+        stubPin(x, y, w / 2, h / 2, p);
         drawPinDot(ctx, p, resolve);
-        drawBodyPinLabel(ctx, p, x - w / 2);
+        drawBodyPinLabel(ctx, p, x, y);
       }
       ctx.fillStyle = COLOR.selected;
       ctx.font = '10px ui-monospace, "SF Mono", monospace';
@@ -835,15 +853,14 @@ function drawComponent(
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
       for (const p of Object.values(c.pins) as Pin[]) {
-        stub(x - w / 2, p.pos.y, p);
+        stubPin(x, y, w / 2, h / 2, p);
         drawPinDot(ctx, p, resolve);
-        drawBodyPinLabel(ctx, p, x - w / 2);
+        drawBodyPinLabel(ctx, p, x, y);
       }
       ctx.fillStyle = COLOR.text;
       const name = library.has(c.defId) ? library.get(c.defId).name : '?';
       ctx.save();
-      ctx.translate(x + w / 2 - 12, y);
-      ctx.rotate(-Math.PI / 2);
+      ctx.translate(x, y);
       ctx.font = '10px ui-monospace, "SF Mono", monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -866,14 +883,13 @@ function drawComponent(
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
       for (const p of Object.values(c.pins) as Pin[]) {
-        stub(x - w / 2, p.pos.y, p);
+        stubPin(x, y, w / 2, h / 2, p);
         drawPinDot(ctx, p, resolve);
-        drawBodyPinLabel(ctx, p, x - w / 2);
+        drawBodyPinLabel(ctx, p, x, y);
       }
       ctx.fillStyle = COLOR.text;
       ctx.save();
-      ctx.translate(x + w / 2 - 12, y);
-      ctx.rotate(-Math.PI / 2);
+      ctx.translate(x, y);
       ctx.font = '10px ui-monospace, "SF Mono", monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -896,14 +912,13 @@ function drawComponent(
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
       for (const p of Object.values(c.pins) as Pin[]) {
-        stub(x - w / 2, p.pos.y, p);
+        stubPin(x, y, w / 2, h / 2, p);
         drawPinDot(ctx, p, resolve);
-        drawBodyPinLabel(ctx, p, x - w / 2);
+        drawBodyPinLabel(ctx, p, x, y);
       }
       ctx.fillStyle = COLOR.text;
       ctx.save();
-      ctx.translate(x + w / 2 - 12, y);
-      ctx.rotate(-Math.PI / 2);
+      ctx.translate(x, y);
       ctx.font = '10px ui-monospace, "SF Mono", monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
