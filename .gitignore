@@ -3,3 +3,5 @@ dist/
 dist-file/
 *.log
 .claude/
+test-results/
+playwright-report/

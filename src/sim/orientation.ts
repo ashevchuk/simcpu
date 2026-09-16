@@ -4,7 +4,7 @@
  * cleaner routing.
  */
 
-import type { Component, Pin, Point } from './types.js';
+import type { ChipInstanceComponent, Component, Pin, Point } from './types.js';
 import type { ChipDef } from './ChipLibrary.js';
 import type { Circuit } from './Circuit.js';
 import {
@@ -88,6 +88,7 @@ export function isOrientable(c: Component): boolean {
     c.kind === 'transistor' ||
     c.kind === 'button' ||
     c.kind === 'led' ||
+    c.kind === 'sevenseg' ||
     c.kind === 'probe' ||
     c.kind === 'input' ||
     c.kind === 'source' ||
@@ -95,7 +96,8 @@ export function isOrientable(c: Component): boolean {
     c.kind === 'chip' ||
     c.kind === 'ram' ||
     c.kind === 'rom' ||
-    c.kind === 'analyzer'
+    c.kind === 'analyzer' ||
+    c.kind === 'busprobe'
   );
 }
 
@@ -155,9 +157,11 @@ export function applyPinLayout(c: Component): void {
       setPin(c.pins.source, cx, cy, off.source[0], off.source[1], rotation, mirrorX, mirrorY);
       break;
     }
-    case 'source':
-      setPin(c.pins.out, cx, cy, LAYOUT.source.out[0], LAYOUT.source.out[1], rotation, mirrorX, mirrorY);
+    case 'source': {
+      const out = c.value === 1 ? LAYOUT.source.out : LAYOUT.source.gndOut;
+      setPin(c.pins.out, cx, cy, out[0], out[1], rotation, mirrorX, mirrorY);
       break;
+    }
     case 'input':
       setPin(c.pins.out, cx, cy, LAYOUT.input.out[0], LAYOUT.input.out[1], rotation, mirrorX, mirrorY);
       break;
@@ -167,6 +171,12 @@ export function applyPinLayout(c: Component): void {
     case 'led':
       setPin(c.pins.in, cx, cy, LAYOUT.led.in[0], LAYOUT.led.in[1], rotation, mirrorX, mirrorY);
       break;
+    case 'sevenseg': {
+      const order = c.pinOrder?.length ? c.pinOrder : Object.keys(c.pins);
+      if (!c.pinOrder?.length) c.pinOrder = order;
+      applyStackedPins(c, LAYOUT.sevenseg.pinDx, chipPinDys(order.length), rotation, mirrorX, mirrorY);
+      break;
+    }
     case 'probe':
       setPin(c.pins.in, cx, cy, LAYOUT.probe.in[0], LAYOUT.probe.in[1], rotation, mirrorX, mirrorY);
       break;
@@ -213,19 +223,29 @@ export function applyPinLayout(c: Component): void {
       applyStackedPins(c, ANALYZER_PIN_DX, analyzerPinDys(order.length), rotation, mirrorX, mirrorY);
       break;
     }
+    case 'busprobe': {
+      const order = c.pinOrder?.length ? c.pinOrder : Object.keys(c.pins);
+      if (!c.pinOrder?.length) c.pinOrder = order;
+      applyStackedPins(c, ANALYZER_PIN_DX, analyzerPinDys(order.length), rotation, mirrorX, mirrorY);
+      break;
+    }
     default:
       break;
   }
 }
 
+/** Refresh one chip instance's pinSide/layout from its ChipDef (keeps wires). */
+export function syncPinSidesFromDef(c: ChipInstanceComponent, def: ChipDef): void {
+  c.pinSide = { ...pinSidesFromDef(def) };
+  applyPinLayout(c);
+}
+
 /** Recompute pinSide + pin positions for every instance of `def` in `circuits`. */
 export function relayoutDefInstances(def: ChipDef, circuits: Circuit[]): void {
-  const sides = pinSidesFromDef(def);
   for (const circuit of circuits) {
     for (const c of circuit.components.values()) {
       if (c.kind !== 'chip' || c.defId !== def.id) continue;
-      c.pinSide = { ...sides };
-      applyPinLayout(c);
+      syncPinSidesFromDef(c, def);
     }
   }
 }

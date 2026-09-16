@@ -5,8 +5,10 @@
  *   line numbers, LET var=expr, PRINT items, GOTO n, END, REM
  *   IF cond THEN line  (cond: var op expr; op = <> < > <= >=)
  *   FOR var=a TO b / NEXT [var]  (nested; NEXT alone closes innermost)
+ *   GOSUB n / RETURN
+ *   CLS — clear text FB and reset PRINT cursor
  *   INPUT var — busy-wait KEY_STATUS / KEY_DATA (0xF00 / 0xF01)
- *   expr: number | var | atom±atom  (atom = number | var; + and - only)
+ *   expr: + - * / with * / binding tighter; atoms = number | var
  *
  * Vars A–Z live at 0xC00 + (ord - 'A').
  * FOR TO limits are saved at FOR_LIMIT_BASE + nesting depth (0xBD0…).
@@ -15,6 +17,7 @@
  * PRINT item loads HL from the cursor, writes, INC HL, stores the cursor back
  * (so skipped PRINT under untaken IF does not reserve FB cells).
  * PRINT separators: `;` no space, `,` one space (tab-ish).
+ * PRINT items may be strings, vars, or expressions (result byte written to FB).
  */
 
 import { FB_BASE, KEY_DATA, KEY_STATUS } from './memoryMap.js';
@@ -113,6 +116,25 @@ function emitStmt(
 
   if (u.startsWith('REM')) return;
 
+  if (u === 'CLS' || u.startsWith('CLS ')) {
+    emitCls(out);
+    return;
+  }
+
+  if (u === 'RETURN') {
+    out.push(0xc9); // RET
+    return;
+  }
+
+  if (u.startsWith('GOSUB')) {
+    const n = Number(stmt.slice(5).trim());
+    if (!Number.isFinite(n)) throw new Error(`BASIC: bad GOSUB '${stmt}'`);
+    const tgt = measuring ? 0 : addrOf.get(n);
+    if (tgt === undefined) throw new Error(`BASIC: GOSUB ${n} — missing line`);
+    out.push(0xcd, tgt & 0xff, (tgt >> 8) & 0xff); // CALL tgt
+    return;
+  }
+
   if (u.startsWith('GOTO')) {
     const n = Number(stmt.slice(4).trim());
     if (!Number.isFinite(n)) throw new Error(`BASIC: bad GOTO '${stmt}'`);
@@ -162,6 +184,16 @@ function emitStmt(
   throw new Error(`BASIC: unsupported '${stmt}'`);
 }
 
+/** Clear FB with spaces (256 cells via DJNZ B=0) and reset PRINT_CURSOR. */
+function emitCls(out: number[]): void {
+  out.push(0x21, FB_BASE & 0xff, (FB_BASE >> 8) & 0xff); // LD HL,FB_BASE
+  out.push(0x06, 0x00); // LD B,0 → 256 iters
+  out.push(0x3e, 0x20); // LD A,' '
+  out.push(0x77, 0x23, 0x10, 0xfc); // LD (HL),A / INC HL / DJNZ
+  out.push(0x21, FB_BASE & 0xff, (FB_BASE >> 8) & 0xff);
+  out.push(0x22, PRINT_CURSOR & 0xff, (PRINT_CURSOR >> 8) & 0xff);
+}
+
 /** IF var op expr THEN line */
 function emitIf(stmt: string, out: number[], addrOf: Map<number, number>, measuring: boolean): void {
   const m = /^IF\s+(.+?)\s+THEN\s+(\d+)\s*$/i.exec(stmt);
@@ -177,28 +209,26 @@ function emitIf(stmt: string, out: number[], addrOf: Map<number, number>, measur
   out.push(0x3a, addr & 0xff, (addr >> 8) & 0xff); // LD A,(var)
   out.push(0xb8); // CP B
 
-  // CP flags: Z if A==B, C if A<B (unsigned).
   switch (cmp.op) {
     case '=':
-      out.push(0xca, tgt & 0xff, (tgt >> 8) & 0xff); // JP Z
+      out.push(0xca, tgt & 0xff, (tgt >> 8) & 0xff);
       break;
     case '<>':
-      out.push(0xc2, tgt & 0xff, (tgt >> 8) & 0xff); // JP NZ
+      out.push(0xc2, tgt & 0xff, (tgt >> 8) & 0xff);
       break;
     case '<':
-      out.push(0xda, tgt & 0xff, (tgt >> 8) & 0xff); // JP C
+      out.push(0xda, tgt & 0xff, (tgt >> 8) & 0xff);
       break;
     case '>=':
-      out.push(0xd2, tgt & 0xff, (tgt >> 8) & 0xff); // JP NC
+      out.push(0xd2, tgt & 0xff, (tgt >> 8) & 0xff);
       break;
     case '<=':
-      out.push(0xca, tgt & 0xff, (tgt >> 8) & 0xff); // JP Z
-      out.push(0xda, tgt & 0xff, (tgt >> 8) & 0xff); // JP C
+      out.push(0xca, tgt & 0xff, (tgt >> 8) & 0xff);
+      out.push(0xda, tgt & 0xff, (tgt >> 8) & 0xff);
       break;
     case '>':
-      // A > B ⇔ ¬Z ∧ ¬C: JR Z,end / JR C,end / JP tgt / end:
-      out.push(0x28, 5); // JR Z, +5
-      out.push(0x38, 3); // JR C, +3
+      out.push(0x28, 5);
+      out.push(0x38, 3);
       out.push(0xc3, tgt & 0xff, (tgt >> 8) & 0xff);
       break;
     default:
@@ -268,12 +298,11 @@ function emitNext(stmt: string, out: number[], forStack: ForFrame[], measuring: 
     }
   }
   const dest = varAddr(varName);
-  // LD A,(var) / LD HL,limit / CP (HL) / JR Z,done / INC A / LD (var),A / JP loop / done:
   out.push(0x3a, dest & 0xff, (dest >> 8) & 0xff);
   out.push(0x21, limitAddr & 0xff, (limitAddr >> 8) & 0xff);
-  out.push(0xbe); // CP (HL)
-  out.push(0x28, 7); // JR Z, +7
-  out.push(0x3c); // INC A
+  out.push(0xbe);
+  out.push(0x28, 7);
+  out.push(0x3c);
   out.push(0x32, dest & 0xff, (dest >> 8) & 0xff);
   out.push(0xc3, loopAddr & 0xff, (loopAddr >> 8) & 0xff);
 }
@@ -282,10 +311,9 @@ function emitInput(varName: string, out: number[]): void {
   const v = varName.trim();
   if (!/^[A-Za-z]$/.test(v)) throw new Error(`BASIC: INPUT expects var`);
   const dest = varAddr(v);
-  // wait: LD A,(KEY_STATUS) / OR A / JR Z,wait / LD A,(KEY_DATA) / LD (var),A
   out.push(0x3a, KEY_STATUS & 0xff, (KEY_STATUS >> 8) & 0xff);
   out.push(0xb7);
-  out.push(0x28, 0xfa); // JR Z, -6 → back to wait
+  out.push(0x28, 0xfa);
   out.push(0x3a, KEY_DATA & 0xff, (KEY_DATA >> 8) & 0xff);
   out.push(0x32, dest & 0xff, (dest >> 8) & 0xff);
 }
@@ -296,11 +324,11 @@ function emitPrint(arg: string, out: number[]): void {
   const curHi = (PRINT_CURSOR >> 8) & 0xff;
   for (const item of splitPrintItems(arg)) {
     if (item.kind === 'space') {
-      out.push(0x2a, curLo, curHi); // LD HL,(PRINT_CURSOR)
+      out.push(0x2a, curLo, curHi);
       out.push(0x3e, 0x20);
       out.push(0x77);
       out.push(0x23);
-      out.push(0x22, curLo, curHi); // LD (PRINT_CURSOR),HL
+      out.push(0x22, curLo, curHi);
       continue;
     }
     if (item.kind === 'str') {
@@ -314,8 +342,7 @@ function emitPrint(arg: string, out: number[]): void {
       out.push(0x22, curLo, curHi);
       continue;
     }
-    const src = varAddr(item.value);
-    out.push(0x3a, src & 0xff, (src >> 8) & 0xff);
+    emitExprToA(item.value, out);
     out.push(0x2a, curLo, curHi);
     out.push(0x77);
     out.push(0x23);
@@ -325,7 +352,7 @@ function emitPrint(arg: string, out: number[]): void {
 
 type PrintItem =
   | { kind: 'str'; value: string }
-  | { kind: 'var'; value: string }
+  | { kind: 'expr'; value: string }
   | { kind: 'space' };
 
 function splitPrintItems(arg: string): PrintItem[] {
@@ -337,8 +364,7 @@ function splitPrintItems(arg: string): PrintItem[] {
       items.push({ kind: 'str', value: parseStringOnly(t) });
       return;
     }
-    if (!/^[A-Za-z]$/.test(t)) throw new Error(`BASIC: PRINT expects string or var, got '${t}'`);
-    items.push({ kind: 'var', value: t });
+    items.push({ kind: 'expr', value: t });
   };
 
   let cur = '';
@@ -372,7 +398,6 @@ function parseStringOnly(arg: string): string {
   return arg.slice(1, end);
 }
 
-/** Load A from atom (number or var). */
 function emitAtomToA(atom: string, out: number[]): void {
   const t = atom.trim();
   if (/^[A-Za-z]$/.test(t)) {
@@ -384,35 +409,110 @@ function emitAtomToA(atom: string, out: number[]): void {
   out.push(0x3e, n & 0xff);
 }
 
-function isAtom(s: string): boolean {
-  const t = s.trim();
-  if (/^[A-Za-z]$/.test(t)) return true;
-  try {
-    parseNumber(t);
-    return true;
-  } catch {
-    return false;
+type ExprTok = { kind: 'num' | 'var' | 'op'; value: string };
+
+function tokenizeExpr(s: string): ExprTok[] {
+  const out: ExprTok[] = [];
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i]!;
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if ('+-*/'.includes(c)) {
+      out.push({ kind: 'op', value: c });
+      i++;
+      continue;
+    }
+    if (/[A-Za-z]/.test(c)) {
+      out.push({ kind: 'var', value: c });
+      i++;
+      continue;
+    }
+    if (/[0-9]/.test(c)) {
+      let j = i;
+      while (j < s.length && /[0-9a-fA-FxXh]/.test(s[j]!)) j++;
+      out.push({ kind: 'num', value: s.slice(i, j) });
+      i = j;
+      continue;
+    }
+    throw new Error(`BASIC: bad expr char '${c}' in '${s}'`);
   }
+  return out;
 }
 
+/** Emit expr into A. Precedence: * / over + -; left-associative. Uses B,C scratch. */
 function emitExprToA(expr: string, out: number[]): void {
-  const t = expr.trim();
-  const bin = /^(.+?)\s*([+-])\s*(.+)$/.exec(t);
-  if (bin && isAtom(bin[1]!) && isAtom(bin[3]!)) {
-    emitAtomToA(bin[1]!, out);
-    const right = bin[3]!.trim();
-    const add = bin[2] === '+';
-    if (/^[A-Za-z]$/.test(right)) {
-      const addr = varAddr(right);
-      out.push(0x21, addr & 0xff, (addr >> 8) & 0xff); // LD HL,var
-      out.push(add ? 0x86 : 0x96); // ADD/SUB A,(HL)
-    } else {
-      const n = parseNumber(right);
-      out.push(add ? 0xc6 : 0xd6, n & 0xff); // ADD/SUB A,n
+  const tokens = tokenizeExpr(expr.trim());
+  if (tokens.length === 0) throw new Error('BASIC: empty expr');
+  let i = 0;
+  const peek = () => tokens[i];
+  const take = () => tokens[i++];
+
+  const parseFactor = (): void => {
+    const t = take();
+    if (!t || t.kind === 'op') throw new Error('BASIC: expected value in expression');
+    emitAtomToA(t.value, out);
+  };
+
+  const parseTerm = (): void => {
+    parseFactor();
+    while (peek()?.kind === 'op' && (peek()!.value === '*' || peek()!.value === '/')) {
+      const op = take()!.value;
+      out.push(0x47); // LD B,A
+      parseFactor();
+      if (op === '*') emitMulLeftBRightA(out);
+      else emitDivLeftBRightA(out);
     }
-    return;
-  }
-  emitAtomToA(t, out);
+  };
+
+  const parseExpr = (): void => {
+    parseTerm();
+    while (peek()?.kind === 'op' && (peek()!.value === '+' || peek()!.value === '-')) {
+      const op = take()!.value;
+      out.push(0x47); // LD B,A
+      parseTerm();
+      if (op === '+') {
+        out.push(0x80); // ADD A,B
+      } else {
+        out.push(0x4f); // LD C,A
+        out.push(0x78); // LD A,B
+        out.push(0x91); // SUB C
+      }
+    }
+  };
+
+  parseExpr();
+  if (i !== tokens.length) throw new Error('BASIC: junk in expression');
+}
+
+/** A = B * A (unsigned 8-bit). Clobbers C. */
+function emitMulLeftBRightA(out: number[]): void {
+  out.push(0x4f); // LD C,A
+  out.push(0xaf); // XOR A
+  out.push(0xb1); // OR C
+  out.push(0x28, 5); // JR Z,+5 → done (A=0)
+  out.push(0xaf); // XOR A
+  out.push(0x80); // ADD A,B
+  out.push(0x0d); // DEC C
+  out.push(0x20, 0xfc); // JR NZ,-4 → ADD
+}
+
+/** A = B / A. Divisor 0 → 0. Clobbers B,C. */
+function emitDivLeftBRightA(out: number[]): void {
+  out.push(0x4f); // LD C,A
+  out.push(0xaf); // XOR A
+  out.push(0xb1); // OR C
+  out.push(0x28, 11); // JR Z,+11 → done (A=0)
+  out.push(0x78); // LD A,B
+  out.push(0x06, 0x00); // LD B,0
+  out.push(0xb9); // CP C
+  out.push(0x38, 4); // JR C,+4 → LD A,B
+  out.push(0x91); // SUB C
+  out.push(0x04); // INC B
+  out.push(0x18, 0xf9); // JR -7 → CP C
+  out.push(0x78); // LD A,B
 }
 
 function parseNumber(s: string): number {

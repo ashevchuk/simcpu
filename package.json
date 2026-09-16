@@ -10,11 +10,15 @@
     "build:file": "npm run build:dist-file",
     "build:dist-file": "bash scripts/build-dist-file.sh",
     "gen:examples": "npx vite-node scripts/gen-examples.ts",
+    "gen:spectrum-games": "npx vite-node scripts/gen-spectrum-games.ts",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "npm run build:dist-file && playwright test",
+    "test:e2e:spectrum": "npm run build:dist-file && playwright test test/e2e/spectrum.spec.ts test/e2e/spectrum-worker.spec.ts test/e2e/spectrum-audit.spec.ts -g \"Place Spectrum|rainbow|TAP demo|ParaZXland|Worker|128K TAP|TRD|SNA round-trip|glazx|Boot TR-DOS|#demo=\""
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vitest": "^2.1.4"

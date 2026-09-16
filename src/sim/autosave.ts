@@ -276,6 +276,11 @@ export function createAutosaveScheduler(
   adoptWriteGen: (slotId: string) => void;
   /** Last known writeGen for the active slot (this tab). */
   localWriteGen: () => number;
+  /**
+   * Adopt the remote writeGen then flush — overwrites another tab's save
+   * with this tab's project (conflict "Restore local").
+   */
+  forceOverwrite: () => Promise<void>;
 } {
   const delayMs = opts.delayMs ?? 800;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -360,6 +365,12 @@ export function createAutosaveScheduler(
     return run();
   };
 
+  const forceOverwrite = (): Promise<void> => {
+    // Catch up to remote gen so the conflict gate lets this write through.
+    localGens.set(activeSlotId, readSlotGen(activeSlotId));
+    return flush();
+  };
+
   const onHide = (): void => {
     if (document.visibilityState === 'hidden') void flush();
   };
@@ -389,6 +400,7 @@ export function createAutosaveScheduler(
   return {
     schedule,
     flush,
+    forceOverwrite,
     adoptWriteGen,
     localWriteGen: () => localGens.get(activeSlotId) ?? 0,
     setActiveSlot: (id: string) => {

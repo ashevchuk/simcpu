@@ -1,11 +1,12 @@
 import { bodyEdgeToward, getOrientation, transformOffset } from '../sim/orientation.js';
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
+import { decodeBusProbe } from '../sim/busProbe.js';
 import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from '../sim/library.js';
 import type { Component, Level, Pin, Point } from '../sim/types.js';
 import type { Camera } from './Camera.js';
 import type { Editor } from './Editor.js';
-import { GRID, findWireCrossings, routeWirePoints } from './geometry.js';
+import { GRID, findWireCrossings, isBusName, pinExitDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
 
 const COLOR = {
   bg: '#12141a',
@@ -13,7 +14,9 @@ const COLOR = {
   wireHigh: '#ff6b6b',
   wireLow: '#4da3ff',
   wireFloat: '#5b6272',
-  contended: '#ff36e0',
+  contended: '#ff4d2e',
+  heat: '#ffb347',
+  spark: '#ffe566',
   body: '#262b38',
   chipBody: '#232a4a',
   ramBody: '#2a3a2c',
@@ -71,12 +74,16 @@ export function componentRadius(c: Component): { rx: number; ry: number } {
       return { rx: 32, ry: 26 };
     case 'analyzer':
       return { rx: 40, ry: Math.max(28, (c.channelCount * 16) / 2 + 20) };
+    case 'busprobe':
+      return { rx: 52, ry: Math.max(28, (c.bitWidth * 16) / 2 + 24) };
     case 'tty':
       return { rx: 44, ry: 30 };
     case 'probe':
       return { rx: 24, ry: 34 };
     case 'led':
       return { rx: 26, ry: 34 };
+    case 'sevenseg':
+      return { rx: 48, ry: 56 };
     case 'label':
       return { rx: 50, ry: 24 };
     case 'port':
@@ -201,7 +208,11 @@ export function draw(
   const highlightNet = editor.highlightedNetId;
   const hoverNet = editor.netIdUnderPointer();
   const glowNet = highlightNet ?? hoverNet;
-  const netOf = glowNet ? circuit.computeNets().netOf : null;
+  const nets = circuit.computeNets();
+  const netOf = glowNet ? nets.netOf : null;
+
+  // Extended VCC/GND rails through same-net sources sharing a Y.
+  drawPowerRailBars(ctx, circuit, nets);
 
   // Wires first, so component bodies sit on top of the lines meeting them.
   const routedWires: Point[][] = [];
@@ -226,7 +237,13 @@ export function draw(
             : editor.tool.kind === 'select' && w.id === editor.hoveredWireId
               ? 'hover'
               : 'none';
-    drawWire(ctx, points, levelColor(level, contended), contended, emphasis);
+    const netName = editor.formatNetName(nets.netOf.get(w.a) ?? null);
+    const bus =
+      isBusName(netName) ||
+      isBusName(a.name) ||
+      isBusName(b.name) ||
+      (netName?.includes('[') ?? false);
+    drawWire(ctx, points, levelColor(level, contended), contended, emphasis, bus);
   }
 
   // Schematic-style dots where orthogonal wires cross (not join).
@@ -245,8 +262,23 @@ export function draw(
   if (editor.tool.kind === 'wire' && editor.wireStartPinId) {
     const start = pinById.get(editor.wireStartPinId);
     if (start) {
-      const raw = [start.pos, ...editor.wireWaypoints, editor.mouse];
-      const points = routeWirePoints(raw);
+      const hoverPin = editor.hoveredPinId ? pinById.get(editor.hoveredPinId) : undefined;
+      const exclude = new Set<string>([start.componentId]);
+      if (hoverPin) exclude.add(hoverPin.componentId);
+      const startComp = circuit.components.get(start.componentId);
+      const endComp = hoverPin ? circuit.components.get(hoverPin.componentId) : undefined;
+      const avoidCrossings: Point[][] = [];
+      for (const w of circuit.wires.values()) {
+        const poly = rawWirePolyline(circuit, w);
+        if (poly) avoidCrossings.push(routeWirePoints(poly));
+      }
+      const raw = [start.pos, ...editor.wireWaypoints, hoverPin?.pos ?? editor.mouse];
+      const points = routeWirePoints(raw, {
+        obstacles: routingObstacles(circuit, exclude),
+        startDir: startComp ? pinExitDir(start.pos, startComp.pos) : null,
+        endDir: hoverPin && endComp ? pinExitDir(hoverPin.pos, endComp.pos) : null,
+        avoidCrossings,
+      });
       ctx.save();
       ctx.strokeStyle = COLOR.hover;
       ctx.lineWidth = 1.5;
@@ -271,6 +303,27 @@ export function draw(
     const selected = editor.selectedIds.has(c.id);
     const hovered = !selected && editor.hoveredComponentId === c.id && editor.tool.kind === 'select';
     drawComponent(ctx, c, resolve, selected, hovered, library);
+  }
+
+  // Tutorial target rings (button / LED / wire endpoints / toggle target).
+  const th = editor.tutorialHint;
+  if (th) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(245, 197, 24, 0.85)';
+    ctx.lineWidth = 2 / Math.max(camera.scale, 0.01);
+    ctx.setLineDash([6 / camera.scale, 4 / camera.scale]);
+    for (const c of circuit.components.values()) {
+      const match =
+        (th === 'place-button' && c.kind === 'button') ||
+        (th === 'place-led' && c.kind === 'led') ||
+        (th === 'toggle' && c.kind === 'button') ||
+        (th === 'wire' && (c.kind === 'button' || c.kind === 'led'));
+      if (!match) continue;
+      ctx.beginPath();
+      ctx.arc(c.pos.x, c.pos.y, 28, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // Hovered pin magnet while the wire tool is active (placing or completing).
@@ -396,7 +449,9 @@ export function draw(
   }
 }
 
-/** Adaptive dot grid: keeps on-screen dot spacing in a readable range regardless of zoom. */
+/** Adaptive dot grid — Path2D cache keyed by visible world window + zoom. */
+let gridPathCache: { key: string; path: Path2D } | null = null;
+
 function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, viewportW: number, viewportH: number): void {
   let step = GRID;
   while (step * camera.scale < 18) step *= 2;
@@ -407,16 +462,22 @@ function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, viewportW: numb
   const x1 = Math.ceil(bottomRight.x / step) * step;
   const y0 = Math.floor(topLeft.y / step) * step;
   const y1 = Math.ceil(bottomRight.y / step) * step;
+  const r = 1.3 / camera.scale;
+  const key = `${step}|${x0}|${x1}|${y0}|${y1}|${r.toFixed(4)}`;
+
+  if (!gridPathCache || gridPathCache.key !== key) {
+    const path = new Path2D();
+    for (let x = x0; x <= x1; x += step) {
+      for (let y = y0; y <= y1; y += step) {
+        path.moveTo(x + r, y);
+        path.arc(x, y, r, 0, Math.PI * 2);
+      }
+    }
+    gridPathCache = { key, path };
+  }
 
   ctx.fillStyle = COLOR.grid;
-  const r = 1.3 / camera.scale;
-  for (let x = x0; x <= x1; x += step) {
-    for (let y = y0; y <= y1; y += step) {
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+  ctx.fill(gridPathCache.path);
 }
 
 /** Draws a wire as a rounded orthogonal polyline (schematic-style). */
@@ -426,30 +487,183 @@ function drawWire(
   color: string,
   contended: boolean,
   emphasis: 'none' | 'hover' | 'selected' | 'net' = 'none',
+  bus = false,
 ): void {
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   const path = () => strokeRoundedPolyline(ctx, points, 7);
+  const coreW = bus ? (contended ? 4.2 : 3.4) : contended ? 3 : 2.2;
+  const glowW = bus ? (contended ? 16 : 13) : contended ? 13 : 10;
+  const softW = bus ? (contended ? 12 : 9) : contended ? 9 : 6;
+  if (contended) drawContendedHeat(ctx, points, path, bus);
   if (emphasis !== 'none') {
     const glow =
       emphasis === 'selected' ? COLOR.selected : emphasis === 'net' ? '#5ec8ff' : COLOR.hover;
     ctx.globalAlpha = emphasis === 'selected' ? 0.45 : emphasis === 'net' ? 0.38 : 0.28;
     ctx.strokeStyle = glow;
-    ctx.lineWidth = contended ? 13 : 10;
+    ctx.lineWidth = glowW;
     path();
     ctx.stroke();
   }
   ctx.globalAlpha = 0.2;
   ctx.strokeStyle = color;
-  ctx.lineWidth = contended ? 9 : 6;
+  ctx.lineWidth = softW;
   path();
   ctx.stroke();
   ctx.globalAlpha = 1;
-  ctx.lineWidth = contended ? 3 : 2.2;
+  ctx.lineWidth = coreW;
   ctx.strokeStyle = color;
   path();
   ctx.stroke();
+  if (bus && points.length >= 2) {
+    // Schematic bus mark: small diagonal slash at mid-polyline.
+    let total = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+      total += Math.hypot(points[i + 1]!.x - points[i]!.x, points[i + 1]!.y - points[i]!.y);
+    }
+    let along = total / 2;
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i]!;
+      const b = points[i + 1]!;
+      const seg = Math.hypot(b.x - a.x, b.y - a.y);
+      if (seg < 0.5) continue;
+      if (along > seg) {
+        along -= seg;
+        continue;
+      }
+      const t = along / seg;
+      const mx = a.x + (b.x - a.x) * t;
+      const my = a.y + (b.y - a.y) * t;
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(mx - 5, my - 5);
+      ctx.lineTo(mx + 5, my + 5);
+      ctx.stroke();
+      break;
+    }
+  }
+  ctx.restore();
+}
+
+/** Pulsing heat halo + traveling embers + sparks on shorted nets. */
+function drawContendedHeat(
+  ctx: CanvasRenderingContext2D,
+  points: Point[],
+  path: () => void,
+  bus: boolean,
+): void {
+  const t = performance.now() / 1000;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 9);
+  const g = Math.floor(40 + 90 * pulse);
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Soft heat bloom
+  ctx.globalAlpha = 0.22 + 0.18 * pulse;
+  ctx.strokeStyle = `rgb(255, ${g}, 28)`;
+  ctx.lineWidth = bus ? 20 : 15;
+  path();
+  ctx.stroke();
+
+  // Hot core shimmer
+  ctx.globalAlpha = 0.35 + 0.25 * pulse;
+  ctx.strokeStyle = COLOR.contended;
+  ctx.lineWidth = bus ? 8 : 6;
+  path();
+  ctx.stroke();
+
+  // Embers racing along the wire
+  ctx.setLineDash([5, 12]);
+  ctx.lineDashOffset = -(t * 55);
+  ctx.globalAlpha = 0.9;
+  ctx.strokeStyle = COLOR.heat;
+  ctx.lineWidth = bus ? 2.8 : 2.1;
+  path();
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Flickering sparks at a few stations along the polyline
+  const stations = samplePolyline(points, 28);
+  for (let i = 0; i < stations.length; i++) {
+    const p = stations[i]!;
+    const flicker = 0.35 + 0.65 * Math.max(0, Math.sin(t * 14 + i * 1.7));
+    if (flicker < 0.45) continue;
+    const r = (bus ? 2.4 : 1.8) * (0.7 + 0.5 * flicker);
+    ctx.globalAlpha = 0.55 * flicker;
+    ctx.fillStyle = COLOR.spark;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    // Tiny smoke puff drifting up
+    ctx.globalAlpha = 0.12 * flicker;
+    ctx.fillStyle = '#c8c8c8';
+    ctx.beginPath();
+    ctx.arc(p.x + Math.sin(t * 3 + i) * 2, p.y - 4 - (t * 8 + i * 3) % 10, r * 1.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** Points spaced roughly `spacing` apart along an orthogonal polyline. */
+function samplePolyline(points: Point[], spacing: number): Point[] {
+  if (points.length < 2) return [];
+  const out: Point[] = [];
+  let carry = spacing * 0.5;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 0.5) continue;
+    let d = carry;
+    while (d <= len) {
+      const t = d / len;
+      out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      d += spacing;
+    }
+    carry = d - len;
+  }
+  return out;
+}
+
+/** Horizontal power-rail bars linking same-net VCC/GND sources at a shared Y. */
+function drawPowerRailBars(
+  ctx: CanvasRenderingContext2D,
+  circuit: Circuit,
+  nets: { netOf: Map<string, string> },
+): void {
+  type Group = { value: 0 | 1; y: number; xs: number[] };
+  const groups = new Map<string, Group>();
+  for (const c of circuit.components.values()) {
+    if (c.kind !== 'source') continue;
+    const net = nets.netOf.get(c.pins.out.id) ?? c.id;
+    const yKey = Math.round(c.pos.y);
+    const key = `${net}|${c.value}|${yKey}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { value: c.value, y: c.pos.y, xs: [] };
+      groups.set(key, g);
+    }
+    g.xs.push(c.pos.x);
+  }
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const g of groups.values()) {
+    if (g.xs.length < 2) continue;
+    const minX = Math.min(...g.xs) - 14;
+    const maxX = Math.max(...g.xs) + 14;
+    // VCC rail at the top bar; GND at the uppermost earth bar (just under the pin).
+    const barY = g.y - 6;
+    ctx.strokeStyle = g.value === 1 ? COLOR.wireHigh : COLOR.wireLow;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(minX, barY);
+    ctx.lineTo(maxX, barY);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -808,14 +1022,14 @@ function drawComponent(
         ctx.lineTo(10, -6);
         ctx.stroke();
       } else {
-        // Earth symbol: pin below, three bars above it.
+        // Earth symbol: pin above (toward the circuit), three bars below.
         ctx.beginPath();
-        ctx.moveTo(0, 15);
-        ctx.lineTo(0, 6);
+        ctx.moveTo(0, -15);
+        ctx.lineTo(0, -6);
         ctx.stroke();
         for (let i = 0; i < 3; i++) {
           const half = 11 - i * 3.5;
-          const yy = 6 - i * 4;
+          const yy = -6 + i * 4;
           ctx.beginPath();
           ctx.moveTo(-half, yy);
           ctx.lineTo(half, yy);
@@ -824,7 +1038,7 @@ function drawComponent(
       }
       ctx.restore();
       // Keep the name upright; place it opposite the pin.
-      const labelOff = transformOffset(0, isVcc ? -12 : -11, rotation, mirrorX, mirrorY);
+      const labelOff = transformOffset(0, isVcc ? -12 : 14, rotation, mirrorX, mirrorY);
       ctx.fillStyle = COLOR.text;
       ctx.font = '9px ui-monospace, "SF Mono", monospace';
       ctx.textAlign = 'center';
@@ -955,6 +1169,49 @@ function drawComponent(
       ctx.fillText(c.armed ? 'REC' : `${n}ch`, x + 14, y + 8);
       break;
     }
+    case 'busprobe': {
+      const { x, y } = c.pos;
+      const n = c.bitWidth;
+      const h = Math.max(40, n * 16 + 16);
+      const w = 78;
+      if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 6, ringColor);
+      ctx.fillStyle = '#161a22';
+      roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 6);
+      ctx.fill();
+      ctx.strokeStyle = bodyStroke(COLOR.bodyStroke);
+      ctx.lineWidth = selected || hovered ? 2 : 1.3;
+      ctx.stroke();
+      const levels: Array<{ level: Level; contended: boolean }> = [];
+      for (let i = 0; i < n; i++) {
+        const p = c.pins[`b${i}`];
+        if (!p) {
+          levels.push({ level: 'Z', contended: false });
+          continue;
+        }
+        stubPin(x, y, w / 2, h / 2, p);
+        drawPinDot(ctx, p, resolve);
+        drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
+        const { level, contended } = resolve(p.id);
+        levels.push({ level, contended });
+      }
+      const decoded = decodeBusProbe(levels, c.radix);
+      ctx.font = '10px ui-monospace, "SF Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = COLOR.textDim;
+      ctx.fillText(c.label?.trim() || `BUS${n}`, x + 12, y - h / 2 + 14);
+      ctx.fillStyle = decoded.value === null ? '#e0a060' : COLOR.selected;
+      const prefix = c.radix === 'hex' ? '0x' : c.radix === 'bin' ? '0b' : '';
+      ctx.font = '12px ui-monospace, "SF Mono", monospace';
+      ctx.fillText(`${prefix}${decoded.text}`, x + 12, y + 2);
+      if (c.radix !== 'bin' && n <= 16) {
+        ctx.fillStyle = COLOR.textDim;
+        ctx.font = '9px ui-monospace, "SF Mono", monospace';
+        const bin = decoded.bitsMsbFirst;
+        const shown = bin.length > 12 ? `${bin.slice(0, 6)}…${bin.slice(-4)}` : bin;
+        ctx.fillText(shown, x + 12, y + 16);
+      }
+      break;
+    }
     case 'tty': {
       const { x, y } = c.pos;
       const w = 64;
@@ -1007,6 +1264,57 @@ function drawComponent(
       if (c.label) {
         ctx.fillStyle = COLOR.textDim;
         ctx.fillText(c.label, x, y - 20);
+      }
+      break;
+    }
+    case 'sevenseg': {
+      const { x, y } = c.pos;
+      const w = 36;
+      const h = 52;
+      if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 4, ringColor);
+      ctx.fillStyle = '#14161c';
+      roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 4);
+      ctx.fill();
+      ctx.strokeStyle = bodyStroke(COLOR.bodyStroke);
+      ctx.lineWidth = selected || hovered ? 2 : 1.3;
+      ctx.stroke();
+
+      const lit = (name: string): boolean => {
+        const p = c.pins[name];
+        if (!p) return false;
+        const { level, contended } = resolve(p.id);
+        return level === 1 && !contended;
+      };
+      const dim = '#2a2e38';
+      const on = c.color;
+      const seg = (x1: number, y1: number, x2: number, y2: number, active: boolean) => {
+        ctx.strokeStyle = active ? on : dim;
+        ctx.lineWidth = active ? 3.2 : 2.4;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x + x1, y + y1);
+        ctx.lineTo(x + x2, y + y2);
+        ctx.stroke();
+      };
+      // Classic 7-seg layout (common cathode, active-high).
+      seg(-10, -18, 10, -18, lit('a'));
+      seg(12, -16, 12, -2, lit('b'));
+      seg(12, 2, 12, 16, lit('c'));
+      seg(-10, 18, 10, 18, lit('d'));
+      seg(-12, 2, -12, 16, lit('e'));
+      seg(-12, -16, -12, -2, lit('f'));
+      seg(-10, 0, 10, 0, lit('g'));
+      if (c.hasDp && c.pins.dp) {
+        ctx.fillStyle = lit('dp') ? on : dim;
+        ctx.beginPath();
+        ctx.arc(x + 16, y + 18, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      for (const name of c.pinOrder) {
+        const p = c.pins[name];
+        if (!p) continue;
+        stubPin(x, y, w / 2, h / 2, p);
+        drawPinDot(ctx, p, resolve);
       }
       break;
     }

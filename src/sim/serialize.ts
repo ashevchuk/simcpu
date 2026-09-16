@@ -51,6 +51,27 @@ function fromSerializedComponent(c: SerializedComponent): Component {
   if (c.kind === 'port') {
     return { ...c, dir: c.dir ?? 'inout' };
   }
+  if (c.kind === 'sevenseg') {
+    const raw = c as import('./types.js').SevenSegComponent & { color?: string; hasDp?: boolean };
+    const names =
+      raw.pinOrder?.length > 0
+        ? raw.pinOrder
+        : raw.hasDp
+          ? ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp']
+          : ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+    const seg = {
+      ...raw,
+      kind: 'sevenseg' as const,
+      hasDp: raw.hasDp ?? names.includes('dp'),
+      color: raw.color ?? '#ff5533',
+      pinOrder: names,
+      rotation: raw.rotation ?? 0,
+      mirrorX: raw.mirrorX ?? false,
+      mirrorY: raw.mirrorY ?? false,
+    };
+    applyPinLayout(seg);
+    return seg;
+  }
   if (c.kind === 'clock') {
     const raw = c as ClockComponent & {
       mode?: ClockComponent['mode'];
@@ -244,8 +265,10 @@ const ID_PREFIX: Record<Component['kind'], string> = {
   input: 'in',
   button: 'btn',
   led: 'led',
+  sevenseg: '7seg',
   clock: 'clk',
   analyzer: 'la',
+  busprobe: 'bus',
   tty: 'tty',
   probe: 'probe',
   label: 'lbl',

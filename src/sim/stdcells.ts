@@ -22,6 +22,7 @@ import {
   makeSource,
   type TwoInputGate,
 } from './library.js';
+import { seedLabCells, isLabcellName } from './labcells.js';
 import { buildDFlipFlop, buildDLatch } from './sequential.js';
 
 function scratch(): Circuit {
@@ -86,6 +87,27 @@ export function pruneDuplicateChipNames(library: ChipLibrary, roots: Circuit[]):
     }
   }
   return removed;
+}
+
+/** Display names of chips seeded by `seedStandardCells` (for library tags). */
+export const STDCELL_NAMES = new Set([
+  'NOT',
+  'NAND',
+  'AND',
+  'NOR',
+  'OR',
+  'XOR',
+  'MUX2',
+  'MUX4',
+  'HALF_ADDER',
+  'FULL_ADDER',
+  'D_LATCH',
+  'D_FF',
+  'TRI_BUF',
+]);
+
+export function isStdcellName(name: string): boolean {
+  return STDCELL_NAMES.has(name) || isLabcellName(name);
 }
 
 /** Registers NOT, NAND, AND, NOR, OR, XOR, MUX2, MUX4, HALF_ADDER, FULL_ADDER, D_LATCH, D_FF and TRI_BUF as placeable chips. Idempotent by name. */
@@ -184,4 +206,7 @@ export function seedStandardCells(library: ChipLibrary): void {
       { pin: b.out, isOutput: true, portName: 'out' },
     ]);
   }
+
+  // Pack A/B/C hierarchical lab cells + 74xx aliases (idempotent by name).
+  seedLabCells(library);
 }

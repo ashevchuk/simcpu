@@ -9,6 +9,7 @@ import andGate from '../../examples/and-gate.json';
 import cmosInverter from '../../examples/cmos-inverter.json';
 import dLatch from '../../examples/d-latch.json';
 import halfAdder from '../../examples/half-adder.json';
+import labShiftCounter from '../../examples/lab-shift-counter.json';
 import nandGate from '../../examples/nand-gate.json';
 import romViewer from '../../examples/rom-viewer.json';
 import xorPulse from '../../examples/xor-pulse.json';
@@ -50,6 +51,12 @@ export const EXAMPLE_PROJECTS: ExampleProject[] = [
     title: 'Latch walkthrough',
     detail: 'Tutorial: D + enable → Q / Qn — toggle D, pulse E, watch Q hold',
     project: dLatch as SerializedProject,
+  },
+  {
+    id: 'lab-shift-counter',
+    title: 'Counter + 7-seg',
+    detail: 'COUNTER4 → BCD_7SEG → 7SEG with free-running pulse',
+    project: labShiftCounter as SerializedProject,
   },
   {
     id: 'rom-viewer',

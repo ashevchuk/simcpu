@@ -30,6 +30,9 @@ export class LogicAnalyzer {
   private device: AnalyzerComponent | null = null;
   private readonly captures = new Map<string, Capture>();
   private onRunChange: ((running: boolean) => void) | null = null;
+  /** Sample index in display order (0 … count-1), or null when unset. */
+  private cursorSample: number | null = null;
+  onCursorChange: (() => void) | null = null;
 
   constructor() {
     this.win = new FloatingWindow('Logic Analyzer', 'logic-analyzer');
@@ -41,7 +44,7 @@ export class LogicAnalyzer {
         <button type="button" data-act="clear">Clear</button>
         <button type="button" data-act="export">CSV</button>
       </div>
-      <div class="la-note">Wire nets into CH pins. Channel count is set when placing.</div>
+      <div class="la-note">Wire nets into CH pins. Channel count is set when placing. Click waveform for time cursor.</div>
       <canvas class="la-canvas" width="420" height="120"></canvas>
       <div class="lab-panel-status">Place Analyzer · wire channels · Arm</div>
     `;
@@ -50,6 +53,7 @@ export class LogicAnalyzer {
     this.canvas = this.root.querySelector('.la-canvas')!;
     this.canvas.style.width = '100%';
     this.canvas.style.minHeight = '120px';
+    this.canvas.style.cursor = 'crosshair';
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('2D context missing');
     this.ctx = ctx;
@@ -58,6 +62,56 @@ export class LogicAnalyzer {
     this.root.querySelector('[data-act="pause"]')!.addEventListener('click', () => this.setRunning(false));
     this.root.querySelector('[data-act="clear"]')!.addEventListener('click', () => this.clear());
     this.root.querySelector('[data-act="export"]')!.addEventListener('click', () => this.exportCsv());
+    this.canvas.addEventListener('click', (ev) => this.onCanvasClick(ev));
+  }
+
+  get attachedDevice(): AnalyzerComponent | null {
+    return this.device;
+  }
+
+  get hasCursor(): boolean {
+    return this.cursorSample != null && this.device != null;
+  }
+
+  getCursorSample(): number | null {
+    return this.cursorSample;
+  }
+
+  /** Levels at the time cursor for each channel of the open device. */
+  getCursorLevels(): Sample[] | null {
+    if (this.cursorSample == null || !this.device) return null;
+    const cap = this.ensureCapture(this.device);
+    if (cap.count === 0) return null;
+    const s = Math.max(0, Math.min(cap.count - 1, this.cursorSample));
+    const out: Sample[] = [];
+    for (let ch = 0; ch < this.device.channelCount; ch++) {
+      const idx = (cap.write - cap.count + s + MAX_SAMPLES) % MAX_SAMPLES;
+      out.push(cap.samples[ch]![idx]!);
+    }
+    return out;
+  }
+
+  clearCursor(): void {
+    if (this.cursorSample == null) return;
+    this.cursorSample = null;
+    this.draw();
+    this.onCursorChange?.();
+  }
+
+  private onCanvasClick(ev: MouseEvent): void {
+    if (!this.device) return;
+    const cap = this.ensureCapture(this.device);
+    const cssW = this.canvas.clientWidth || 420;
+    const plotW = cssW - LABEL_W - 8;
+    const x = ev.offsetX;
+    if (cap.count === 0 || x < LABEL_W || plotW <= 0) {
+      this.cursorSample = null;
+    } else {
+      const t = Math.max(0, Math.min(1, (x - LABEL_W) / plotW));
+      this.cursorSample = Math.round(t * Math.max(0, cap.count - 1));
+    }
+    this.draw();
+    this.onCursorChange?.();
   }
 
   setOnRunChange(fn: ((running: boolean) => void) | null): void {
@@ -128,8 +182,10 @@ export class LogicAnalyzer {
     const cap = this.ensureCapture(this.device);
     cap.write = 0;
     cap.count = 0;
+    this.cursorSample = null;
     for (const buf of cap.samples) buf.fill('Z');
     this.draw();
+    this.onCursorChange?.();
   }
 
   /** Sample every armed analyzer on `circuit`. */
@@ -201,6 +257,22 @@ export class LogicAnalyzer {
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
+    }
+
+    if (this.cursorSample != null && n > 0) {
+      const s = Math.max(0, Math.min(n - 1, this.cursorSample));
+      const x = LABEL_W + (s / Math.max(1, n - 1)) * plotW;
+      ctx.strokeStyle = '#f5c518';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, 4);
+      ctx.lineTo(x, cssH - 4);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#f5c518';
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillText(`t=${s}`, x + 4, 12);
     }
   }
 

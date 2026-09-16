@@ -34,13 +34,40 @@ function ensureStyles(): void {
       max-height: min(92vh, 900px);
       resize: vertical;
     }
-    .float-win.memory-editor .float-win-body {
+    .float-win.machine-panel {
+      width: min(96vw, 860px);
+      height: min(92vh, 820px);
+      min-width: 420px;
+      min-height: 320px;
+      max-width: min(98vw, 1100px);
+      max-height: min(96vh, 960px);
+      resize: both;
+    }
+    .float-win.memory-editor .float-win-body,
+    .float-win.machine-panel .float-win-body {
       display: flex;
       flex-direction: column;
       gap: 8px;
       min-height: 0;
       overflow: hidden;
       flex: 1 1 auto;
+    }
+    .float-win.machine-panel .machine-panel-canvas-wrap {
+      flex: 1 1 auto;
+      min-height: 140px;
+      overflow: auto;
+      border: 1px solid #2a3040;
+      border-radius: 6px;
+      background: #0a0c10;
+    }
+    .float-win.machine-panel .machine-panel-pane {
+      min-height: 0;
+      flex: 1 1 auto;
+    }
+    .float-win.machine-panel .machine-panel-canvas {
+      display: block;
+      border: none;
+      border-radius: 0;
     }
     .float-win[hidden] { display: none !important; }
     .float-win-titlebar {

@@ -2,6 +2,7 @@ import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import { Circuit, nextId } from '../sim/Circuit.js';
 import {
   makeAnalyzer,
+  makeBusProbe,
   makeButton,
   makeChipInstance,
   makeClock,
@@ -10,18 +11,36 @@ import {
   makeLed,
   makePort,
   makeProbe,
+  makeSevenSeg,
   makeSource,
   makeTransistor,
   makeTty,
   nextAutoPortName,
   parseBusPortSpec,
+  relayoutBusProbePins,
 } from '../sim/library.js';
 import { firePulse } from '../sim/labTick.js';
-import { applyPinLayout } from '../sim/orientation.js';
+import { applyPinLayout, syncPinSidesFromDef } from '../sim/orientation.js';
 import { captureCircuit, type CircuitSnapshot } from '../sim/serialize.js';
 import type { Component, Pin, Point } from '../sim/types.js';
 import { showPrompt } from './Dialog.js';
-import { findComponentNear, findPinNear, findWaypointNear, findWireNear, GRID, routeWirePoints, snap, wirePolyline } from './geometry.js';
+import type { TutorialHint } from './Tutorial.js';
+import {
+  dist,
+  findComponentNear,
+  findPinNear,
+  findWaypointNear,
+  findWireNear,
+  GRID,
+  pinExitDir,
+  rawWirePolyline,
+  routeWirePoints,
+  routingObstacles,
+  snap,
+  wirePolyline,
+} from './geometry.js';
+
+export type SnapMode = 'grid' | 'half' | 'free';
 
 export type Tool =
   | { kind: 'select' }
@@ -34,8 +53,10 @@ export type Tool =
   | { kind: 'input' }
   | { kind: 'button' }
   | { kind: 'led' }
+  | { kind: 'sevenseg' }
   | { kind: 'clock' }
   | { kind: 'analyzer' }
+  | { kind: 'busprobe' }
   | { kind: 'tty' }
   | { kind: 'probe' }
   | { kind: 'label' }
@@ -84,6 +105,10 @@ export class Editor {
   hoveredWireId: string | null = null;
   /** Set by main.ts — push undo checkpoint before mutating edits. */
   onBeforeEdit: (() => void) | null = null;
+  /** Fired after components are removed (Delete / context menu), with their ids. */
+  onComponentsRemoved: ((ids: string[]) => void) | null = null;
+  /** In-canvas tutorial highlight target (Renderer + Place menu). */
+  tutorialHint: TutorialHint = null;
   private clipboard: CircuitSnapshot | null = null;
   /** True once per drag gesture after the first real move (undo checkpoint). */
   private dragCheckpointTaken = false;
@@ -96,12 +121,71 @@ export class Editor {
   private pendingComponentDrag: { ids: string[]; downPoint: Point } | null = null;
   /** The component(s) actually being dragged right now, and where the pointer was last frame (moves are applied as deltas, never absolute jumps). */
   private draggingComponents: { ids: string[]; lastPoint: Point } | null = null;
-  /** Drag a chip pin across the body center to flip left/right stack. */
+  /** Drag a chip pin across the body center to flip left/right stack (Alt/Shift+drag). */
   private pinSideDrag: { componentId: string; pinName: string; startX: number } | null = null;
+
+  /** Placement / move / wire bend snap: full grid, half grid, or free. Cycle with G. */
+  snapMode: SnapMode = 'grid';
 
   /** True while a component or a wire's bend point is being actively dragged — for cursor feedback, see main.ts. */
   get isDragging(): boolean {
     return this.draggingComponents !== null || this.dragWaypoint !== null;
+  }
+
+  /** Snap a world point according to `snapMode`, then magnet to nearby pin axes. */
+  getSnap(p: Point): Point {
+    let s: Point;
+    if (this.snapMode === 'free') s = { x: p.x, y: p.y };
+    else if (this.snapMode === 'half') s = snap(p, GRID / 2);
+    else s = snap(p);
+
+    // Pull X/Y onto nearby pin columns/rows so chip pin pitches (often 20)
+    // stay reachable even when bends snap to the finer GRID.
+    const magnet = GRID * 1.25;
+    let bestX = s.x;
+    let bestY = s.y;
+    let bestXd = magnet;
+    let bestYd = magnet;
+    for (const pin of this.circuit.allPins()) {
+      const dx = Math.abs(pin.pos.x - p.x);
+      const dy = Math.abs(pin.pos.y - p.y);
+      if (dx < bestXd) {
+        bestXd = dx;
+        bestX = pin.pos.x;
+      }
+      if (dy < bestYd) {
+        bestYd = dy;
+        bestY = pin.pos.y;
+      }
+    }
+    if (bestXd < magnet) s = { x: bestX, y: s.y };
+    if (bestYd < magnet) s = { x: s.x, y: bestY };
+    return s;
+  }
+
+  /** Cycle grid → half → free → grid. Returns the new mode. */
+  cycleSnapMode(): SnapMode {
+    this.snapMode = this.snapMode === 'grid' ? 'half' : this.snapMode === 'half' ? 'free' : 'grid';
+    return this.snapMode;
+  }
+
+  /**
+   * Snap VCC/GND placement/drag Y onto a nearby same-value rail (within GRID).
+   * Returns the magnet Y, or `y` unchanged when nothing is close.
+   */
+  magnetSourceRailY(value: 0 | 1, y: number, excludeId?: string): number {
+    let bestY = y;
+    let bestDist = GRID;
+    for (const c of this.circuit.components.values()) {
+      if (c.kind !== 'source' || c.value !== value) continue;
+      if (excludeId && c.id === excludeId) continue;
+      const d = Math.abs(c.pos.y - y);
+      if (d <= bestDist) {
+        bestDist = d;
+        bestY = c.pos.y;
+      }
+    }
+    return bestY;
   }
 
   /** First selected wire id, if any — bend-point drag still targets one wire. */
@@ -136,19 +220,23 @@ export class Editor {
     }
   }
 
-  handleMouseDown(p: Point): void {
+  handleMouseDown(p: Point, opts?: { altKey?: boolean; shiftKey?: boolean }): void {
     if (this.tool.kind !== 'select') return;
     this.dragCheckpointTaken = false;
 
-    // Chip pin → drag across center to flip side (before body hit-test).
-    const nearPin = findPinNear(this.circuit, p, 12);
-    if (nearPin) {
-      const host = this.circuit.components.get(nearPin.componentId);
-      if (host?.kind === 'chip') {
-        this.pinSideDrag = { componentId: host.id, pinName: nearPin.name, startX: p.x };
-        this.selectedIds = new Set([host.id]);
-        this.selectedWireId = null;
-        return;
+    // Chip pin → Alt/Shift+drag across center to flip side (before body hit-test).
+    // Without a modifier, pin near-hits fall through to normal component drag.
+    const pinSideModifier = !!(opts?.altKey || opts?.shiftKey);
+    if (pinSideModifier) {
+      const nearPin = findPinNear(this.circuit, p, 12);
+      if (nearPin) {
+        const host = this.circuit.components.get(nearPin.componentId);
+        if (host?.kind === 'chip') {
+          this.pinSideDrag = { componentId: host.id, pinName: nearPin.name, startX: p.x };
+          this.selectedIds = new Set([host.id]);
+          this.selectedWireId = null;
+          return;
+        }
       }
     }
 
@@ -206,6 +294,7 @@ export class Editor {
       const dx = p.x - this.draggingComponents.lastPoint.x;
       const dy = p.y - this.draggingComponents.lastPoint.y;
       for (const id of this.draggingComponents.ids) this.circuit.moveComponent(id, dx, dy);
+      this.pushWiresWithDrag(this.draggingComponents.ids, dx, dy);
       this.draggingComponents.lastPoint = p;
       this.dragging = true;
       return;
@@ -220,7 +309,7 @@ export class Editor {
         const wire = this.circuit.wires.get(wireId);
         if (wire) {
           const waypoints = wire.waypoints ? [...wire.waypoints] : [];
-          waypoints.splice(insertIndex, 0, snap(p));
+          waypoints.splice(insertIndex, 0, this.getSnap(p));
           wire.waypoints = waypoints;
         }
         this.dragWaypoint = { wireId, index: insertIndex };
@@ -235,7 +324,7 @@ export class Editor {
         this.dragCheckpointTaken = true;
       }
       const wire = this.circuit.wires.get(this.dragWaypoint.wireId);
-      if (wire?.waypoints) wire.waypoints[this.dragWaypoint.index] = snap(p);
+      if (wire?.waypoints) wire.waypoints[this.dragWaypoint.index] = this.getSnap(p);
       this.dragging = true;
       return;
     }
@@ -272,8 +361,16 @@ export class Editor {
       for (const id of this.draggingComponents.ids) {
         const c = this.circuit.components.get(id);
         if (!c) continue;
-        const snapped = snap(c.pos);
-        this.circuit.moveComponent(id, snapped.x - c.pos.x, snapped.y - c.pos.y);
+        let target = this.getSnap(c.pos);
+        if (c.kind === 'source') {
+          target = { x: target.x, y: this.magnetSourceRailY(c.value, target.y, c.id) };
+        }
+        const dx = target.x - c.pos.x;
+        const dy = target.y - c.pos.y;
+        if (dx !== 0 || dy !== 0) {
+          this.circuit.moveComponent(id, dx, dy);
+          this.pushWiresWithDrag([id], dx, dy);
+        }
       }
       this.selectedIds = new Set(this.draggingComponents.ids);
       this.selectedWireId = null;
@@ -285,7 +382,7 @@ export class Editor {
 
     if (this.dragWaypoint) {
       const wire = this.circuit.wires.get(this.dragWaypoint.wireId);
-      if (wire?.waypoints) wire.waypoints[this.dragWaypoint.index] = snap(p);
+      if (wire?.waypoints) wire.waypoints[this.dragWaypoint.index] = this.getSnap(p);
       this.dragWaypoint = null;
       didDrag = true;
     }
@@ -352,8 +449,10 @@ export class Editor {
       this.selectedWireIds.clear();
       return;
     }
-    for (const id of this.selectedIds) this.circuit.removeComponent(id);
+    const removed = [...this.selectedIds];
+    for (const id of removed) this.circuit.removeComponent(id);
     this.selectedIds.clear();
+    if (removed.length > 0) this.onComponentsRemoved?.(removed);
   }
 
   /** Copy selected components + wires wholly inside the selection. */
@@ -399,6 +498,46 @@ export class Editor {
     if (!snap) return false;
     this.noteEdit();
     return this.pasteSnapshot(snap, GRID * 2, GRID * 2);
+  }
+
+  /**
+   * Paste `count` copies of the current selection (or clipboard if empty
+   * selection after copy) on a grid with pitch (dx, dy) from the original.
+   * Relative offsets inside the footprint are preserved.
+   */
+  stampSelection(count: number, dx: number, dy: number): boolean {
+    const n = Math.floor(count);
+    if (n < 1) return false;
+    let snap: CircuitSnapshot | null = null;
+    const saved = this.clipboard;
+    if (this.selectedIds.size > 0) {
+      if (!this.copySelection()) return false;
+      snap = this.clipboard;
+      this.clipboard = saved;
+    } else {
+      snap = this.clipboard;
+    }
+    if (!snap || snap.components.length === 0) return false;
+    this.noteEdit();
+    let ok = false;
+    for (let i = 1; i <= n; i++) {
+      if (this.pasteSnapshot(snap, dx * i, dy * i)) ok = true;
+    }
+    return ok;
+  }
+
+  /**
+   * Acknowledge ChipDef revision and re-apply pinSide/layout from the def.
+   * Does not remove or recreate pins/wires.
+   */
+  updateChipFromLibrary(componentId: string): boolean {
+    const c = this.circuit.components.get(componentId);
+    if (!c || c.kind !== 'chip' || !this.library.has(c.defId)) return false;
+    this.noteEdit();
+    const def = this.library.get(c.defId);
+    syncPinSidesFromDef(c, def);
+    c.defRevision = def.revision ?? 0;
+    return true;
   }
 
   private pasteSnapshot(snap: CircuitSnapshot, dx: number, dy: number): boolean {
@@ -572,8 +711,53 @@ export class Editor {
   }
 
   /**
+   * While dragging components: translate waypoints of wires whose both ends
+   * are selected; for wires with one end in the selection, shift only the
+   * elbow nearest that pin. Full tidy still runs on mouseup.
+   */
+  pushWiresWithDrag(ids: string[], dx: number, dy: number): void {
+    if (dx === 0 && dy === 0) return;
+    const sel = new Set(ids);
+    const pinById = new Map<string, Pin>();
+    for (const p of this.circuit.allPins()) pinById.set(p.id, p);
+
+    for (const w of this.circuit.wires.values()) {
+      const aComp = w.a.split(':')[0]!;
+      const bComp = w.b.split(':')[0]!;
+      const aSel = sel.has(aComp);
+      const bSel = sel.has(bComp);
+      if (!aSel && !bSel) continue;
+
+      if (aSel && bSel) {
+        if (!w.waypoints?.length) continue;
+        for (const wp of w.waypoints) {
+          wp.x += dx;
+          wp.y += dy;
+        }
+        continue;
+      }
+
+      if (!w.waypoints?.length) continue;
+      const pin = pinById.get(aSel ? w.a : w.b);
+      if (!pin) continue;
+      let bestI = 0;
+      let bestD = Infinity;
+      for (let i = 0; i < w.waypoints.length; i++) {
+        const d = dist(w.waypoints[i]!, pin.pos);
+        if (d < bestD) {
+          bestD = d;
+          bestI = i;
+        }
+      }
+      const elbow = w.waypoints[bestI]!;
+      elbow.x += dx;
+      elbow.y += dy;
+    }
+  }
+
+  /**
    * Re-route selected wires (or wires attached to selected components) with
-   * fresh orthogonal waypoints — drops manual kinks.
+   * fresh orthogonal waypoints — drops manual kinks. Avoids chip/RAM/ROM/button bodies.
    */
   tidySelectedWires(checkpoint = true): number {
     const pinById = new Map<string, Pin>();
@@ -593,6 +777,17 @@ export class Editor {
     if (wireIds.size === 0) return 0;
 
     if (checkpoint) this.noteEdit();
+    const nets = this.circuit.computeNets();
+    // Other wires' drawn paths — penalize crossings; same-net rewarded via preferAlong.
+    const otherPaths: Point[][] = [];
+    const pathByWireId = new Map<string, Point[]>();
+    for (const ow of this.circuit.wires.values()) {
+      const poly = rawWirePolyline(this.circuit, ow);
+      if (!poly) continue;
+      const drawn = routeWirePoints(poly);
+      pathByWireId.set(ow.id, drawn);
+      if (!wireIds.has(ow.id)) otherPaths.push(drawn);
+    }
     let n = 0;
     for (const id of wireIds) {
       const w = this.circuit.wires.get(id);
@@ -600,8 +795,28 @@ export class Editor {
       const a = pinById.get(w.a);
       const b = pinById.get(w.b);
       if (!a || !b) continue;
-      const routed = routeWirePoints([a.pos, b.pos]);
-      const mid = routed.slice(1, -1);
+      const aComp = this.circuit.components.get(a.componentId);
+      const bComp = this.circuit.components.get(b.componentId);
+      const exclude = new Set([a.componentId, b.componentId]);
+      const netId = nets.netOf.get(w.a);
+      const preferAlong: Point[][] = [];
+      if (netId) {
+        for (const ow of this.circuit.wires.values()) {
+          if (ow.id === id) continue;
+          if (nets.netOf.get(ow.a) !== netId) continue;
+          const drawn = pathByWireId.get(ow.id);
+          if (drawn) preferAlong.push(drawn);
+        }
+      }
+      const routed = routeWirePoints([a.pos, b.pos], {
+        obstacles: routingObstacles(this.circuit, exclude),
+        startDir: aComp ? pinExitDir(a.pos, aComp.pos) : null,
+        endDir: bComp ? pinExitDir(b.pos, bComp.pos) : null,
+        avoidCrossings: otherPaths,
+        preferAlong,
+      });
+      // Store interior elbows only; drawing re-expands via routeWirePoints.
+      const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       if (mid.length > 0) w.waypoints = mid;
       else delete w.waypoints;
       n++;
@@ -641,6 +856,38 @@ export class Editor {
     if (!c.pinOrder.includes(name)) c.pinOrder.push(name);
     applyPinLayout(c);
     return c.pins[name]!.id;
+  }
+
+  /** Change bus-probe width (1–32); drops wires on removed high bits. */
+  setBusProbeWidth(busId: string, bitWidth: number): boolean {
+    const c = this.circuit.components.get(busId);
+    if (!c || c.kind !== 'busprobe') return false;
+    const n = Math.max(1, Math.min(32, bitWidth | 0));
+    if (n === c.bitWidth) return false;
+    this.noteEdit();
+    const removed: string[] = [];
+    for (let i = n; i < c.bitWidth; i++) {
+      const p = c.pins[`b${i}`];
+      if (p) removed.push(p.id);
+    }
+    c.bitWidth = n;
+    relayoutBusProbePins(c);
+    applyPinLayout(c);
+    if (removed.length) {
+      for (const [wid, w] of [...this.circuit.wires]) {
+        if (removed.includes(w.a) || removed.includes(w.b)) this.circuit.removeWire(wid);
+      }
+    }
+    return true;
+  }
+
+  setBusProbeRadix(busId: string, radix: 'hex' | 'dec' | 'bin'): boolean {
+    const c = this.circuit.components.get(busId);
+    if (!c || c.kind !== 'busprobe') return false;
+    if (c.radix === radix) return false;
+    this.noteEdit();
+    c.radix = radix;
+    return true;
   }
 
   /** Optional custom chip body width / silkscreen marking. */
@@ -705,7 +952,7 @@ export class Editor {
       return;
     }
     if (this.tool.kind === 'pan') return; // panning is handled entirely by main.ts on drag
-    this.placeAt(snap(p));
+    this.placeAt(this.getSnap(p));
   }
 
   /**
@@ -731,7 +978,7 @@ export class Editor {
       this.cancelWire();
       return;
     }
-    this.wireWaypoints.push(snap(p));
+    this.wireWaypoints.push(this.getSnap(p));
   }
 
   private placeAt(p: Point): void {
@@ -746,12 +993,16 @@ export class Editor {
       case 'pmos':
         place(() => makeTransistor(this.circuit, 'P', p));
         break;
-      case 'vcc':
-        place(() => makeSource(this.circuit, 1, p));
+      case 'vcc': {
+        const y = this.magnetSourceRailY(1, p.y);
+        place(() => makeSource(this.circuit, 1, { x: p.x, y }));
         break;
-      case 'gnd':
-        place(() => makeSource(this.circuit, 0, p));
+      }
+      case 'gnd': {
+        const y = this.magnetSourceRailY(0, p.y);
+        place(() => makeSource(this.circuit, 0, { x: p.x, y }));
         break;
+      }
       case 'input':
         place(() => makeInput(this.circuit, 0, p));
         break;
@@ -760,6 +1011,9 @@ export class Editor {
         break;
       case 'led':
         place(() => makeLed(this.circuit, p));
+        break;
+      case 'sevenseg':
+        place(() => makeSevenSeg(this.circuit, p));
         break;
       case 'clock':
         place(() => makeClock(this.circuit, p));
@@ -771,6 +1025,16 @@ export class Editor {
           if (!Number.isFinite(n) || n < 1) return;
           this.noteEdit();
           makeAnalyzer(this.circuit, n, p);
+        });
+        break;
+      }
+      case 'busprobe': {
+        void showPrompt('Bus probe width (1–32 bits):', '8').then((raw) => {
+          if (!raw) return;
+          const n = parseInt(raw, 10);
+          if (!Number.isFinite(n) || n < 1) return;
+          this.noteEdit();
+          makeBusProbe(this.circuit, n, p);
         });
         break;
       }

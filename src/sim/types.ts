@@ -18,8 +18,10 @@ export type ComponentKind =
   | 'input' // user-toggleable driver, e.g. a switch
   | 'button' // lab pushbutton: momentary pulse or toggle
   | 'led' // lab indicator — sink only, like probe with a glow
+  | 'sevenseg' // 7-segment display — sense pins a..g (+ optional dp)
   | 'clock' // configurable pulse generator (continuous or one-shot)
   | 'analyzer' // multi-channel logic analyzer instrument (sense pins)
+  | 'busprobe' // multi-bit sense bus with hex/dec/bin decode on canvas
   | 'tty' // machine TTY / soft console instrument (opens dialog)
   | 'probe' // read-only display of a net's value, no electrical effect
   | 'label' // named net tie point (same name => same net, see Circuit)
@@ -107,6 +109,24 @@ export interface LedComponent {
   pins: { in: Pin };
 }
 
+/**
+ * Common-cathode 7-segment glyph. Electrically sense-only (like LED/probe):
+ * each pin lights its segment when driven high. Optional decimal-point pin.
+ */
+export interface SevenSegComponent {
+  id: string;
+  kind: 'sevenseg';
+  hasDp: boolean;
+  color: string; // CSS color for lit segments
+  pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
+  mirrorY: boolean;
+  pinOrder: string[];
+  /** a..g and optionally dp */
+  pins: Record<string, Pin>;
+}
+
 /** Configurable pulse generator — continuous square wave or one-shot pulse. */
 export interface ClockComponent {
   id: string;
@@ -144,6 +164,23 @@ export interface AnalyzerComponent {
   mirrorY: boolean;
   pinOrder: string[];
   /** ch0 .. ch{channelCount-1} */
+  pins: Record<string, Pin>;
+}
+
+/** Multi-bit bus probe — sense pins `b0` (LSB) … `b{n-1}`; canvas shows decoded value. */
+export interface BusProbeComponent {
+  id: string;
+  kind: 'busprobe';
+  bitWidth: number;
+  /** How to print the decoded unsigned value on the body. */
+  radix: 'hex' | 'dec' | 'bin';
+  label?: string;
+  pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
+  mirrorY: boolean;
+  pinOrder: string[];
+  /** b0 .. b{bitWidth-1} */
   pins: Record<string, Pin>;
 }
 
@@ -293,8 +330,10 @@ export type Component =
   | InputComponent
   | ButtonComponent
   | LedComponent
+  | SevenSegComponent
   | ClockComponent
   | AnalyzerComponent
+  | BusProbeComponent
   | TtyComponent
   | ProbeComponent
   | LabelComponent

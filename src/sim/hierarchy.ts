@@ -28,8 +28,10 @@ const UNFOLD_ID_PREFIX: Record<Component['kind'], string> = {
   input: 'in',
   button: 'btn',
   led: 'led',
+  sevenseg: '7seg',
   clock: 'clk',
   analyzer: 'la',
+  busprobe: 'bus',
   tty: 'tty',
   probe: 'probe',
   label: 'lbl',
@@ -778,6 +780,19 @@ function cloneComponent(c: Component): Component {
         mirrorY: c.mirrorY,
         pins: { in: clonePin(c.pins.in) },
       };
+    case 'sevenseg':
+      return {
+        id: c.id,
+        kind: 'sevenseg',
+        hasDp: c.hasDp,
+        color: c.color,
+        pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
+        pinOrder: [...c.pinOrder],
+        pins: clonePinsRecord(c.pins),
+      };
     case 'clock':
       return {
         id: c.id,
@@ -804,6 +819,23 @@ function cloneComponent(c: Component): Component {
         kind: 'analyzer',
         channelCount: c.channelCount,
         armed: c.armed,
+        pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
+        pinOrder: [...c.pinOrder],
+        pins,
+      };
+    }
+    case 'busprobe': {
+      const pins: Record<string, Pin> = {};
+      for (const [name, p] of Object.entries(c.pins)) pins[name] = clonePin(p);
+      return {
+        id: c.id,
+        kind: 'busprobe',
+        bitWidth: c.bitWidth,
+        radix: c.radix,
+        ...(c.label !== undefined ? { label: c.label } : {}),
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,

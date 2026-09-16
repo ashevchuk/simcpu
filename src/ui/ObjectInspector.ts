@@ -33,6 +33,10 @@ export class ObjectInspector {
   onBeforeEdit: (() => void) | null = null;
   /** Dive into a chip instance from the inspector. */
   onDive: ((inst: ChipInstanceComponent) => void) | null = null;
+  /** Add pin id(s) to the watch list (no circuit edit). */
+  onWatchPins: ((pinIds: string[]) => void) | null = null;
+  /** Refresh pinSide/layout/revision from the shared ChipDef. */
+  onUpdateFromLibrary: ((inst: ChipInstanceComponent) => void) | null = null;
   /** Editor for align/distribute (multi-select). */
   editor: Editor | null = null;
 
@@ -428,7 +432,19 @@ export class ObjectInspector {
       );
     }
 
-    if (c.kind === 'probe') {
+    if (c.kind === 'sevenseg') {
+      addRow(
+        'color',
+        textInput(c.color, (v) => {
+          if (!v.trim()) return;
+          this.noteEdit();
+          c.color = v.trim();
+          this.changed();
+        }),
+      );
+    }
+
+    if (c.kind === 'probe' || c.kind === 'busprobe') {
       addRow(
         'label',
         textInput(c.label ?? '', (v) => {
@@ -438,6 +454,18 @@ export class ObjectInspector {
           this.changed();
         }),
       );
+    }
+
+    const pinIds = Object.values(c.pins).map((p) => p.id);
+    if (pinIds.length > 0 && this.onWatchPins) {
+      const watchBtn = document.createElement('button');
+      watchBtn.type = 'button';
+      watchBtn.textContent = pinIds.length === 1 ? 'Watch pin' : 'Watch pins';
+      watchBtn.title = 'Add pin(s) to the Watch List (Ctrl+W)';
+      watchBtn.style.cssText =
+        'background:#20242f;border:1px solid #333a48;border-radius:6px;color:#e7e9ef;padding:5px 10px;font:12px ui-monospace,monospace;cursor:pointer';
+      watchBtn.addEventListener('click', () => this.onWatchPins?.(pinIds));
+      body.appendChild(watchBtn);
     }
 
     if (c.kind === 'input' || c.kind === 'source') {
@@ -497,6 +525,16 @@ export class ObjectInspector {
         }, 48, 240),
       );
       this.appendPinOrderEditor(body, c);
+      const defRev = this.library?.has(c.defId) ? (this.library.get(c.defId).revision ?? 0) : 0;
+      const stale = defRev !== (c.defRevision ?? 0);
+      if (stale) {
+        body.appendChild(
+          this.mkBtn('Update from library', 'Refresh pin sides / layout and clear edited badge', () => {
+            this.onUpdateFromLibrary?.(c);
+            this.changed();
+          }),
+        );
+      }
       body.appendChild(
         this.mkBtn('Dive in', 'Open chip internals (same as dblclick)', () => {
           this.onDive?.(c);
@@ -562,6 +600,50 @@ export class ObjectInspector {
       const note = document.createElement('div');
       note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3';
       note.textContent = c.armed ? 'armed — sampling' : 'paused · dblclick opens LA';
+      body.appendChild(note);
+    }
+
+    if (c.kind === 'busprobe') {
+      addRow(
+        'width',
+        (() => {
+          const inp = document.createElement('input');
+          inp.type = 'number';
+          inp.min = '1';
+          inp.max = '32';
+          inp.value = String(c.bitWidth);
+          inp.style.cssText = 'width:4em;background:#12141a;color:#e7e9ef;border:1px solid #3a4154;border-radius:4px;padding:2px 4px';
+          inp.addEventListener('change', () => {
+            const n = parseInt(inp.value, 10);
+            if (!Number.isFinite(n)) return;
+            this.editor?.setBusProbeWidth(c.id, n);
+            this.refresh();
+          });
+          return inp;
+        })(),
+      );
+      addRow(
+        'radix',
+        (() => {
+          const sel = document.createElement('select');
+          sel.style.cssText = 'background:#12141a;color:#e7e9ef;border:1px solid #3a4154;border-radius:4px;padding:2px 4px';
+          for (const r of ['hex', 'dec', 'bin'] as const) {
+            const opt = document.createElement('option');
+            opt.value = r;
+            opt.textContent = r;
+            if (c.radix === r) opt.selected = true;
+            sel.appendChild(opt);
+          }
+          sel.addEventListener('change', () => {
+            this.editor?.setBusProbeRadix(c.id, sel.value as 'hex' | 'dec' | 'bin');
+            this.refresh();
+          });
+          return sel;
+        })(),
+      );
+      const note = document.createElement('div');
+      note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
+      note.textContent = 'b0 = LSB · floating/contended → ?';
       body.appendChild(note);
     }
   }

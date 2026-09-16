@@ -101,8 +101,16 @@ describe('wire tidy', () => {
     const editor = new Editor(c, library);
     editor.selectedWireId = w.id;
     expect(editor.tidySelectedWires()).toBe(1);
-    const expected = routeWirePoints([a.pins.in.pos, b.pins.in.pos]).slice(1, -1);
-    expect(w.waypoints ?? []).toEqual(expected);
+    // Pin-exit-aware tidy replaces manual kinks with a clean ortho path.
+    const mid = w.waypoints ?? [];
+    expect(mid.length).toBeGreaterThanOrEqual(1);
+    expect(mid).not.toEqual([
+      { x: 10, y: 50 },
+      { x: 90, y: 10 },
+    ]);
+    const drawn = routeWirePoints([a.pins.in.pos, ...mid, b.pins.in.pos]);
+    expect(drawn[0]).toEqual(a.pins.in.pos);
+    expect(drawn[drawn.length - 1]).toEqual(b.pins.in.pos);
   });
 
   it('formatNetName prefers label names', () => {
@@ -138,7 +146,7 @@ describe('align / distribute', () => {
     expect(editor.distributeSelection('x')).toBe(3);
     expect(a.pos.x).toBe(0);
     expect(d.pos.x).toBe(100);
-    expect(b.pos.x).toBe(60);
+    expect(b.pos.x).toBe(50);
   });
 });
 

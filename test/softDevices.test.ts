@@ -9,18 +9,18 @@ import {
   PORT_TTY_OUT,
   createSoftDevices,
 } from '../src/machine/softDevices.js';
-import { FB_BASE, KEY_DATA, KEY_STATUS, MACHINE_ADDR_BITS } from '../src/machine/memoryMap.js';
+import { KEY_DATA, KEY_STATUS, MACHINE_ADDR_BITS } from '../src/machine/memoryMap.js';
 import { injectKey } from '../src/machine/tty.js';
 
 describe('softDevices', () => {
-  it('TTY OUT paints FB and advances cursor with wrap', () => {
+  it('TTY OUT paints host console and advances cursor', () => {
     const dev = createSoftDevices();
     const ram = new Uint8Array(1 << MACHINE_ADDR_BITS);
     dev.portOut(ram, PORT_TTY_OUT, 'A'.charCodeAt(0));
-    expect(ram[FB_BASE]).toBe(0x41);
+    expect(dev.consoleFb[0]).toBe(0x41);
     expect(dev.fbCursor).toBe(1);
     dev.portOut(ram, PORT_TTY_OUT, 'B'.charCodeAt(0));
-    expect(ram[FB_BASE + 1]).toBe(0x42);
+    expect(dev.consoleFb[1]).toBe(0x42);
   });
 
   it('bitmap addr/data OUT/IN and clearBitmap', () => {

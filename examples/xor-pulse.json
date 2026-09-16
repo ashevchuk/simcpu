@@ -4,7 +4,7 @@
   "topCircuit": {
     "components": [
       {
-        "id": "src16631",
+        "id": "src59231",
         "kind": "source",
         "value": 1,
         "pos": {
@@ -13,21 +13,21 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "out": {
-            "id": "src16631:out",
-            "componentId": "src16631",
+            "id": "src59231:out",
+            "componentId": "src59231",
             "name": "out",
             "pos": {
               "x": 40,
               "y": 55
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "src16632",
+        "id": "src59232",
         "kind": "source",
         "value": 0,
         "pos": {
@@ -36,21 +36,21 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "out": {
-            "id": "src16632:out",
-            "componentId": "src16632",
+            "id": "src59232:out",
+            "componentId": "src59232",
             "name": "out",
             "pos": {
               "x": 40,
               "y": 235
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "btn16633",
+        "id": "btn59233",
         "kind": "button",
         "mode": "toggle",
         "value": 0,
@@ -62,21 +62,21 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "out": {
-            "id": "btn16633:out",
-            "componentId": "btn16633",
+            "id": "btn59233:out",
+            "componentId": "btn59233",
             "name": "out",
             "pos": {
               "x": 156,
               "y": 60
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "clk16634",
+        "id": "clk59234",
         "kind": "clock",
         "mode": "continuous",
         "value": 0,
@@ -92,10 +92,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "out": {
-            "id": "clk16634:out",
-            "componentId": "clk16634",
+            "id": "clk59234:out",
+            "componentId": "clk59234",
             "name": "out",
             "pos": {
               "x": 158,
@@ -103,19 +104,18 @@
             }
           },
           "trig": {
-            "id": "clk16634:trig",
-            "componentId": "clk16634",
+            "id": "clk59234:trig",
+            "componentId": "clk59234",
             "name": "trig",
             "pos": {
               "x": 122,
               "y": 160
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16635",
+        "id": "t59235",
         "kind": "transistor",
         "type": "P",
         "pos": {
@@ -124,10 +124,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16635:gate",
-            "componentId": "t16635",
+            "id": "t59235:gate",
+            "componentId": "t59235",
             "name": "gate",
             "pos": {
               "x": 272,
@@ -135,8 +136,8 @@
             }
           },
           "drain": {
-            "id": "t16635:drain",
-            "componentId": "t16635",
+            "id": "t59235:drain",
+            "componentId": "t59235",
             "name": "drain",
             "pos": {
               "x": 300,
@@ -144,19 +145,18 @@
             }
           },
           "source": {
-            "id": "t16635:source",
-            "componentId": "t16635",
+            "id": "t59235:source",
+            "componentId": "t59235",
             "name": "source",
             "pos": {
               "x": 300,
               "y": 52
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16636",
+        "id": "t59236",
         "kind": "transistor",
         "type": "P",
         "pos": {
@@ -165,10 +165,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16636:gate",
-            "componentId": "t16636",
+            "id": "t59236:gate",
+            "componentId": "t59236",
             "name": "gate",
             "pos": {
               "x": 352,
@@ -176,8 +177,8 @@
             }
           },
           "drain": {
-            "id": "t16636:drain",
-            "componentId": "t16636",
+            "id": "t59236:drain",
+            "componentId": "t59236",
             "name": "drain",
             "pos": {
               "x": 380,
@@ -185,19 +186,18 @@
             }
           },
           "source": {
-            "id": "t16636:source",
-            "componentId": "t16636",
+            "id": "t59236:source",
+            "componentId": "t59236",
             "name": "source",
             "pos": {
               "x": 380,
               "y": 52
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16637",
+        "id": "t59237",
         "kind": "transistor",
         "type": "N",
         "pos": {
@@ -206,10 +206,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16637:gate",
-            "componentId": "t16637",
+            "id": "t59237:gate",
+            "componentId": "t59237",
             "name": "gate",
             "pos": {
               "x": 312,
@@ -217,8 +218,8 @@
             }
           },
           "drain": {
-            "id": "t16637:drain",
-            "componentId": "t16637",
+            "id": "t59237:drain",
+            "componentId": "t59237",
             "name": "drain",
             "pos": {
               "x": 340,
@@ -226,19 +227,18 @@
             }
           },
           "source": {
-            "id": "t16637:source",
-            "componentId": "t16637",
+            "id": "t59237:source",
+            "componentId": "t59237",
             "name": "source",
             "pos": {
               "x": 340,
               "y": 172
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16638",
+        "id": "t59238",
         "kind": "transistor",
         "type": "N",
         "pos": {
@@ -247,10 +247,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16638:gate",
-            "componentId": "t16638",
+            "id": "t59238:gate",
+            "componentId": "t59238",
             "name": "gate",
             "pos": {
               "x": 312,
@@ -258,8 +259,8 @@
             }
           },
           "drain": {
-            "id": "t16638:drain",
-            "componentId": "t16638",
+            "id": "t59238:drain",
+            "componentId": "t59238",
             "name": "drain",
             "pos": {
               "x": 340,
@@ -267,19 +268,18 @@
             }
           },
           "source": {
-            "id": "t16638:source",
-            "componentId": "t16638",
+            "id": "t59238:source",
+            "componentId": "t59238",
             "name": "source",
             "pos": {
               "x": 340,
               "y": 236
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "lbl16639",
+        "id": "lbl59239",
         "kind": "label",
         "name": "VCC",
         "pos": {
@@ -288,8 +288,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16639:net",
-            "componentId": "lbl16639",
+            "id": "lbl59239:net",
+            "componentId": "lbl59239",
             "name": "net",
             "pos": {
               "x": 300,
@@ -299,7 +299,7 @@
         }
       },
       {
-        "id": "lbl16641",
+        "id": "lbl59241",
         "kind": "label",
         "name": "VCC",
         "pos": {
@@ -308,8 +308,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16641:net",
-            "componentId": "lbl16641",
+            "id": "lbl59241:net",
+            "componentId": "lbl59241",
             "name": "net",
             "pos": {
               "x": 380,
@@ -319,7 +319,7 @@
         }
       },
       {
-        "id": "lbl16646",
+        "id": "lbl59246",
         "kind": "label",
         "name": "GND",
         "pos": {
@@ -328,8 +328,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16646:net",
-            "componentId": "lbl16646",
+            "id": "lbl59246:net",
+            "componentId": "lbl59246",
             "name": "net",
             "pos": {
               "x": 340,
@@ -339,7 +339,7 @@
         }
       },
       {
-        "id": "t16650",
+        "id": "t59250",
         "kind": "transistor",
         "type": "P",
         "pos": {
@@ -348,10 +348,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16650:gate",
-            "componentId": "t16650",
+            "id": "t59250:gate",
+            "componentId": "t59250",
             "name": "gate",
             "pos": {
               "x": 272,
@@ -359,8 +360,8 @@
             }
           },
           "drain": {
-            "id": "t16650:drain",
-            "componentId": "t16650",
+            "id": "t59250:drain",
+            "componentId": "t59250",
             "name": "drain",
             "pos": {
               "x": 300,
@@ -368,19 +369,18 @@
             }
           },
           "source": {
-            "id": "t16650:source",
-            "componentId": "t16650",
+            "id": "t59250:source",
+            "componentId": "t59250",
             "name": "source",
             "pos": {
               "x": 300,
               "y": 202
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16651",
+        "id": "t59251",
         "kind": "transistor",
         "type": "P",
         "pos": {
@@ -389,10 +389,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16651:gate",
-            "componentId": "t16651",
+            "id": "t59251:gate",
+            "componentId": "t59251",
             "name": "gate",
             "pos": {
               "x": 352,
@@ -400,8 +401,8 @@
             }
           },
           "drain": {
-            "id": "t16651:drain",
-            "componentId": "t16651",
+            "id": "t59251:drain",
+            "componentId": "t59251",
             "name": "drain",
             "pos": {
               "x": 380,
@@ -409,19 +410,18 @@
             }
           },
           "source": {
-            "id": "t16651:source",
-            "componentId": "t16651",
+            "id": "t59251:source",
+            "componentId": "t59251",
             "name": "source",
             "pos": {
               "x": 380,
               "y": 202
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16652",
+        "id": "t59252",
         "kind": "transistor",
         "type": "N",
         "pos": {
@@ -430,10 +430,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16652:gate",
-            "componentId": "t16652",
+            "id": "t59252:gate",
+            "componentId": "t59252",
             "name": "gate",
             "pos": {
               "x": 312,
@@ -441,8 +442,8 @@
             }
           },
           "drain": {
-            "id": "t16652:drain",
-            "componentId": "t16652",
+            "id": "t59252:drain",
+            "componentId": "t59252",
             "name": "drain",
             "pos": {
               "x": 340,
@@ -450,19 +451,18 @@
             }
           },
           "source": {
-            "id": "t16652:source",
-            "componentId": "t16652",
+            "id": "t59252:source",
+            "componentId": "t59252",
             "name": "source",
             "pos": {
               "x": 340,
               "y": 322
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16653",
+        "id": "t59253",
         "kind": "transistor",
         "type": "N",
         "pos": {
@@ -471,10 +471,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16653:gate",
-            "componentId": "t16653",
+            "id": "t59253:gate",
+            "componentId": "t59253",
             "name": "gate",
             "pos": {
               "x": 312,
@@ -482,8 +483,8 @@
             }
           },
           "drain": {
-            "id": "t16653:drain",
-            "componentId": "t16653",
+            "id": "t59253:drain",
+            "componentId": "t59253",
             "name": "drain",
             "pos": {
               "x": 340,
@@ -491,19 +492,18 @@
             }
           },
           "source": {
-            "id": "t16653:source",
-            "componentId": "t16653",
+            "id": "t59253:source",
+            "componentId": "t59253",
             "name": "source",
             "pos": {
               "x": 340,
               "y": 386
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "lbl16654",
+        "id": "lbl59254",
         "kind": "label",
         "name": "VCC",
         "pos": {
@@ -512,8 +512,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16654:net",
-            "componentId": "lbl16654",
+            "id": "lbl59254:net",
+            "componentId": "lbl59254",
             "name": "net",
             "pos": {
               "x": 300,
@@ -523,7 +523,7 @@
         }
       },
       {
-        "id": "lbl16656",
+        "id": "lbl59256",
         "kind": "label",
         "name": "VCC",
         "pos": {
@@ -532,8 +532,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16656:net",
-            "componentId": "lbl16656",
+            "id": "lbl59256:net",
+            "componentId": "lbl59256",
             "name": "net",
             "pos": {
               "x": 380,
@@ -543,7 +543,7 @@
         }
       },
       {
-        "id": "lbl16661",
+        "id": "lbl59261",
         "kind": "label",
         "name": "GND",
         "pos": {
@@ -552,8 +552,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16661:net",
-            "componentId": "lbl16661",
+            "id": "lbl59261:net",
+            "componentId": "lbl59261",
             "name": "net",
             "pos": {
               "x": 340,
@@ -563,7 +563,7 @@
         }
       },
       {
-        "id": "t16665",
+        "id": "t59265",
         "kind": "transistor",
         "type": "P",
         "pos": {
@@ -572,10 +572,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16665:gate",
-            "componentId": "t16665",
+            "id": "t59265:gate",
+            "componentId": "t59265",
             "name": "gate",
             "pos": {
               "x": 422,
@@ -583,8 +584,8 @@
             }
           },
           "drain": {
-            "id": "t16665:drain",
-            "componentId": "t16665",
+            "id": "t59265:drain",
+            "componentId": "t59265",
             "name": "drain",
             "pos": {
               "x": 450,
@@ -592,19 +593,18 @@
             }
           },
           "source": {
-            "id": "t16665:source",
-            "componentId": "t16665",
+            "id": "t59265:source",
+            "componentId": "t59265",
             "name": "source",
             "pos": {
               "x": 450,
               "y": 202
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16666",
+        "id": "t59266",
         "kind": "transistor",
         "type": "P",
         "pos": {
@@ -613,10 +613,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16666:gate",
-            "componentId": "t16666",
+            "id": "t59266:gate",
+            "componentId": "t59266",
             "name": "gate",
             "pos": {
               "x": 502,
@@ -624,8 +625,8 @@
             }
           },
           "drain": {
-            "id": "t16666:drain",
-            "componentId": "t16666",
+            "id": "t59266:drain",
+            "componentId": "t59266",
             "name": "drain",
             "pos": {
               "x": 530,
@@ -633,19 +634,18 @@
             }
           },
           "source": {
-            "id": "t16666:source",
-            "componentId": "t16666",
+            "id": "t59266:source",
+            "componentId": "t59266",
             "name": "source",
             "pos": {
               "x": 530,
               "y": 202
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16667",
+        "id": "t59267",
         "kind": "transistor",
         "type": "N",
         "pos": {
@@ -654,10 +654,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16667:gate",
-            "componentId": "t16667",
+            "id": "t59267:gate",
+            "componentId": "t59267",
             "name": "gate",
             "pos": {
               "x": 462,
@@ -665,8 +666,8 @@
             }
           },
           "drain": {
-            "id": "t16667:drain",
-            "componentId": "t16667",
+            "id": "t59267:drain",
+            "componentId": "t59267",
             "name": "drain",
             "pos": {
               "x": 490,
@@ -674,19 +675,18 @@
             }
           },
           "source": {
-            "id": "t16667:source",
-            "componentId": "t16667",
+            "id": "t59267:source",
+            "componentId": "t59267",
             "name": "source",
             "pos": {
               "x": 490,
               "y": 322
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16668",
+        "id": "t59268",
         "kind": "transistor",
         "type": "N",
         "pos": {
@@ -695,10 +695,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16668:gate",
-            "componentId": "t16668",
+            "id": "t59268:gate",
+            "componentId": "t59268",
             "name": "gate",
             "pos": {
               "x": 462,
@@ -706,8 +707,8 @@
             }
           },
           "drain": {
-            "id": "t16668:drain",
-            "componentId": "t16668",
+            "id": "t59268:drain",
+            "componentId": "t59268",
             "name": "drain",
             "pos": {
               "x": 490,
@@ -715,19 +716,18 @@
             }
           },
           "source": {
-            "id": "t16668:source",
-            "componentId": "t16668",
+            "id": "t59268:source",
+            "componentId": "t59268",
             "name": "source",
             "pos": {
               "x": 490,
               "y": 386
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "lbl16669",
+        "id": "lbl59269",
         "kind": "label",
         "name": "VCC",
         "pos": {
@@ -736,8 +736,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16669:net",
-            "componentId": "lbl16669",
+            "id": "lbl59269:net",
+            "componentId": "lbl59269",
             "name": "net",
             "pos": {
               "x": 450,
@@ -747,7 +747,7 @@
         }
       },
       {
-        "id": "lbl16671",
+        "id": "lbl59271",
         "kind": "label",
         "name": "VCC",
         "pos": {
@@ -756,8 +756,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16671:net",
-            "componentId": "lbl16671",
+            "id": "lbl59271:net",
+            "componentId": "lbl59271",
             "name": "net",
             "pos": {
               "x": 530,
@@ -767,7 +767,7 @@
         }
       },
       {
-        "id": "lbl16676",
+        "id": "lbl59276",
         "kind": "label",
         "name": "GND",
         "pos": {
@@ -776,8 +776,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16676:net",
-            "componentId": "lbl16676",
+            "id": "lbl59276:net",
+            "componentId": "lbl59276",
             "name": "net",
             "pos": {
               "x": 490,
@@ -787,7 +787,7 @@
         }
       },
       {
-        "id": "t16680",
+        "id": "t59280",
         "kind": "transistor",
         "type": "P",
         "pos": {
@@ -796,10 +796,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16680:gate",
-            "componentId": "t16680",
+            "id": "t59280:gate",
+            "componentId": "t59280",
             "name": "gate",
             "pos": {
               "x": 422,
@@ -807,8 +808,8 @@
             }
           },
           "drain": {
-            "id": "t16680:drain",
-            "componentId": "t16680",
+            "id": "t59280:drain",
+            "componentId": "t59280",
             "name": "drain",
             "pos": {
               "x": 450,
@@ -816,19 +817,18 @@
             }
           },
           "source": {
-            "id": "t16680:source",
-            "componentId": "t16680",
+            "id": "t59280:source",
+            "componentId": "t59280",
             "name": "source",
             "pos": {
               "x": 450,
               "y": 352
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16681",
+        "id": "t59281",
         "kind": "transistor",
         "type": "P",
         "pos": {
@@ -837,10 +837,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16681:gate",
-            "componentId": "t16681",
+            "id": "t59281:gate",
+            "componentId": "t59281",
             "name": "gate",
             "pos": {
               "x": 502,
@@ -848,8 +849,8 @@
             }
           },
           "drain": {
-            "id": "t16681:drain",
-            "componentId": "t16681",
+            "id": "t59281:drain",
+            "componentId": "t59281",
             "name": "drain",
             "pos": {
               "x": 530,
@@ -857,19 +858,18 @@
             }
           },
           "source": {
-            "id": "t16681:source",
-            "componentId": "t16681",
+            "id": "t59281:source",
+            "componentId": "t59281",
             "name": "source",
             "pos": {
               "x": 530,
               "y": 352
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16682",
+        "id": "t59282",
         "kind": "transistor",
         "type": "N",
         "pos": {
@@ -878,10 +878,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16682:gate",
-            "componentId": "t16682",
+            "id": "t59282:gate",
+            "componentId": "t59282",
             "name": "gate",
             "pos": {
               "x": 462,
@@ -889,8 +890,8 @@
             }
           },
           "drain": {
-            "id": "t16682:drain",
-            "componentId": "t16682",
+            "id": "t59282:drain",
+            "componentId": "t59282",
             "name": "drain",
             "pos": {
               "x": 490,
@@ -898,19 +899,18 @@
             }
           },
           "source": {
-            "id": "t16682:source",
-            "componentId": "t16682",
+            "id": "t59282:source",
+            "componentId": "t59282",
             "name": "source",
             "pos": {
               "x": 490,
               "y": 472
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "t16683",
+        "id": "t59283",
         "kind": "transistor",
         "type": "N",
         "pos": {
@@ -919,10 +919,11 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "gate": {
-            "id": "t16683:gate",
-            "componentId": "t16683",
+            "id": "t59283:gate",
+            "componentId": "t59283",
             "name": "gate",
             "pos": {
               "x": 462,
@@ -930,8 +931,8 @@
             }
           },
           "drain": {
-            "id": "t16683:drain",
-            "componentId": "t16683",
+            "id": "t59283:drain",
+            "componentId": "t59283",
             "name": "drain",
             "pos": {
               "x": 490,
@@ -939,19 +940,18 @@
             }
           },
           "source": {
-            "id": "t16683:source",
-            "componentId": "t16683",
+            "id": "t59283:source",
+            "componentId": "t59283",
             "name": "source",
             "pos": {
               "x": 490,
               "y": 536
             }
           }
-        },
-        "mirrorY": false
+        }
       },
       {
-        "id": "lbl16684",
+        "id": "lbl59284",
         "kind": "label",
         "name": "VCC",
         "pos": {
@@ -960,8 +960,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16684:net",
-            "componentId": "lbl16684",
+            "id": "lbl59284:net",
+            "componentId": "lbl59284",
             "name": "net",
             "pos": {
               "x": 450,
@@ -971,7 +971,7 @@
         }
       },
       {
-        "id": "lbl16686",
+        "id": "lbl59286",
         "kind": "label",
         "name": "VCC",
         "pos": {
@@ -980,8 +980,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16686:net",
-            "componentId": "lbl16686",
+            "id": "lbl59286:net",
+            "componentId": "lbl59286",
             "name": "net",
             "pos": {
               "x": 530,
@@ -991,7 +991,7 @@
         }
       },
       {
-        "id": "lbl16691",
+        "id": "lbl59291",
         "kind": "label",
         "name": "GND",
         "pos": {
@@ -1000,8 +1000,8 @@
         },
         "pins": {
           "net": {
-            "id": "lbl16691:net",
-            "componentId": "lbl16691",
+            "id": "lbl59291:net",
+            "componentId": "lbl59291",
             "name": "net",
             "pos": {
               "x": 490,
@@ -1011,7 +1011,7 @@
         }
       },
       {
-        "id": "led16701",
+        "id": "led59301",
         "kind": "led",
         "label": "xor",
         "color": "#ff4d4d",
@@ -1021,35 +1021,35 @@
         },
         "rotation": 0,
         "mirrorX": false,
+        "mirrorY": false,
         "pins": {
           "in": {
-            "id": "led16701:in",
-            "componentId": "led16701",
+            "id": "led59301:in",
+            "componentId": "led59301",
             "name": "in",
             "pos": {
               "x": 506,
               "y": 120
             }
           }
-        },
-        "mirrorY": false
+        }
       }
     ],
     "wires": [
       {
-        "id": "w16640",
-        "a": "t16635:source",
-        "b": "lbl16639:net"
+        "id": "w59240",
+        "a": "t59235:source",
+        "b": "lbl59239:net"
       },
       {
-        "id": "w16642",
-        "a": "t16636:source",
-        "b": "lbl16641:net"
+        "id": "w59242",
+        "a": "t59236:source",
+        "b": "lbl59241:net"
       },
       {
-        "id": "w16643",
-        "a": "t16635:drain",
-        "b": "t16636:drain",
+        "id": "w59243",
+        "a": "t59235:drain",
+        "b": "t59236:drain",
         "waypoints": [
           {
             "x": 340,
@@ -1058,9 +1058,9 @@
         ]
       },
       {
-        "id": "w16644",
-        "a": "t16635:drain",
-        "b": "t16637:drain",
+        "id": "w59244",
+        "a": "t59235:drain",
+        "b": "t59237:drain",
         "waypoints": [
           {
             "x": 340,
@@ -1073,19 +1073,19 @@
         ]
       },
       {
-        "id": "w16645",
-        "a": "t16637:source",
-        "b": "t16638:drain"
+        "id": "w59245",
+        "a": "t59237:source",
+        "b": "t59238:drain"
       },
       {
-        "id": "w16647",
-        "a": "t16638:source",
-        "b": "lbl16646:net"
+        "id": "w59247",
+        "a": "t59238:source",
+        "b": "lbl59246:net"
       },
       {
-        "id": "w16648",
-        "a": "t16635:gate",
-        "b": "t16637:gate",
+        "id": "w59248",
+        "a": "t59235:gate",
+        "b": "t59237:gate",
         "waypoints": [
           {
             "x": 256,
@@ -1098,9 +1098,9 @@
         ]
       },
       {
-        "id": "w16649",
-        "a": "t16636:gate",
-        "b": "t16638:gate",
+        "id": "w59249",
+        "a": "t59236:gate",
+        "b": "t59238:gate",
         "waypoints": [
           {
             "x": 424,
@@ -1113,19 +1113,19 @@
         ]
       },
       {
-        "id": "w16655",
-        "a": "t16650:source",
-        "b": "lbl16654:net"
+        "id": "w59255",
+        "a": "t59250:source",
+        "b": "lbl59254:net"
       },
       {
-        "id": "w16657",
-        "a": "t16651:source",
-        "b": "lbl16656:net"
+        "id": "w59257",
+        "a": "t59251:source",
+        "b": "lbl59256:net"
       },
       {
-        "id": "w16658",
-        "a": "t16650:drain",
-        "b": "t16651:drain",
+        "id": "w59258",
+        "a": "t59250:drain",
+        "b": "t59251:drain",
         "waypoints": [
           {
             "x": 340,
@@ -1134,9 +1134,9 @@
         ]
       },
       {
-        "id": "w16659",
-        "a": "t16650:drain",
-        "b": "t16652:drain",
+        "id": "w59259",
+        "a": "t59250:drain",
+        "b": "t59252:drain",
         "waypoints": [
           {
             "x": 340,
@@ -1149,19 +1149,19 @@
         ]
       },
       {
-        "id": "w16660",
-        "a": "t16652:source",
-        "b": "t16653:drain"
+        "id": "w59260",
+        "a": "t59252:source",
+        "b": "t59253:drain"
       },
       {
-        "id": "w16662",
-        "a": "t16653:source",
-        "b": "lbl16661:net"
+        "id": "w59262",
+        "a": "t59253:source",
+        "b": "lbl59261:net"
       },
       {
-        "id": "w16663",
-        "a": "t16650:gate",
-        "b": "t16652:gate",
+        "id": "w59263",
+        "a": "t59250:gate",
+        "b": "t59252:gate",
         "waypoints": [
           {
             "x": 256,
@@ -1174,9 +1174,9 @@
         ]
       },
       {
-        "id": "w16664",
-        "a": "t16651:gate",
-        "b": "t16653:gate",
+        "id": "w59264",
+        "a": "t59251:gate",
+        "b": "t59253:gate",
         "waypoints": [
           {
             "x": 424,
@@ -1189,19 +1189,19 @@
         ]
       },
       {
-        "id": "w16670",
-        "a": "t16665:source",
-        "b": "lbl16669:net"
+        "id": "w59270",
+        "a": "t59265:source",
+        "b": "lbl59269:net"
       },
       {
-        "id": "w16672",
-        "a": "t16666:source",
-        "b": "lbl16671:net"
+        "id": "w59272",
+        "a": "t59266:source",
+        "b": "lbl59271:net"
       },
       {
-        "id": "w16673",
-        "a": "t16665:drain",
-        "b": "t16666:drain",
+        "id": "w59273",
+        "a": "t59265:drain",
+        "b": "t59266:drain",
         "waypoints": [
           {
             "x": 490,
@@ -1210,9 +1210,9 @@
         ]
       },
       {
-        "id": "w16674",
-        "a": "t16665:drain",
-        "b": "t16667:drain",
+        "id": "w59274",
+        "a": "t59265:drain",
+        "b": "t59267:drain",
         "waypoints": [
           {
             "x": 490,
@@ -1225,19 +1225,19 @@
         ]
       },
       {
-        "id": "w16675",
-        "a": "t16667:source",
-        "b": "t16668:drain"
+        "id": "w59275",
+        "a": "t59267:source",
+        "b": "t59268:drain"
       },
       {
-        "id": "w16677",
-        "a": "t16668:source",
-        "b": "lbl16676:net"
+        "id": "w59277",
+        "a": "t59268:source",
+        "b": "lbl59276:net"
       },
       {
-        "id": "w16678",
-        "a": "t16665:gate",
-        "b": "t16667:gate",
+        "id": "w59278",
+        "a": "t59265:gate",
+        "b": "t59267:gate",
         "waypoints": [
           {
             "x": 406,
@@ -1250,9 +1250,9 @@
         ]
       },
       {
-        "id": "w16679",
-        "a": "t16666:gate",
-        "b": "t16668:gate",
+        "id": "w59279",
+        "a": "t59266:gate",
+        "b": "t59268:gate",
         "waypoints": [
           {
             "x": 574,
@@ -1265,19 +1265,19 @@
         ]
       },
       {
-        "id": "w16685",
-        "a": "t16680:source",
-        "b": "lbl16684:net"
+        "id": "w59285",
+        "a": "t59280:source",
+        "b": "lbl59284:net"
       },
       {
-        "id": "w16687",
-        "a": "t16681:source",
-        "b": "lbl16686:net"
+        "id": "w59287",
+        "a": "t59281:source",
+        "b": "lbl59286:net"
       },
       {
-        "id": "w16688",
-        "a": "t16680:drain",
-        "b": "t16681:drain",
+        "id": "w59288",
+        "a": "t59280:drain",
+        "b": "t59281:drain",
         "waypoints": [
           {
             "x": 490,
@@ -1286,9 +1286,9 @@
         ]
       },
       {
-        "id": "w16689",
-        "a": "t16680:drain",
-        "b": "t16682:drain",
+        "id": "w59289",
+        "a": "t59280:drain",
+        "b": "t59282:drain",
         "waypoints": [
           {
             "x": 490,
@@ -1301,19 +1301,19 @@
         ]
       },
       {
-        "id": "w16690",
-        "a": "t16682:source",
-        "b": "t16683:drain"
+        "id": "w59290",
+        "a": "t59282:source",
+        "b": "t59283:drain"
       },
       {
-        "id": "w16692",
-        "a": "t16683:source",
-        "b": "lbl16691:net"
+        "id": "w59292",
+        "a": "t59283:source",
+        "b": "lbl59291:net"
       },
       {
-        "id": "w16693",
-        "a": "t16680:gate",
-        "b": "t16682:gate",
+        "id": "w59293",
+        "a": "t59280:gate",
+        "b": "t59282:gate",
         "waypoints": [
           {
             "x": 406,
@@ -1326,9 +1326,9 @@
         ]
       },
       {
-        "id": "w16694",
-        "a": "t16681:gate",
-        "b": "t16683:gate",
+        "id": "w59294",
+        "a": "t59281:gate",
+        "b": "t59283:gate",
         "waypoints": [
           {
             "x": 574,
@@ -1341,49 +1341,49 @@
         ]
       },
       {
-        "id": "w16695",
-        "a": "t16635:gate",
-        "b": "t16650:gate"
+        "id": "w59295",
+        "a": "t59235:gate",
+        "b": "t59250:gate"
       },
       {
-        "id": "w16696",
-        "a": "t16636:gate",
-        "b": "t16665:gate"
+        "id": "w59296",
+        "a": "t59236:gate",
+        "b": "t59265:gate"
       },
       {
-        "id": "w16697",
-        "a": "t16635:drain",
-        "b": "t16651:gate"
+        "id": "w59297",
+        "a": "t59235:drain",
+        "b": "t59251:gate"
       },
       {
-        "id": "w16698",
-        "a": "t16635:drain",
-        "b": "t16666:gate"
+        "id": "w59298",
+        "a": "t59235:drain",
+        "b": "t59266:gate"
       },
       {
-        "id": "w16699",
-        "a": "t16650:drain",
-        "b": "t16680:gate"
+        "id": "w59299",
+        "a": "t59250:drain",
+        "b": "t59280:gate"
       },
       {
-        "id": "w16700",
-        "a": "t16665:drain",
-        "b": "t16681:gate"
+        "id": "w59300",
+        "a": "t59265:drain",
+        "b": "t59281:gate"
       },
       {
-        "id": "w16702",
-        "a": "btn16633:out",
-        "b": "t16635:gate"
+        "id": "w59302",
+        "a": "btn59233:out",
+        "b": "t59235:gate"
       },
       {
-        "id": "w16703",
-        "a": "clk16634:out",
-        "b": "t16636:gate"
+        "id": "w59303",
+        "a": "clk59234:out",
+        "b": "t59236:gate"
       },
       {
-        "id": "w16704",
-        "a": "t16680:drain",
-        "b": "led16701:in"
+        "id": "w59304",
+        "a": "t59280:drain",
+        "b": "led59301:in"
       }
     ]
   },

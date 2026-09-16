@@ -8,6 +8,7 @@ import type { ChipDef } from './ChipLibrary.js';
 import { Circuit, nextId } from './Circuit.js';
 import type {
   AnalyzerComponent,
+  BusProbeComponent,
   ButtonComponent,
   ChipInstanceComponent,
   ClockComponent,
@@ -21,6 +22,7 @@ import type {
   ProbeComponent,
   RamComponent,
   RomComponent,
+  SevenSegComponent,
   SourceComponent,
   TransistorComponent,
   TransistorType,
@@ -44,7 +46,7 @@ export const CHIP_PIN_DX = -40;
 export const CHIP_PIN_DX_RIGHT = -CHIP_PIN_DX;
 /** Analyzer channel stack uses a tighter pitch. */
 export const ANALYZER_PIN_DX = -28;
-export const ANALYZER_PIN_PITCH = 16;
+export const ANALYZER_PIN_PITCH = 20;
 
 export function chipPinDys(portCount: number): number[] {
   let dys = chipPinDyByCount[portCount];
@@ -96,10 +98,12 @@ function getCircuitRailPin(circuit: Circuit, rail: 'VCC' | 'GND', at: Point): Pi
 export const LAYOUT = {
   /** @deprecated Prefer transistorPins() — kept for call sites that only need gate-left. */
   transistor: { gate: [-28, 0], drain: [0, -28], source: [0, 28] },
-  source: { out: [0, 15] },
+  source: { out: [0, 15], gndOut: [0, -15] },
   input: { out: [15, 0] },
   button: { out: [16, 0] },
   led: { in: [-14, 0] },
+  /** Left-stack pin X for sevenseg (dys from chipPinDys). */
+  sevenseg: { pinDx: -36 },
   clock: { out: [18, 0], trig: [-18, 0] },
   probe: { in: [-15, 0] },
   label: { net: [0, 0] },
@@ -154,6 +158,7 @@ export function makeSource(
   pos: Point = { x: 0, y: 0 },
 ): SourceComponent {
   const id = nextId('src');
+  const off = value === 1 ? LAYOUT.source.out : LAYOUT.source.gndOut;
   const c: SourceComponent = {
     id,
     kind: 'source',
@@ -162,7 +167,7 @@ export function makeSource(
     rotation: 0,
     mirrorX: false,
     mirrorY: false,
-    pins: { out: pin(id, 'out', pos, ...LAYOUT.source.out) },
+    pins: { out: pin(id, 'out', pos, off[0], off[1]) },
   };
   circuit.addComponent(c);
   return c;
@@ -228,6 +233,42 @@ export function makeLed(
     mirrorX: false,
     mirrorY: false,
     pins: { in: pin(id, 'in', pos, ...LAYOUT.led.in) },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+/** Common-cathode 7-segment display — sense pins a..g (+ optional dp). */
+export function makeSevenSeg(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  hasDp = false,
+  color = '#ff5533',
+): SevenSegComponent {
+  const id = nextId('7seg');
+  const names = hasDp ? ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'] : ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  const dys = chipPinDys(names.length);
+  const pins: Record<string, Pin> = {};
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i]!;
+    pins[name] = {
+      id: `${id}:${name}`,
+      componentId: id,
+      name,
+      pos: { x: pos.x + LAYOUT.sevenseg.pinDx, y: pos.y + dys[i]! },
+    };
+  }
+  const c: SevenSegComponent = {
+    id,
+    kind: 'sevenseg',
+    hasDp,
+    color,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder: names,
+    pins,
   };
   circuit.addComponent(c);
   return c;
@@ -300,6 +341,67 @@ export function makeAnalyzer(
 
 export function analyzerPortCount(c: AnalyzerComponent): number {
   return c.channelCount;
+}
+
+/** Multi-bit bus probe — `bitWidth` sense inputs b0 (LSB) … bN-1 stacked on the left. */
+export function makeBusProbe(
+  circuit: Circuit,
+  bitWidth = 8,
+  pos: Point = { x: 0, y: 0 },
+  radix: BusProbeComponent['radix'] = 'hex',
+): BusProbeComponent {
+  const n = Math.max(1, Math.min(32, bitWidth | 0));
+  const id = nextId('bus');
+  const pins: Record<string, Pin> = {};
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const name = `b${i}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, ANALYZER_PIN_DX, (i - mid) * ANALYZER_PIN_PITCH);
+  }
+  const c: BusProbeComponent = {
+    id,
+    kind: 'busprobe',
+    bitWidth: n,
+    radix,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder,
+    pins,
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function busProbePortCount(c: BusProbeComponent): number {
+  return c.bitWidth;
+}
+
+/** Relayout bus-probe pins after bitWidth change (keeps existing wires on surviving pins). */
+export function relayoutBusProbePins(c: BusProbeComponent): void {
+  const n = c.bitWidth;
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const name = `b${i}`;
+    pinOrder.push(name);
+    const existing = c.pins[name];
+    if (existing) {
+      existing.pos = {
+        x: c.pos.x + ANALYZER_PIN_DX,
+        y: c.pos.y + (i - mid) * ANALYZER_PIN_PITCH,
+      };
+    } else {
+      c.pins[name] = pin(c.id, name, c.pos, ANALYZER_PIN_DX, (i - mid) * ANALYZER_PIN_PITCH);
+    }
+  }
+  for (const name of Object.keys(c.pins)) {
+    if (!pinOrder.includes(name)) delete c.pins[name];
+  }
+  c.pinOrder = pinOrder;
 }
 
 /** TTY / machine console instrument (no electrical pins). */

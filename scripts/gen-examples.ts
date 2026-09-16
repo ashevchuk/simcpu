@@ -17,13 +17,12 @@ import {
   makeLed,
   makeProbe,
   makeRom,
+  makeSevenSeg,
   makeSource,
   wire,
 } from '../src/sim/library.js';
 import { serializeProject, type SerializedProject } from '../src/sim/serialize.js';
 import { seedStandardCells } from '../src/sim/stdcells.js';
-import type { Circuit } from '../src/sim/Circuit.js';
-import type { ChipLibrary } from '../src/sim/ChipLibrary.js';
 
 const outDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'examples');
 mkdirSync(outDir, { recursive: true });
@@ -173,6 +172,28 @@ function andFromLibrary(): void {
   write('and-gate', c, library);
 }
 
+/** COUNTER4 → BCD_7SEG → 7SEG with a free-running clock and sync clear. */
+function labShiftCounter(): void {
+  const library = emptyLib();
+  const counter = library.findByName('COUNTER4')!;
+  const bcd = library.findByName('BCD_7SEG')!;
+  const c = new Circuit();
+  const clr = makeButton(c, { x: 100, y: 80 }, 'toggle');
+  clr.value = 1; // start in clear so Q leaves Z on first clocks
+  const clk = makeClock(c, { x: 100, y: 180 }, 24);
+  clk.running = true;
+  const cnt = makeChipInstance(c, counter, { x: 280, y: 160 });
+  const dec = makeChipInstance(c, bcd, { x: 500, y: 160 });
+  const seg = makeSevenSeg(c, { x: 740, y: 160 });
+  wire(c, clr.pins.out, cnt.pins.clr!);
+  wire(c, clk.pins.out, cnt.pins.clk!);
+  for (let i = 0; i < 4; i++) wire(c, cnt.pins[`q${i}`]!, dec.pins[`d${i}`]!);
+  for (const s of ['a', 'b', 'c', 'd', 'e', 'f', 'g'] as const) {
+    wire(c, dec.pins[s]!, seg.pins[s]!);
+  }
+  write('lab-shift-counter', c, library);
+}
+
 cmosInverter();
 nandGate();
 halfAdder();
@@ -180,3 +201,4 @@ dLatch();
 romDump();
 xorPulse();
 andFromLibrary();
+labShiftCounter();

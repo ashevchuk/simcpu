@@ -1,0 +1,69 @@
+/**
+ * Shared Spectrum Playwright helpers (file:// and http Worker suites).
+ */
+import { expect, type Page } from '@playwright/test';
+
+export async function placeSpectrum48(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    document.querySelector('.menu[data-menu="place"]')?.classList.add('open');
+    (document.getElementById('add-spectrum') as HTMLButtonElement | null)?.click();
+  });
+  await expect(page.locator('.float-win.machine-panel')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('canvas[data-canvas="spec"]')).toBeVisible();
+}
+
+export async function placeSpectrum128(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    document.querySelector('.menu[data-menu="place"]')?.classList.add('open');
+    (document.getElementById('add-spectrum128') as HTMLButtonElement | null)?.click();
+  });
+  await expect(page.locator('.float-win.machine-panel')).toBeVisible({ timeout: 15_000 });
+}
+
+export async function spectrumScreenActive(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const c = document.querySelector('canvas[data-canvas="spec"]') as HTMLCanvasElement | null;
+    if (!c || c.width < 64 || c.height < 64) return false;
+    const ctx = c.getContext('2d');
+    if (!ctx) return false;
+    const x0 = Math.floor(c.width * 0.2);
+    const y0 = Math.floor(c.height * 0.2);
+    const w = Math.floor(c.width * 0.6);
+    const h = Math.floor(c.height * 0.6);
+    const { data } = ctx.getImageData(x0, y0, w, h);
+    let colorful = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]!;
+      const g = data[i + 1]!;
+      const b = data[i + 2]!;
+      if (r > 20 || g > 20 || b > 20) colorful++;
+    }
+    return colorful > 200;
+  });
+}
+
+export async function loadBundledDemo(page: Page, id: string): Promise<void> {
+  await page.evaluate((demoId) => {
+    const sel =
+      (document.querySelector('[data-act="game-tab"]') as HTMLSelectElement | null) ??
+      (document.querySelector('[data-act="game"]') as HTMLSelectElement | null);
+    if (sel) sel.value = demoId;
+    const btn =
+      document.querySelector('[data-act="load-game-tab"]') ??
+      document.querySelector('[data-act="load-game"]');
+    btn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  }, id);
+}
+
+export async function panelLog(page: Page): Promise<string> {
+  return page.locator('.machine-panel-out').innerText();
+}
+
+export async function waitMenubar(page: Page): Promise<void> {
+  await expect(page.locator('#menubar')).toBeVisible();
+  await expect
+    .poll(async () => page.evaluate(() => !!document.getElementById('add-spectrum')), {
+      timeout: 10_000,
+    })
+    .toBe(true);
+}

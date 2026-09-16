@@ -1,4 +1,4 @@
-import { FB_BASE, FB_END, MACHINE_RAM_SIZE } from './memoryMap.js';
+import { FB_BASE, FB_END, MACHINE_RAM_SIZE, softIoLayoutForRam } from './memoryMap.js';
 import { loadCommandRom } from './commandRom.js';
 
 /** Result of a soft console command (JS-side machine helpers). */
@@ -94,7 +94,7 @@ export function parseHexBlob(text: string): number[] | null {
   return out.length ? out : null;
 }
 
-/** Write a blob into RAM at addr; refuses KEY/reserved (@F00+) unless allowIo. */
+/** Write a blob into RAM at addr; refuses soft I/O window unless allowIo. */
 export function loadHexAt(
   ram: Uint8Array,
   addr: number,
@@ -104,8 +104,9 @@ export function loadHexAt(
   if (addr < 0 || addr >= ram.length) return { ok: false, message: 'addr out of range' };
   if (addr + bytes.length > ram.length) return { ok: false, message: 'blob past RAM end' };
   if (!opts?.allowIo) {
+    const guard = softIoLayoutForRam(ram).ioGuard;
     for (let i = 0; i < bytes.length; i++) {
-      if (addr + i >= 0xf00) return { ok: false, message: 'refuses KEY/reserved @ F00+' };
+      if (addr + i >= guard) return { ok: false, message: `refuses I/O/reserved @ ${guard.toString(16)}+` };
     }
   }
   for (let i = 0; i < bytes.length; i++) ram[addr + i] = bytes[i]!;
@@ -127,6 +128,10 @@ export function clampMachineAddr(addr: number): number {
   return ((addr % MACHINE_RAM_SIZE) + MACHINE_RAM_SIZE) % MACHINE_RAM_SIZE;
 }
 
-export function isFramebufferAddr(addr: number): boolean {
+export function isFramebufferAddr(addr: number, ram?: Uint8Array): boolean {
+  if (ram) {
+    const L = softIoLayoutForRam(ram);
+    return addr >= L.fbBase && addr < L.fbEnd;
+  }
   return addr >= FB_BASE && addr < FB_END;
 }
