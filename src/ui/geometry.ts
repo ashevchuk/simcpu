@@ -187,7 +187,7 @@ function segmentHitsAabb(a: Point, b: Point, box: Aabb, pad = 1): boolean {
   return false;
 }
 
-function pathHitsObstacles(pts: Point[], obstacles: Aabb[]): boolean {
+export function pathHitsObstacles(pts: Point[], obstacles: Aabb[]): boolean {
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i]!;
     const b = pts[i + 1]!;

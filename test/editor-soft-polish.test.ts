@@ -157,4 +157,46 @@ describe('edit history + clipboard', () => {
     const still = w.waypoints ?? [];
     expect(still.some((p) => farX.some((x) => Math.abs(x - p.x) < 0.5))).toBe(true);
   });
+
+  it('mid-drag repair keeps one-sided wires orthogonal', () => {
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const left = makeButton(c, { x: 0, y: 40 });
+    const right = makeButton(c, { x: 200, y: 80 });
+    const w = c.addWire(left.pins.out.id, right.pins.out.id, [
+      { x: 180, y: 40 },
+      { x: 180, y: 80 },
+    ]);
+    c.moveComponent(left.id, 40, 0);
+    ed.pushWiresWithDrag([left.id], 40, 0);
+    const raw = [left.pins.out.pos, ...(w.waypoints ?? []), right.pins.out.pos];
+    expect(raw.length).toBeGreaterThanOrEqual(2);
+    for (let i = 0; i < raw.length - 1; i++) {
+      const a = raw[i]!;
+      const b = raw[i + 1]!;
+      const diag = Math.abs(a.x - b.x) > 0.5 && Math.abs(a.y - b.y) > 0.5;
+      expect(diag, `diagonal ${JSON.stringify(a)}→${JSON.stringify(b)}`).toBe(false);
+    }
+    // Far column should still be present mid-drag.
+    expect(w.waypoints?.some((p) => Math.abs(p.x - 180) < 0.5)).toBe(true);
+  });
+
+  it('tidy keeps intentional ortho bends that clear bodies', () => {
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const left = makeButton(c, { x: 0, y: 40 });
+    const right = makeButton(c, { x: 220, y: 40 });
+    // Deliberate jog clear of both bodies (short dest approach, not a slide).
+    const w = c.addWire(left.pins.out.id, right.pins.out.id, [
+      { x: 200, y: 40 },
+      { x: 200, y: 20 },
+      { x: 236, y: 20 },
+    ]);
+    ed.selectedWireIds = new Set([w.id]);
+    ed.tidySelectedWires(false);
+    const mid = w.waypoints ?? [];
+    expect(mid.some((p) => Math.abs(p.x - 200) < 0.5 && Math.abs(p.y - 20) < 0.5)).toBe(true);
+  });
 });

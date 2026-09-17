@@ -248,7 +248,7 @@ describe('drag a chip, then tidy (lab-counter-7seg)', () => {
     editor.pushWiresWithDrag([counter.id], dx, dy);
     editor.selectedIds = new Set([counter.id]);
     editor.selectedWireIds = new Set();
-    editor.tidySelectedWires(false);
+    editor.tidySelectedWires(false, { preserveManual: false });
 
     const pinById = new Map(topCircuit.allPins().map((p) => [p.id, p]));
     return [...topCircuit.wires.values()].flatMap((w) => {

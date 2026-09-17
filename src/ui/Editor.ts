@@ -47,6 +47,7 @@ import {
   excludePathsSharingEndpoint,
   snap,
   simplifyOrthoPath,
+  pathHitsObstacles,
   wireApproachLanes,
   wirePolyline,
   type RouteLane,
@@ -396,7 +397,7 @@ export class Editor {
       this.selectedWireId = null;
       this.draggingComponents = null;
       didDrag = true;
-      this.tidySelectedWires(false);
+      this.tidySelectedWires(false, { preserveManual: false });
     }
     this.pendingComponentDrag = null; // never promoted past the threshold — a plain click, see performClick
 
@@ -837,9 +838,8 @@ export class Editor {
 
   /**
    * While dragging components: translate waypoints of wires whose both ends
-   * move together. For wires with only one end in the selection, drop
-   * waypoints — shifting a single elbow leaves diagonal stubs that look like
-   * spurs/loops until mouseup; tidy on mouseup rebuilds a clean route.
+   * move together. For one-sided wires, keep the far ortho stub and locally
+   * repair the moved-pin leg every frame so the preview does not diagonalize.
    */
   pushWiresWithDrag(ids: string[], dx: number, dy: number): void {
     if (dx === 0 && dy === 0) return;
@@ -863,19 +863,48 @@ export class Editor {
         continue;
       }
 
-      // One endpoint moved — keep the orthogonal chain still attached to the
-      // fixed pin so mouseup tidy can re-route only the short leg to that join
-      // (KiCad-style: the untouched half stays put).
+      // One endpoint moved — keep the orthogonal chain on the fixed pin, then
+      // re-route only moved→join (KiCad-style; far half stays put mid-drag).
       const wps = w.waypoints;
       if (!wps?.length) continue;
-      const fixed = pinById.get(aSel ? w.b : w.a);
-      if (!fixed) {
+      const pa = pinById.get(w.a);
+      const pb = pinById.get(w.b);
+      const fixed = aSel ? pb : pa;
+      if (!pa || !pb || !fixed) {
         delete w.waypoints;
         continue;
       }
       const keep = orthoWaypointChainFrom(fixed.pos, wps, /*fromEnd=*/ aSel);
-      if (keep.length) w.waypoints = keep;
-      else delete w.waypoints;
+      if (!keep.length) {
+        delete w.waypoints;
+        continue;
+      }
+      w.waypoints = keep;
+      const aHost = this.circuit.components.get(pa.componentId);
+      const bHost = this.circuit.components.get(pb.componentId);
+      const exclude = new Set([pa.componentId, pb.componentId]);
+      const dragOpts = {
+        obstacles: routingObstacles(this.circuit, exclude),
+        hostObstacles: hostBodyObstacles(this.circuit, exclude),
+        startDir: pinRouteDir(pa.pos, aHost),
+        endDir: pinRouteDir(pb.pos, bHost),
+        router: 'channel' as const,
+      };
+      let repaired = tryLocalRepairRoute(pa.pos, pb.pos, keep, dragOpts);
+      // Channel repair that freezes a stair/mid-gap jog is worse than a simple
+      // L to the far join — keep the preview orthogonal either way.
+      if (
+        !repaired ||
+        hasPinColumnStair(repaired) ||
+        verticalPastMidGap(repaired)
+      ) {
+        repaired = simpleRepairToFarStub(pa.pos, pb.pos, keep, aSel);
+      }
+      if (repaired && repaired.length >= 2) {
+        const mid = repaired.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
+        if (mid.length) w.waypoints = mid;
+        else delete w.waypoints;
+      }
     }
   }
 
@@ -887,17 +916,23 @@ export class Editor {
     const prevComp = new Set(this.selectedIds);
     this.selectedWireIds = new Set(this.circuit.wires.keys());
     this.selectedIds.clear();
-    const n = this.tidySelectedWires(checkpoint);
+    const n = this.tidySelectedWires(checkpoint, { preserveManual: false });
     this.selectedWireIds = prevSel;
     this.selectedIds = prevComp;
     return n;
   }
 
   /**
-   * Re-route selected wires (or wires attached to selected components) with
-   * fresh orthogonal waypoints — drops manual kinks. Avoids chip/RAM/ROM/button bodies.
+   * Re-route selected wires (or wires attached to selected components).
+   * Prefers safe existing ortho bends (unless `preserveManual: false`, e.g.
+   * after a component drag), then local far-side repair, then a full channel
+   * rebuild. Avoids chip/RAM/ROM/button bodies.
    */
-  tidySelectedWires(checkpoint = true): number {
+  tidySelectedWires(
+    checkpoint = true,
+    opts: { preserveManual?: boolean } = {},
+  ): number {
+    const preserveManual = opts.preserveManual !== false;
     const pinById = new Map<string, Pin>();
     for (const p of this.circuit.allPins()) pinById.set(p.id, p);
 
@@ -1002,9 +1037,14 @@ export class Editor {
         router: 'channel' as const,
       };
       const full = routeWirePoints([a.pos, b.pos], baseOpts);
-      // Local repair: if drag left an ortho far-side stub, try routing only the
-      // short leg to that join. Keep it only when it is no worse than a full rebuild.
       if (!forceFull && w.waypoints?.length) {
+        // Intentional ortho bends (Tidy / T): keep when clear of bodies/stairs.
+        // After a component drag we skip this so mid-drag previews cannot freeze.
+        if (preserveManual) {
+          const manual = tryKeepManualRoute(a.pos, b.pos, w.waypoints, baseOpts);
+          if (manual) return manual;
+        }
+        // Drag left an ortho far-side stub — short leg only, if competitive.
         const partial = tryLocalRepairRoute(a.pos, b.pos, w.waypoints, baseOpts);
         if (partial && localRepairBeatsFull(partial, full, baseOpts)) return partial;
       }
@@ -1977,6 +2017,59 @@ function cleanupStoredWaypoints(circuit: Circuit, wire: Wire): void {
 }
 
 type ChannelRouteOpts = RouteOpts;
+
+/**
+ * Cheap ortho leg from the moved pin to the far stub join (HV into the join
+ * column/row). Used mid-drag when channel repair would freeze a stair.
+ */
+function simpleRepairToFarStub(
+  a: Point,
+  b: Point,
+  keep: Point[],
+  aMoved: boolean,
+): Point[] | null {
+  if (!keep.length) return null;
+  if (aMoved) {
+    const join = keep[0]!;
+    const leg =
+      Math.abs(a.x - join.x) < 0.5 || Math.abs(a.y - join.y) < 0.5
+        ? [a, join]
+        : [a, { x: join.x, y: a.y }, join];
+    return simplifyOrthoPath(concatOrtho(leg, keep, b));
+  }
+  const join = keep[keep.length - 1]!;
+  const leg =
+    Math.abs(b.x - join.x) < 0.5 || Math.abs(b.y - join.y) < 0.5
+      ? [join, b]
+      : [join, { x: join.x, y: b.y }, b];
+  return simplifyOrthoPath(concatOrtho([a, ...keep], leg.slice(1), b));
+}
+
+/**
+ * Keep user/drag ortho waypoints on tidy when the path is still orthogonal,
+ * clears foreign bodies, and is not a frozen stair / mid-gap jog. Soft scorer
+ * preferences alone must not erase intentional bends.
+ */
+function tryKeepManualRoute(
+  a: Point,
+  b: Point,
+  waypoints: Point[],
+  opts: ChannelRouteOpts,
+): Point[] | null {
+  if (!waypoints.length) return null;
+  const path = simplifyOrthoPath([a, ...waypoints.map((p) => ({ x: p.x, y: p.y })), b]);
+  if (path.length < 2) return null;
+  for (let i = 0; i < path.length - 1; i++) {
+    const p = path[i]!;
+    const q = path[i + 1]!;
+    if (Math.abs(p.x - q.x) > 0.5 && Math.abs(p.y - q.y) > 0.5) return null;
+  }
+  const foreign = opts.obstacles ?? [];
+  if (foreign.length && pathHitsObstacles(path, foreign)) return null;
+  if (hasPinColumnStair(path)) return null;
+  if (verticalPastMidGap(path)) return null;
+  return path;
+}
 
 /**
  * Re-route only the broken leg after a one-sided drag: far-side ortho chain
