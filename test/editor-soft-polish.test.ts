@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSoftZ80, softStep } from '../src/machine/softZ80.js';
 import { Circuit } from '../src/sim/Circuit.js';
-import { makeTransistor } from '../src/sim/library.js';
+import { makeTransistor, makeButton } from '../src/sim/library.js';
 import { EditHistory } from '../src/ui/EditHistory.js';
 import { Editor } from '../src/ui/Editor.js';
 import { ChipLibrary } from '../src/sim/ChipLibrary.js';
@@ -134,5 +134,27 @@ describe('edit history + clipboard', () => {
     // Colinear 70,0 between 70,30 and pin B is dropped; spur at the pin gone.
     expect(w.waypoints?.some((p) => Math.abs(p.y) < 0.5 && Math.abs(p.x - 70) < 0.5)).toBeFalsy();
     expect(w.waypoints?.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('tidy after one-sided drag keeps a far-side jog when local repair wins', () => {
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    // Y-offset pins + pure-X drag: L via dest column stays bend-competitive
+    // with a full rebuild, so local repair should keep the far stub.
+    const left = makeButton(c, { x: 0, y: 40 });
+    const right = makeButton(c, { x: 200, y: 80 });
+    const w = c.addWire(left.pins.out.id, right.pins.out.id, [
+      { x: 180, y: 40 },
+      { x: 180, y: 80 },
+    ]);
+    ed.selectedIds = new Set([left.id]);
+    c.moveComponent(left.id, 40, 0);
+    ed.pushWiresWithDrag([left.id], 40, 0);
+    expect(w.waypoints?.length).toBeGreaterThan(0);
+    const farX = w.waypoints!.map((p) => p.x);
+    ed.tidySelectedWires(false);
+    const still = w.waypoints ?? [];
+    expect(still.some((p) => farX.some((x) => Math.abs(x - p.x) < 0.5))).toBe(true);
   });
 });

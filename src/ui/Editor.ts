@@ -50,6 +50,7 @@ import {
   wireApproachLanes,
   wirePolyline,
   type RouteLane,
+  type RouteOpts,
 } from './geometry.js';
 import {
   assignRibbonRails,
@@ -962,7 +963,12 @@ export class Editor {
     // so verticals don't braid, including explicit sharing in tight gaps.
     const preferRailById = assignFacingRibbonRails(this.circuit, orderedIds, pinById);
 
-    const routeOne = (id: string, frozen: Point[][], reservedLanes: RouteLane[]): Point[] | null => {
+    const routeOne = (
+      id: string,
+      frozen: Point[][],
+      reservedLanes: RouteLane[],
+      forceFull = false,
+    ): Point[] | null => {
       const w = this.circuit.wires.get(id);
       if (!w) return null;
       const a = pinById.get(w.a);
@@ -983,7 +989,7 @@ export class Editor {
           if (drawn) preferAlong.push(drawn);
         }
       }
-      return routeWirePoints([a.pos, b.pos], {
+      const baseOpts = {
         obstacles: routingObstacles(this.circuit, exclude),
         hostObstacles: hostBodyObstacles(this.circuit, exclude),
         startDir: pinRouteDir(a.pos, aComp),
@@ -993,8 +999,16 @@ export class Editor {
         preferAlong,
         reservedLanes,
         preferRail: preferRailById.get(id),
-        router: 'channel',
-      });
+        router: 'channel' as const,
+      };
+      const full = routeWirePoints([a.pos, b.pos], baseOpts);
+      // Local repair: if drag left an ortho far-side stub, try routing only the
+      // short leg to that join. Keep it only when it is no worse than a full rebuild.
+      if (!forceFull && w.waypoints?.length) {
+        const partial = tryLocalRepairRoute(a.pos, b.pos, w.waypoints, baseOpts);
+        if (partial && localRepairBeatsFull(partial, full, baseOpts)) return partial;
+      }
+      return full;
     };
 
     let n = 0;
@@ -1005,11 +1019,7 @@ export class Editor {
         const lanes = lanesByWireId.get(orderedIds[j]!);
         if (lanes) reservedLanes.push(...lanes);
       }
-      // Full rebuild on tidy — preserved far-side waypoints from drag are only
-      // a mid-drag preview; reusing them here left 6-bend joins on busy fans.
-      const w0 = this.circuit.wires.get(id);
-      if (w0) delete w0.waypoints;
-      const routed = routeOne(id, otherPaths, reservedLanes);
+      const routed = routeOne(id, otherPaths, reservedLanes, false);
       if (!routed) continue;
       const w = this.circuit.wires.get(id)!;
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
@@ -1073,7 +1083,7 @@ export class Editor {
       }
       // Clear preserved waypoints so rip-up can pick a fresh shape.
       delete w.waypoints;
-      const rerouted = routeOne(id, frozen, reservedLanes);
+      const rerouted = routeOne(id, frozen, reservedLanes, true);
       if (!rerouted) continue;
       const mid = rerouted.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       if (mid.length > 0) w.waypoints = mid;
@@ -1966,6 +1976,148 @@ function cleanupStoredWaypoints(circuit: Circuit, wire: Wire): void {
   else delete wire.waypoints;
 }
 
+type ChannelRouteOpts = RouteOpts;
+
+/**
+ * Re-route only the broken leg after a one-sided drag: far-side ortho chain
+ * stays, channel routes moved-pin → join. Returns null when the stub is not
+ * usable (no intact far chain, join not a real corner, etc.).
+ */
+function tryLocalRepairRoute(
+  a: Point,
+  b: Point,
+  waypoints: Point[],
+  opts: ChannelRouteOpts,
+): Point[] | null {
+  const fromA = orthoWaypointChainFrom(a, waypoints, false);
+  const fromB = orthoWaypointChainFrom(b, waypoints, true);
+  // Prefer the longer intact chain — that end did not move.
+  const useB = fromB.length > 0 && fromB.length >= fromA.length;
+  const useA = fromA.length > 0 && fromA.length > fromB.length;
+  if (!useA && !useB) return null;
+
+  if (useB) {
+    const join = fromB[0]!;
+    if (!isCornerJoin(join, fromB, b)) return null;
+    const leg = routeWirePoints([a, join], { ...opts, endDir: null, preferRail: undefined });
+    if (leg.length < 2) return null;
+    return simplifyOrthoPath(concatOrtho(leg, fromB, b));
+  }
+
+  const join = fromA[fromA.length - 1]!;
+  if (!isCornerJoin(join, fromA, a)) return null;
+  const leg = routeWirePoints([join, b], { ...opts, startDir: null, preferRail: undefined });
+  if (leg.length < 2) return null;
+  return simplifyOrthoPath(concatOrtho([a, ...fromA], leg.slice(1), b));
+}
+
+/** Join is a bend (direction changes) or the only stub point before the fixed pin. */
+function isCornerJoin(join: Point, chain: Point[], fixedPin: Point): boolean {
+  if (chain.length === 1) {
+    return (
+      (Math.abs(join.x - fixedPin.x) < 0.5 || Math.abs(join.y - fixedPin.y) < 0.5) &&
+      (Math.abs(join.x - fixedPin.x) > 0.5 || Math.abs(join.y - fixedPin.y) > 0.5)
+    );
+  }
+  const next = chain[1]!;
+  const hx = Math.abs(join.x - next.x) < 0.5;
+  const hy = Math.abs(join.y - next.y) < 0.5;
+  return (hx && !hy) || (!hx && hy);
+}
+
+function concatOrtho(head: Point[], tail: Point[], end: Point): Point[] {
+  const out = head.map((p) => ({ ...p }));
+  for (const p of tail) {
+    const last = out[out.length - 1]!;
+    if (Math.abs(p.x - last.x) < 0.5 && Math.abs(p.y - last.y) < 0.5) continue;
+    out.push({ ...p });
+  }
+  const last = out[out.length - 1]!;
+  if (Math.abs(last.x - end.x) > 0.5 || Math.abs(last.y - end.y) > 0.5) out.push({ ...end });
+  return out;
+}
+
+function pathBendCount(pts: Point[]): number {
+  if (pts.length < 3) return 0;
+  let n = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1]!;
+    const b = pts[i]!;
+    const c = pts[i + 1]!;
+    const d1x = Math.sign(b.x - a.x);
+    const d1y = Math.sign(b.y - a.y);
+    const d2x = Math.sign(c.x - b.x);
+    const d2y = Math.sign(c.y - b.y);
+    if (d1x !== d2x || d1y !== d2y) n++;
+  }
+  return n;
+}
+
+/** True when a vertical run sits on a pin column mid-path (stair), not as a
+ * pin exit/approach segment. Dest-column L-stubs must remain acceptable. */
+function hasPinColumnStair(path: Point[], clear = 25): boolean {
+  if (path.length < 2) return false;
+  const from = path[0]!;
+  const to = path[path.length - 1]!;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i]!;
+    const b = path[i + 1]!;
+    if (Math.abs(a.x - b.x) > 0.5) continue;
+    const nearFrom = Math.abs(a.x - from.x) <= clear + 0.5;
+    const nearTo = Math.abs(a.x - to.x) <= clear + 0.5;
+    const segsAfter = path.length - 2 - i;
+    // First segment may leave the start pin vertically.
+    // A vertical with only the final approach segment after it is a dest stub.
+    if (nearFrom && i > 0) return true;
+    if (nearTo && segsAfter > 1) return true;
+  }
+  return false;
+}
+
+/** Keep local repair only when it does not worsen bends or channel penalties. */
+function localRepairBeatsFull(partial: Point[], full: Point[], opts: ChannelRouteOpts): boolean {
+  if (partial.length < 2) return false;
+  // Hard reject pin-column stairs and mid-gap verticals — a full rebuild is
+  // safer than freezing a far stub that no longer clears the moved pin.
+  if (hasPinColumnStair(partial)) return false;
+  if (verticalPastMidGap(partial)) return false;
+  if (pathBendCount(partial) > pathBendCount(full)) return false;
+  if (partial.length > full.length + 1) return false;
+  const req = {
+    from: partial[0]!,
+    to: partial[partial.length - 1]!,
+    obstacles: opts.obstacles ?? [],
+    hostObstacles: opts.hostObstacles,
+    startDir: opts.startDir ?? null,
+    endDir: opts.endDir ?? null,
+    avoidOverlap: opts.avoidOverlap,
+    avoidCrossings: opts.avoidCrossings,
+    preferAlong: opts.preferAlong,
+    preferRail: opts.preferRail,
+  };
+  const pPen = channelRoutePenalty(req, partial);
+  if (pPen >= OVERLAP_BASE) return false;
+  // On a tie, prefer the far-side-preserving repair.
+  return pPen <= channelRoutePenalty(req, full) + 1e-6;
+}
+
+/** True when a vertical jog sits farther from the destination than mid-gap. */
+function verticalPastMidGap(path: Point[]): boolean {
+  if (path.length < 2) return false;
+  const from = path[0]!;
+  const to = path[path.length - 1]!;
+  const span = Math.abs(to.x - from.x);
+  if (span < 1) return false;
+  const half = span / 2;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i]!;
+    const b = path[i + 1]!;
+    if (Math.abs(a.x - b.x) > 0.5) continue;
+    if (Math.abs(a.x - to.x) > half + 0.5) return true;
+  }
+  return false;
+}
+
 /**
  * Facing E↔W / N↕S ribbons between the same two hosts → joint rail map.
  */
@@ -2033,12 +2185,20 @@ function assignFacingRibbonRails(
   for (const g of groups.values()) {
     if (g.wires.length < 2) continue;
     const gap = Math.abs(g.gapTo - g.gapFrom);
-    // A contiguous block of n lanes at the dest needs n·GRID of space; if that
-    // overruns mid-gap the joint assignment pushes verticals past the half-way
-    // mark and looks worse than per-wire near-dest picks — skip it.
-    if (g.wires.length * GRID > gap / 2 + 0.5) continue;
     const assigned = assignRibbonRails(g.wires, g.gapFrom, g.gapTo, { step: GRID });
-    for (const [id, rail] of assigned) rails.set(id, rail);
+    // Count how many wires share each rail (tight-gap pairs share one).
+    const shareCount = new Map<number, number>();
+    for (const rail of assigned.values()) {
+      const key = Math.round(rail);
+      shareCount.set(key, (shareCount.get(key) ?? 0) + 1);
+    }
+    for (const [id, rail] of assigned) {
+      // Solo rails past mid-gap lose to the scorer's near-dest pick — skip them.
+      // Shared tight-gap lanes are kept (that is the intentional policy).
+      const shared = (shareCount.get(Math.round(rail)) ?? 0) > 1;
+      if (!shared && Math.abs(rail - g.gapTo) > gap / 2 + 0.5) continue;
+      rails.set(id, rail);
+    }
   }
   return rails;
 }
