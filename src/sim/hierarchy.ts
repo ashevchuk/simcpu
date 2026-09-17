@@ -882,6 +882,7 @@ function cloneComponent(c: Component): Component {
       return {
         id: c.id,
         kind: 'busswitch',
+        mode: c.mode,
         bitWidth: c.bitWidth,
         value: c.value,
         radix: c.radix,

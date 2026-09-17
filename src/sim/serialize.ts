@@ -110,6 +110,10 @@ function fromSerializedComponent(c: SerializedComponent): Component {
     const raw = c as import('./types.js').BusPassComponent & { mode?: 'momentary' | 'toggle' };
     return { ...raw, mode: raw.mode === 'momentary' ? 'momentary' : 'toggle' };
   }
+  if (c.kind === 'busswitch') {
+    const raw = c as import('./types.js').BusSwitchComponent & { mode?: 'momentary' | 'toggle' };
+    return { ...raw, mode: raw.mode === 'momentary' ? 'momentary' : 'toggle' };
+  }
   if (c.kind === 'sevenseg') {
     const raw = c as import('./types.js').SevenSegComponent & { color?: string; hasDp?: boolean };
     const names =

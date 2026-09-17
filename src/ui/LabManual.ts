@@ -135,7 +135,7 @@ const SECTIONS: Section[] = [
       '  Pulse generator (K) — OUT + TRIG.\n' +
       '  Logic analyzer… — multi-channel capture (see Soft Lab → Logic analyzer).\n' +
       '  Bus probe… — hex/dec/bin readout (asks width).\n' +
-      '  Bus switch… — DIP/hex writable bus (width 4 or 8).\n' +
+      '  Bus switch… — DIP/hex writable bus (width 4 or 8); toggle or momentary (hold) paddles.\n' +
       '  Pass switch… — bank of SPST poles (aᵢ↔bᵢ); toggle or hold.\n' +
       '  TTY console — soft-machine console / Spectrum UI host.\n\n' +
       'Select tool: click Button/Clock/Switch to interact; double-click Analyzer or chip to open/dive.',

@@ -57,4 +57,25 @@ describe('DIP bus switch hit-test', () => {
     sw.value = (sw.value + 1) & mask;
     expect(sw.value).not.toBe(before);
   });
+
+  it('momentary bus switch drives bit high while paddle held', async () => {
+    const { Editor } = await import('../src/ui/Editor.js');
+    const { ChipLibrary } = await import('../src/sim/ChipLibrary.js');
+    const lib = new ChipLibrary();
+    const circuit = new Circuit();
+    const ed = new Editor(circuit, lib);
+    const sw = makeBusSwitch(circuit, 4, { x: 0, y: 0 }, 'hex', 0);
+    sw.mode = 'momentary';
+    const paddle = busSwitchPaddleCenter(sw, 1)!;
+    ed.handleMouseDown(paddle);
+    expect(sw.value & (1 << 1)).toBeTruthy();
+    ed.handleMouseUp(paddle, false);
+    expect(sw.value & (1 << 1)).toBe(0);
+  });
+
+  it('defaults to toggle mode', () => {
+    const circuit = new Circuit();
+    const sw = makeBusSwitch(circuit, 4, { x: 0, y: 0 });
+    expect(sw.mode).toBe('toggle');
+  });
 });

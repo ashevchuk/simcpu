@@ -218,12 +218,14 @@ export interface BusProbeComponent {
 
 /**
  * Writable multi-bit DIP bus switch — drives `b0` (LSB) … `b{n-1}` from
- * `value` like a bank of Inputs. Click a paddle to toggle that bit; click the
- * readout to step the whole value. Inspector edits hex/bin/dec.
+ * `value` like a bank of Inputs.
+ * `toggle` (default): paddle click flips that bit; readout click steps value.
+ * `momentary`: paddle held drives that bit high until release.
  */
 export interface BusSwitchComponent {
   id: string;
   kind: 'busswitch';
+  mode: 'momentary' | 'toggle';
   bitWidth: number;
   /** Unsigned value; only the low `bitWidth` bits are driven. */
   value: number;

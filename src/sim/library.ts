@@ -470,6 +470,7 @@ export function makeBusSwitch(
   const c: BusSwitchComponent = {
     id,
     kind: 'busswitch',
+    mode: 'toggle',
     bitWidth: n,
     value: (value | 0) & mask,
     radix,

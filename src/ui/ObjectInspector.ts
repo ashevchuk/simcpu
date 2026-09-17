@@ -991,6 +991,22 @@ export class ObjectInspector {
 
     if (c.kind === 'busswitch') {
       addRow(
+        'mode',
+        select(
+          c.mode,
+          [
+            { value: 'toggle', label: 'toggle' },
+            { value: 'momentary', label: 'momentary (hold)' },
+          ],
+          (v) => {
+            this.noteEdit();
+            c.mode = v === 'momentary' ? 'momentary' : 'toggle';
+            c.value = 0;
+            this.changed();
+          },
+        ),
+      );
+      addRow(
         'width',
         (() => {
           const inp = document.createElement('input');
@@ -1054,7 +1070,10 @@ export class ObjectInspector {
       );
       const note = document.createElement('div');
       note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
-      note.textContent = 'DIP: paddle = toggle bit · readout = +1 · b0 = LSB';
+      note.textContent =
+        c.mode === 'momentary'
+          ? 'DIP: hold paddle to drive bit high · b0 = LSB'
+          : 'DIP: paddle = toggle bit · readout = +1 · b0 = LSB';
       body.appendChild(note);
     }
 

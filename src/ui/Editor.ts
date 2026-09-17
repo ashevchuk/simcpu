@@ -157,6 +157,7 @@ export class Editor {
     | { kind: 'button'; id: string }
     | { kind: 'switch'; id: string }
     | { kind: 'buspass'; id: string; bit: number }
+    | { kind: 'busswitch'; id: string; bit: number }
     | null = null;
 
   /** Placement / move / wire bend snap: full grid, half grid, or free. Cycle with G. */
@@ -298,6 +299,13 @@ export class Editor {
           const bit = busPassBitAt(hit, p);
           if (bit != null) {
             this.pressMomentaryBusPass(hit.id, bit);
+            this.selectedIds = new Set([hit.id]);
+            this.selectedWireId = null;
+          }
+        } else if (hit.kind === 'busswitch' && hit.mode === 'momentary') {
+          const bit = busSwitchBitAt(hit, p);
+          if (bit != null) {
+            this.pressMomentaryBusSwitch(hit.id, bit);
             this.selectedIds = new Set([hit.id]);
             this.selectedWireId = null;
           }
@@ -1379,6 +1387,18 @@ export class Editor {
     }
   }
 
+  /** Drive one bus-switch bit high while the pointer is held on that paddle. */
+  private pressMomentaryBusSwitch(id: string, bit: number): void {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'busswitch' || c.mode !== 'momentary') return;
+    const mask = 1 << bit;
+    this.releaseMomentary();
+    this.heldMomentary = { kind: 'busswitch', id, bit };
+    if ((c.value & mask) === 0) {
+      c.value |= mask;
+    }
+  }
+
   /** Close one bus-pass pole while the pointer is held on that paddle. */
   private pressMomentaryBusPass(id: string, bit: number): void {
     const c = this.circuit.components.get(id);
@@ -1412,6 +1432,15 @@ export class Editor {
       if (c.mode === 'momentary' && c.closed) {
         c.closed = false;
         bumpStructureVersion();
+      }
+      return;
+    }
+    if (held.kind === 'busswitch') {
+      const c = this.circuit.components.get(held.id);
+      if (!c || c.kind !== 'busswitch') return;
+      const mask = 1 << held.bit;
+      if (c.mode === 'momentary' && (c.value & mask) !== 0) {
+        c.value &= ~mask;
       }
       return;
     }
@@ -1458,15 +1487,18 @@ export class Editor {
         this.selectedWireId = null;
         if (hit.kind === 'input') hit.value = hit.value === 1 ? 0 : 1;
         if (hit.kind === 'busswitch' && !additive) {
-          // DIP paddles toggle one bit; click on the readout steps the whole value.
-          // (Hex step-by-0x10 used to no-op on 4-bit switches: (v+16)&0xF === v.)
-          const bit = busSwitchBitAt(hit, p);
-          if (bit != null) {
-            hit.value ^= 1 << bit;
-          } else {
-            const mask = hit.bitWidth >= 31 ? 0x7fffffff : (1 << hit.bitWidth) - 1;
-            hit.value = (hit.value + 1) & mask;
+          if (hit.mode !== 'momentary') {
+            // DIP paddles toggle one bit; click on the readout steps the whole value.
+            // (Hex step-by-0x10 used to no-op on 4-bit switches: (v+16)&0xF === v.)
+            const bit = busSwitchBitAt(hit, p);
+            if (bit != null) {
+              hit.value ^= 1 << bit;
+            } else {
+              const mask = hit.bitWidth >= 31 ? 0x7fffffff : (1 << hit.bitWidth) - 1;
+              hit.value = (hit.value + 1) & mask;
+            }
           }
+          // Momentary: press/release is handled on mousedown / mouseup.
         }
         if (hit.kind === 'buspass' && !additive) {
           if (hit.mode !== 'momentary') {
