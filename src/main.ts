@@ -3022,9 +3022,9 @@ function frame(): void {
 
   const softRun = machineRunner.running && machineRunner.isSoft;
 
-  // Decay momentary buttons / pulse gens every rAF while they need time —
+  // Tick pulse gens / scripted button holds every rAF while they need time —
   // must not wait for uiDirty. Soft Run used to skip this path entirely
-  // (`needSimDraw = uiDirty` only), so a MOM button stayed visually pressed
+  // (`needSimDraw = uiDirty` only), so a decaying hold stayed visually pressed
   // until the next mousemove forced a redraw.
   let labChanged = false;
   if (labActive) {

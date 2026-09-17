@@ -468,7 +468,7 @@ export class ObjectInspector {
         select(
           c.mode,
           [
-            { value: 'momentary', label: 'momentary' },
+            { value: 'momentary', label: 'momentary (hold)' },
             { value: 'toggle', label: 'toggle' },
           ],
           (v) => {
@@ -478,19 +478,6 @@ export class ObjectInspector {
             c.value = 0;
             this.changed();
           },
-        ),
-      );
-      addRow(
-        'pulse fr',
-        numInput(
-          c.pulseFrames,
-          (n) => {
-            this.noteEdit();
-            c.pulseFrames = Math.max(1, n);
-            this.changed();
-          },
-          1,
-          600,
         ),
       );
     }

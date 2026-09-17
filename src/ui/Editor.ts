@@ -152,6 +152,8 @@ export class Editor {
   private draggingComponents: { ids: string[]; lastPoint: Point } | null = null;
   /** Drag a chip pin across the body center to flip left/right stack (Alt/Shift+drag). */
   private pinSideDrag: { componentId: string; pinName: string; startX: number } | null = null;
+  /** Momentary button held by pointer (value=1 until mouseup or drag-to-move). */
+  private heldMomentaryButtonId: string | null = null;
 
   /** Placement / move / wire bend snap: full grid, half grid, or free. Cycle with G. */
   snapMode: SnapMode = 'grid';
@@ -277,6 +279,13 @@ export class Editor {
       // the "plain click, no drag" case; a real drag always moves the set
       // computed right here, decided before the gesture can change it).
       const ids = this.selectedIds.has(hit.id) && this.selectedIds.size > 1 ? [...this.selectedIds] : [hit.id];
+      // Momentary pushbutton: press for the whole mouse-down gesture (unless
+      // Shift multi-select). Dragging past the threshold releases and moves.
+      if (hit.kind === 'button' && hit.mode === 'momentary' && !opts?.shiftKey) {
+        this.pressMomentaryButton(hit.id);
+        this.selectedIds = new Set([hit.id]);
+        this.selectedWireId = null;
+      }
       this.pendingComponentDrag = { ids, downPoint: p };
       return;
     }
@@ -307,6 +316,8 @@ export class Editor {
     if (this.pendingComponentDrag) {
       const { ids, downPoint } = this.pendingComponentDrag;
       if (Math.hypot(p.x - downPoint.x, p.y - downPoint.y) > DRAG_THRESHOLD) {
+        // Moving the part — drop the momentary press so it doesn't stick on.
+        this.releaseMomentaryButton();
         if (!this.dragCheckpointTaken) {
           this.noteEdit();
           this.dragCheckpointTaken = true;
@@ -372,6 +383,8 @@ export class Editor {
    */
   handleMouseUp(p: Point, additive: boolean): void {
     let didDrag = false;
+    // Release before click handling so performClick does not see a stuck press.
+    this.releaseMomentaryButton();
 
     if (this.pinSideDrag) {
       const { componentId, pinName, startX } = this.pinSideDrag;
@@ -1327,6 +1340,28 @@ export class Editor {
     return true;
   }
 
+  /** Press a momentary button for the duration of a pointer gesture. */
+  private pressMomentaryButton(id: string): void {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'button' || c.mode !== 'momentary') return;
+    this.heldMomentaryButtonId = id;
+    c.holdFrames = 0;
+    c.value = 1;
+  }
+
+  /** Release the pointer-held momentary button, if any. */
+  private releaseMomentaryButton(): void {
+    const id = this.heldMomentaryButtonId;
+    if (!id) return;
+    this.heldMomentaryButtonId = null;
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'button') return;
+    if (c.mode === 'momentary' && c.value !== 0) {
+      c.value = 0;
+      c.holdFrames = 0;
+    }
+  }
+
   /** Optional custom chip body width / silkscreen marking. */
   setChipAppearance(componentId: string, opts: { boxWidth?: number; marking?: string }): boolean {
     const c = this.circuit.components.get(componentId);
@@ -1385,10 +1420,8 @@ export class Editor {
         if (hit.kind === 'button') {
           if (hit.mode === 'toggle') {
             hit.value = hit.value === 1 ? 0 : 1;
-          } else {
-            hit.value = 1;
-            hit.holdFrames = Math.max(1, hit.pulseFrames);
           }
+          // Momentary: press/release is handled on mousedown / mouseup.
         }
         if (hit.kind === 'clock') {
           firePulse(hit);

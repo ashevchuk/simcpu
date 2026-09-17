@@ -82,14 +82,20 @@ export interface InputComponent {
   pins: { out: Pin };
 }
 
-/** Lab pushbutton. Momentary: click drives 1 for `pulseFrames` ticks then 0. Toggle: click flips `value`. */
+/**
+ * Lab pushbutton.
+ * Momentary: stays 1 while the mouse button is held (Editor); optional
+ * `holdFrames` decay remains for scripted/legacy pulses.
+ * Toggle: click flips `value`.
+ */
 export interface ButtonComponent {
   id: string;
   kind: 'button';
   mode: 'momentary' | 'toggle';
   value: 0 | 1;
-  /** Remaining high frames while pulsing (momentary). */
+  /** Remaining high frames while auto-pulsing (legacy / scripted). */
   holdFrames: number;
+  /** Legacy auto-pulse length when `holdFrames` is set without pointer hold. */
   pulseFrames: number;
   pos: Point;
   rotation: 0 | 90 | 180 | 270;

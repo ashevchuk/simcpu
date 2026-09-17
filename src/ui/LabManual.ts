@@ -129,7 +129,7 @@ const SECTIONS: Section[] = [
       '  N-MOS (4), P-MOS (5), VCC (6), GND (7).\n\n' +
       'Drivers & I/O:\n' +
       '  Input (8) — sticky 0/1. Port (O) — chip pin when folding; Shift+O names / bus D[7:0].\n' +
-      '  Button (B) — momentary/toggle. LED (E). 7-seg (S). Probe (9). Net label (L).\n\n' +
+      '  Button (B) — momentary (hold mouse) / toggle. LED (E). 7-seg (S). Probe (9). Net label (L).\n\n' +
       'Instruments:\n' +
       '  Pulse generator (K) — OUT + TRIG.\n' +
       '  Logic analyzer… — multi-channel capture (see Soft Lab → Logic analyzer).\n' +
