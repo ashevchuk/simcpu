@@ -21,8 +21,23 @@ import type { ChipInstanceComponent, Component } from '../sim/types.js';
 import type { Editor } from './Editor.js';
 import { FloatingWindow } from './FloatingWindow.js';
 
+const INSPECTOR_DOCK_KEY = 'sim.inspector.docked';
+
+function loadInspectorDocked(): boolean {
+  try {
+    const v = localStorage.getItem(INSPECTOR_DOCK_KEY);
+    if (v === '0') return false;
+    if (v === '1') return true;
+  } catch {
+    /* ignore */
+  }
+  return true; // default: pinned to the left
+}
+
 export class ObjectInspector {
-  private readonly win = new FloatingWindow('Inspector');
+  private readonly win = new FloatingWindow('Inspector', 'object-inspector');
+  private readonly dockBtn: HTMLButtonElement;
+  private docked = true;
   private target: Component | null = null;
   private targets: Component[] = [];
   private lastSyncedKey: string | null = null;
@@ -52,6 +67,65 @@ export class ObjectInspector {
   constructor() {
     this.win.setTitle('Inspector', '');
     this.win.setVisible(false);
+    this.dockBtn = this.win.addTitlebarButton('Dock', 'Pin to the left edge (or undock)');
+    this.dockBtn.addEventListener('click', () => this.setDocked(!this.docked));
+    this.docked = loadInspectorDocked();
+    this.win.onDragStart = () => {
+      if (this.docked) this.setDocked(false, /*persist=*/ false);
+    };
+    this.win.onDragEnd = (rect) => {
+      if (rect.left < 28) this.setDocked(true);
+      else this.persistDocked(false);
+    };
+    // Apply saved dock on first paint after chrome exists.
+    queueMicrotask(() => this.applyDockLayout());
+    window.addEventListener('resize', () => {
+      if (this.docked && this.win.visible) this.applyDockLayout();
+    });
+  }
+
+  private persistDocked(docked: boolean): void {
+    this.docked = docked;
+    try {
+      localStorage.setItem(INSPECTOR_DOCK_KEY, docked ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }
+
+  setDocked(docked: boolean, persist = true): void {
+    if (persist) this.persistDocked(docked);
+    else this.docked = docked;
+    this.applyDockLayout();
+  }
+
+  private applyDockLayout(): void {
+    const root = this.win.root;
+    root.classList.toggle('is-docked', this.docked);
+    this.dockBtn.textContent = this.docked ? 'Undock' : 'Dock';
+    this.dockBtn.title = this.docked
+      ? 'Detach inspector into a floating window'
+      : 'Pin inspector to the left edge';
+    if (this.docked) {
+      const chrome = document.getElementById('chrome');
+      const top = chrome ? Math.ceil(chrome.getBoundingClientRect().bottom) : 48;
+      root.style.setProperty('--inspector-dock-top', `${top}px`);
+      // Keep a usable width; height is stretched by CSS (top/bottom).
+      if (!root.style.width) root.style.width = '300px';
+      root.style.left = '0';
+      root.style.top = `${top}px`;
+      root.style.bottom = '0';
+      root.style.height = 'auto';
+      root.style.right = 'auto';
+    } else {
+      root.style.bottom = 'auto';
+      root.style.height = '';
+      const left = parseFloat(root.style.left || '0');
+      if (!root.style.left || left < 8) {
+        root.style.left = '48px';
+        root.style.top = '56px';
+      }
+    }
   }
 
   setContext(opts: {
@@ -94,6 +168,7 @@ export class ObjectInspector {
       this.renderMulti();
     }
     this.win.setVisible(true);
+    this.applyDockLayout();
   }
 
   /** Rebuild form for the current target (after rotate from keyboard, etc.). */

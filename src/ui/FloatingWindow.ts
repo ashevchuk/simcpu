@@ -43,6 +43,26 @@ function ensureStyles(): void {
       max-height: min(96vh, 960px);
       resize: both;
     }
+    .float-win.object-inspector {
+      width: min(92vw, 320px);
+      height: min(70vh, 560px);
+      min-width: 240px;
+      min-height: 180px;
+      max-width: min(96vw, 480px);
+      max-height: min(92vh, 900px);
+      resize: both;
+    }
+    .float-win.object-inspector.is-docked {
+      left: 0 !important;
+      right: auto !important;
+      top: var(--inspector-dock-top, 48px) !important;
+      bottom: 0 !important;
+      height: auto !important;
+      max-height: none;
+      border-radius: 0 10px 10px 0;
+      resize: horizontal;
+      box-shadow: 4px 0 24px rgba(0, 0, 0, 0.45);
+    }
     .float-win.memory-editor .float-win-body,
     .float-win.machine-panel .float-win-body {
       display: flex;
@@ -51,6 +71,35 @@ function ensureStyles(): void {
       min-height: 0;
       overflow: hidden;
       flex: 1 1 auto;
+    }
+    .float-win.object-inspector .float-win-body {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+      overflow: auto;
+      flex: 1 1 auto;
+    }
+    .float-win.object-inspector .float-win-dock {
+      background: transparent;
+      border: 1px solid #303646;
+      color: #9aa1b3;
+      font: 11px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-left: auto;
+    }
+    .float-win.object-inspector .float-win-dock:hover {
+      background: #252b3a;
+      color: #e7e9ef;
+    }
+    .float-win.object-inspector.is-docked .float-win-dock {
+      border-color: #4a6fa5;
+      color: #c5d4f0;
+    }
+    .float-win.object-inspector .float-win-close {
+      margin-left: 4px;
     }
     .float-win.machine-panel .machine-panel-canvas-wrap {
       flex: 1 1 auto;
@@ -123,7 +172,12 @@ export class FloatingWindow {
   readonly body: HTMLElement;
   private readonly titleEl: HTMLElement;
   private readonly metaEl: HTMLElement;
+  private readonly titlebar: HTMLElement;
   private drag: { ox: number; oy: number; left: number; top: number } | null = null;
+  /** Fired when a titlebar drag ends (after position is applied). */
+  onDragEnd: ((rect: DOMRect) => void) | null = null;
+  /** Fired when a titlebar drag starts (before first move). */
+  onDragStart: (() => void) | null = null;
 
   constructor(title: string, className = '') {
     ensureStyles();
@@ -140,6 +194,7 @@ export class FloatingWindow {
     `;
     this.titleEl = this.root.querySelector('.float-win-title')!;
     this.metaEl = this.root.querySelector('.float-win-meta')!;
+    this.titlebar = this.root.querySelector('.float-win-titlebar')!;
     this.body = this.root.querySelector('.float-win-body')!;
     this.titleEl.textContent = title;
 
@@ -147,13 +202,14 @@ export class FloatingWindow {
     // raises it before child handlers run.
     this.root.addEventListener('pointerdown', () => this.bringToFront(), true);
 
-    const bar = this.root.querySelector('.float-win-titlebar')!;
+    const bar = this.titlebar;
     bar.addEventListener('pointerdown', (ev: Event) => {
       const e = ev as PointerEvent;
       if ((e.target as HTMLElement).closest('button')) return;
       this.bringToFront();
       const rect = this.root.getBoundingClientRect();
       this.drag = { ox: e.clientX, oy: e.clientY, left: rect.left, top: rect.top };
+      this.onDragStart?.();
       (bar as HTMLElement).setPointerCapture(e.pointerId);
     });
     bar.addEventListener('pointermove', (ev: Event) => {
@@ -167,11 +223,25 @@ export class FloatingWindow {
       this.root.style.bottom = 'auto';
     });
     bar.addEventListener('pointerup', () => {
+      if (!this.drag) return;
       this.drag = null;
+      this.onDragEnd?.(this.root.getBoundingClientRect());
     });
     this.root.querySelector('.float-win-close')!.addEventListener('click', () => this.setVisible(false));
 
     document.body.appendChild(this.root);
+  }
+
+  /** Insert a control just before the close button (dock, etc.). */
+  addTitlebarButton(label: string, title: string): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'float-win-dock';
+    btn.textContent = label;
+    btn.title = title;
+    const close = this.root.querySelector('.float-win-close');
+    this.titlebar.insertBefore(btn, close);
+    return btn;
   }
 
   /** Raise this window above sibling float-wins (never above the menubar). */
