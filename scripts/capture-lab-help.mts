@@ -1,49 +1,28 @@
 /**
  * Capture Soft Lab help screenshots into src/assets/help/.
- * Usage (dev server already on :5173):
- *   npx playwright test scripts/capture-lab-help.mts --config=playwright.help.config.ts
- *
- * Or: npx vite-node scripts/capture-lab-help.mts  (uses playwright chromium)
+ * Usage (prefer built dist for stable Worker):
+ *   npm run build:dist-file && npx --yes serve dist-file -l 4173
+ *   HELP_BASE=http://127.0.0.1:4173 npx vite-node scripts/capture-lab-help.mts
  */
 import { chromium, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dismissDialogs, scrubFloats, tidyAndFit } from './capture-lab-help-shared.mts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'src/assets/help');
 const base = process.env.HELP_BASE || 'http://127.0.0.1:5173';
 
 async function prep(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    for (const el of document.querySelectorAll<HTMLElement>('.float-win')) el.hidden = true;
-    for (const el of document.querySelectorAll<HTMLElement>('.z80-dialog-overlay, .z80-cheat, .sim-tutorial')) {
-      el.hidden = true;
-      el.remove();
-    }
-  });
-  await page.waitForTimeout(200);
-  const fit = page.locator('button', { hasText: 'fit' });
-  if (await fit.count()) await fit.first().click();
-  await page.waitForTimeout(350);
+  await scrubFloats(page);
+  await tidyAndFit(page);
 }
 
 async function loadExample(page: Page, id: string): Promise<void> {
   await page.goto(`${base}/#e=${id}`);
   await page.waitForTimeout(300);
-  const ok = page.locator('.z80-dialog-overlay button.z80-dialog-primary, .z80-dialog button:has-text("OK")');
-  if (await ok.count()) {
-    await ok.first().click();
-    await page.waitForTimeout(400);
-  }
-  // Alerts after some tutorials
-  for (let i = 0; i < 3; i++) {
-    const alertOk = page.locator('.z80-dialog-overlay button.z80-dialog-primary');
-    if (await alertOk.count()) {
-      await alertOk.first().click();
-      await page.waitForTimeout(250);
-    } else break;
-  }
+  await dismissDialogs(page);
   await prep(page);
 }
 
@@ -63,7 +42,6 @@ async function main(): Promise<void> {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 
-  // Fresh chrome
   await page.goto(base + '/');
   await page.waitForSelector('#canvas');
   await prep(page);
@@ -79,11 +57,9 @@ async function main(): Promise<void> {
 
   await loadExample(page, 'and-gate');
   await shot(page, '04-and-gate-chip');
-  // Dive into chip
   await page.evaluate(() => {
     const canvas = document.getElementById('canvas') as HTMLCanvasElement;
     const r = canvas.getBoundingClientRect();
-    // dblclick center-ish where chip usually sits after fit
     const x = r.left + r.width * 0.45;
     const y = r.top + r.height * 0.45;
     for (const type of ['mousemove', 'dblclick'] as const) {
@@ -93,13 +69,12 @@ async function main(): Promise<void> {
     }
   });
   await page.waitForTimeout(500);
-  // Confirm fork dialog if any
   const forkOk = page.locator('.z80-dialog-overlay button.z80-dialog-primary');
   if (await forkOk.count()) {
-    // Prefer Cancel/keep shared if Cancel exists for fork — click primary OK for dive
     await forkOk.first().click();
     await page.waitForTimeout(400);
   }
+  // Re-tidy nested chip internals so dive shots also get clean routes.
   await prep(page);
   await shot(page, '05-chip-dive-internals');
 
@@ -109,12 +84,11 @@ async function main(): Promise<void> {
   await loadExample(page, 'lab-counter-7seg');
   await shot(page, '07-counter-7seg-soft');
 
-  // Soft Lab off
   await page.locator('#sim-soft-lab').click();
   await page.waitForTimeout(600);
   await prep(page);
   await shot(page, '08-counter-soft-off');
-  await page.locator('#sim-soft-lab').click(); // back on
+  await page.locator('#sim-soft-lab').click();
   await page.waitForTimeout(400);
 
   await loadExample(page, 'lab-adder4');
@@ -128,9 +102,13 @@ async function main(): Promise<void> {
 
   await loadExample(page, 'lab-contend-bus');
   await shot(page, '12-contend-bus');
+  fs.copyFileSync(path.join(outDir, '12-contend-bus.png'), path.join(outDir, '28-contention-bus.png'));
+  console.log('wrote src/assets/help/28-contention-bus.png (copy of 12)');
 
   await loadExample(page, 'lab-soft-ram');
   await shot(page, '13-soft-ram');
+  fs.copyFileSync(path.join(outDir, '13-soft-ram.png'), path.join(outDir, '29-contention-soft-ram.png'));
+  console.log('wrote src/assets/help/29-contention-soft-ram.png (copy of 13)');
 
   await loadExample(page, 'lab-mini-cpu');
   await shot(page, '14-mini-cpu');
@@ -153,7 +131,6 @@ async function main(): Promise<void> {
   await loadExample(page, 'xor-pulse');
   await shot(page, '20-xor-pulse');
 
-  // Wire tool active on a simple circuit for routing/junction context
   await loadExample(page, 'cmos-inverter');
   await page.locator('[data-tool="wire"]').click();
   await page.waitForTimeout(200);

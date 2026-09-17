@@ -8,21 +8,11 @@ import { chromium, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dismissDialogs, scrubFloats, tidyAndFit } from './capture-lab-help-shared.mts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'src/assets/help');
 const base = process.env.HELP_BASE || 'http://127.0.0.1:4173';
-
-async function dismiss(page: Page): Promise<void> {
-  for (let i = 0; i < 6; i++) {
-    const ok = page.locator('.z80-dialog-overlay button.z80-dialog-primary');
-    if (await ok.count()) {
-      await ok.first().click();
-      await page.waitForTimeout(200);
-    } else break;
-  }
-  await page.evaluate(() => document.querySelector('.demo-teach-overlay')?.remove());
-}
 
 /** Refuse to keep near-blank full-page shots (empty IDLE canvas). */
 function assertNotBlank(file: string, minBytes = 40_000): void {
@@ -38,11 +28,10 @@ async function shotMenu(page: Page, menu: string, file: string): Promise<void> {
     for (const m of document.querySelectorAll('.menu')) m.classList.remove('open');
   });
   await page.locator(`.menu[data-menu="${menu}"] .menu-trigger`).click();
-  // Wait until the dropdown panel is actually visible with items
-  await page.waitForSelector(`.menu[data-menu="${menu}"].open .menu-panel, .menu[data-menu="${menu}"].open .menu-item`, {
-    state: 'visible',
-    timeout: 5_000,
-  });
+  await page.waitForSelector(
+    `.menu[data-menu="${menu}"].open .menu-panel, .menu[data-menu="${menu}"].open .menu-item`,
+    { state: 'visible', timeout: 5_000 },
+  );
   await page.waitForTimeout(200);
   const dest = path.join(out, file);
   await page.screenshot({ path: dest });
@@ -57,17 +46,11 @@ async function main(): Promise<void> {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 
-  // Load a real circuit first — empty IDLE looks like a broken manual shot
   await page.goto(`${base}/#e=lab-counter-7seg`, { waitUntil: 'load', timeout: 60_000 });
   await page.waitForSelector('#canvas');
-  await dismiss(page);
-  await page.waitForTimeout(500);
-  const fit = page.locator('button', { hasText: 'fit' });
-  if (await fit.count()) await fit.first().click();
-  await page.waitForTimeout(400);
-  await page.evaluate(() => {
-    for (const el of document.querySelectorAll<HTMLElement>('.float-win')) el.hidden = true;
-  });
+  await dismissDialogs(page);
+  await scrubFloats(page);
+  await tidyAndFit(page);
 
   await shotMenu(page, 'file', '30-menu-file.png');
   await shotMenu(page, 'place', '31-menu-place.png');
@@ -77,18 +60,11 @@ async function main(): Promise<void> {
   await shotMenu(page, 'help', '35-menu-help.png');
   await shotMenu(page, 'library', '36-menu-library.png');
 
-  // rom-viewer — dismiss confirm, wait for ROM chip on canvas
   await page.goto(`${base}/#e=rom-viewer`, { waitUntil: 'load', timeout: 60_000 });
-  await dismiss(page);
-  await page.waitForTimeout(500);
-  await page.evaluate(() => {
-    for (const el of document.querySelectorAll<HTMLElement>('.float-win')) el.hidden = true;
-    document.querySelector('.demo-teach-overlay')?.remove();
-  });
-  if (await fit.count()) await fit.first().click();
-  await page.waitForTimeout(500);
-  // Ensure no dialog left
-  await dismiss(page);
+  await dismissDialogs(page);
+  await scrubFloats(page);
+  await tidyAndFit(page);
+  await dismissDialogs(page);
   const dest38 = path.join(out, '38-rom-viewer.png');
   await page.screenshot({ path: dest38 });
   assertNotBlank(dest38, 50_000);

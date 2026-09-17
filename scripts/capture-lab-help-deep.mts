@@ -8,20 +8,11 @@
 import { chromium, type Page } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dismissDialogs, tidyAndFit } from './capture-lab-help-shared.mts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'src/assets/help');
 const base = process.env.HELP_BASE || 'http://127.0.0.1:5173';
-
-async function dismissDialogs(page: Page): Promise<void> {
-  for (let i = 0; i < 8; i++) {
-    const ok = page.locator('.z80-dialog-overlay button.z80-dialog-primary');
-    if (await ok.count()) {
-      await ok.first().click();
-      await page.waitForTimeout(200);
-    } else break;
-  }
-}
 
 async function scrubUi(page: Page): Promise<void> {
   await page.evaluate(() => {
@@ -199,9 +190,7 @@ async function main(): Promise<void> {
   await page.waitForSelector('#canvas');
   await dismissDialogs(page);
   await scrubUi(page);
-  const fit = page.locator('button', { hasText: 'fit' });
-  if (await fit.count()) await fit.first().click();
-  await page.waitForTimeout(400);
+  await tidyAndFit(page);
   // Ensure sim Run
   await page.locator('#sim-run, button#run').first().click({ force: true }).catch(() => undefined);
   await page.waitForTimeout(600);

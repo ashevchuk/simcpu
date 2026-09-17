@@ -241,6 +241,10 @@ const navStack: NavFrame[] = [{ circuit: topCircuit, pathPrefix: '', label: 'top
 
 const editor = new Editor(topCircuit, library);
 editor.onComponentsRemoved = (ids) => watchList.removeComponents(ids);
+/** Playwright Lab-manual capture hooks (scripts/capture-lab-help*.mts). */
+(window as unknown as { __simHelpCapture: { tidyAll: () => number } }).__simHelpCapture = {
+  tidyAll: () => editor.tidyAllWires(false),
+};
 const editHistory = new EditHistory();
 const tutorial = new Tutorial(stage);
 tutorial.onHintChange = (hint) => {
