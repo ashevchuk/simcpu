@@ -1,6 +1,6 @@
-import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, BUS_SWITCH_BODY_W, ramPortCount, romPortCount } from '../sim/library.js';
+import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, BUS_PASS_BODY_W, BUS_SWITCH_BODY_W, ramPortCount, romPortCount } from '../sim/library.js';
 import type { Circuit } from '../sim/Circuit.js';
-import type { BusSwitchComponent, Component, Pin, Point, Wire } from '../sim/types.js';
+import type { BusPassComponent, BusSwitchComponent, Component, Pin, Point, Wire } from '../sim/types.js';
 import { routeEscapeChannel } from './routeChannel.js';
 
 export const GRID = 10;
@@ -128,6 +128,68 @@ export function orthogonalPoints(a: Point, b: Point): Point[] {
   const dy = Math.abs(a.y - b.y);
   if (dx >= dy) return [a, { x: b.x, y: a.y }, b];
   return [a, { x: a.x, y: b.y }, b];
+}
+
+/**
+ * Deterministic interior corners for a pin→pin wire (no maze / body avoid).
+ * Facing comes from pin exit dirs; `lane` fans parallel exits by one GRID.
+ * Returns waypoints only (excludes endpoints).
+ */
+export function orthoCorners(
+  p1: Point,
+  p2: Point,
+  startDir: RouteDir | null,
+  endDir: RouteDir | null,
+  lane = 0,
+): Point[] {
+  const h1 = isHorizFacing(startDir, p1, p2);
+  const h2 = isHorizFacing(endDir, p2, p1);
+  const off = lane * GRID;
+  if (h1 && h2) {
+    const mx = Math.round(((p1.x + p2.x) / 2 + off) / GRID) * GRID;
+    return [
+      { x: mx, y: p1.y },
+      { x: mx, y: p2.y },
+    ];
+  }
+  if (!h1 && !h2) {
+    const my = Math.round(((p1.y + p2.y) / 2 + off) / GRID) * GRID;
+    return [
+      { x: p1.x, y: my },
+      { x: p2.x, y: my },
+    ];
+  }
+  if (h1) {
+    const x = Math.round((p2.x + off) / GRID) * GRID;
+    return [
+      { x, y: p1.y },
+      { x, y: p2.y },
+    ];
+  }
+  const y = Math.round((p2.y + off) / GRID) * GRID;
+  return [
+    { x: p1.x, y },
+    { x: p2.x, y },
+  ];
+}
+
+/** E/W = horizontal exit; unknown dirs fall back to the longer pin span. */
+function isHorizFacing(dir: RouteDir | null, from: Point, to: Point): boolean {
+  if (dir === 'E' || dir === 'W') return true;
+  if (dir === 'N' || dir === 'S') return false;
+  return Math.abs(to.x - from.x) >= Math.abs(to.y - from.y);
+}
+
+/**
+ * Lane index among wires that already touch `fromPinId` (0 = first bus mate).
+ * Call before inserting the new wire so the count matches parallel-exit lane indexing.
+ */
+export function wireLaneOf(circuit: Circuit, fromPinId: string): number {
+  let idx = 0;
+  for (const w of circuit.wires.values()) {
+    if (w.a === fromPinId || w.b === fromPinId) idx += 1;
+  }
+  return idx;
 }
 
 function hvPoints(a: Point, b: Point): Point[] {
@@ -1027,7 +1089,7 @@ function boundsHalfSize(c: Component): [number, number] {
       case 'source':
         return [16, 8];
       case 'transistor':
-        return [22, 28];
+        return [26, 28];
       case 'input':
       case 'button':
         return [14, 12];
@@ -1039,6 +1101,10 @@ function boundsHalfSize(c: Component): [number, number] {
         return [42, Math.max(20, ((c.bitWidth - 1) * 20 + 28) / 2)];
       case 'busswitch':
         return [52, Math.max(20, ((c.bitWidth - 1) * 20 + 28) / 2)];
+      case 'buspass':
+        return [BUS_PASS_BODY_W / 2 + 4, Math.max(20, ((c.bitWidth - 1) * 20 + 28) / 2)];
+      case 'switch':
+        return [20, 12];
       case 'tty':
         return [36, 22];
       case 'probe':
@@ -1117,6 +1183,30 @@ export function busSwitchBitAt(c: BusSwitchComponent, p: Point, radius = 10): nu
   let bestD = radius;
   for (let i = 0; i < c.bitWidth; i++) {
     const center = busSwitchPaddleCenter(c, i);
+    if (!center) continue;
+    const d = dist(p, center);
+    if (d <= bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** World-space center of bus-pass paddle for pole `i` (midway aᵢ→bᵢ). */
+export function busPassPaddleCenter(c: BusPassComponent, bit: number): Point | null {
+  const a = c.pins[`a${bit}`];
+  const b = c.pins[`b${bit}`];
+  if (!a || !b) return null;
+  return { x: (a.pos.x + b.pos.x) / 2, y: (a.pos.y + b.pos.y) / 2 };
+}
+
+/** Which bus-pass pole paddle contains `p`, or null. */
+export function busPassBitAt(c: BusPassComponent, p: Point, radius = 10): number | null {
+  let best: number | null = null;
+  let bestD = radius;
+  for (let i = 0; i < c.bitWidth; i++) {
+    const center = busPassPaddleCenter(c, i);
     if (!center) continue;
     const d = dist(p, center);
     if (d <= bestD) {

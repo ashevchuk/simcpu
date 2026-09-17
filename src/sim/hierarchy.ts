@@ -35,12 +35,14 @@ const UNFOLD_ID_PREFIX: Record<Component['kind'], string> = {
   source: 'src',
   input: 'in',
   button: 'btn',
+  switch: 'sw',
   led: 'led',
   sevenseg: '7seg',
   clock: 'clk',
   analyzer: 'la',
   busprobe: 'bus',
   busswitch: 'bsw',
+  buspass: 'bpass',
   tty: 'tty',
   probe: 'probe',
   label: 'lbl',
@@ -782,6 +784,17 @@ function cloneComponent(c: Component): Component {
         mirrorY: c.mirrorY,
         pins: { out: clonePin(c.pins.out) },
       };
+    case 'switch':
+      return {
+        id: c.id,
+        kind: 'switch',
+        closed: c.closed,
+        pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
+        pins: { in: clonePin(c.pins.in), out: clonePin(c.pins.out) },
+      };
     case 'led':
       return {
         id: c.id,
@@ -871,6 +884,23 @@ function cloneComponent(c: Component): Component {
         bitWidth: c.bitWidth,
         value: c.value,
         radix: c.radix,
+        ...(c.label !== undefined ? { label: c.label } : {}),
+        pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
+        pinOrder: [...c.pinOrder],
+        pins,
+      };
+    }
+    case 'buspass': {
+      const pins: Record<string, Pin> = {};
+      for (const [name, p] of Object.entries(c.pins)) pins[name] = clonePin(p);
+      return {
+        id: c.id,
+        kind: 'buspass',
+        bitWidth: c.bitWidth,
+        closed: c.closed,
         ...(c.label !== undefined ? { label: c.label } : {}),
         pos,
         rotation: c.rotation,

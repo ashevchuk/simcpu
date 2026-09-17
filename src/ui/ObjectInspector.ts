@@ -495,6 +495,27 @@ export class ObjectInspector {
       );
     }
 
+    if (c.kind === 'switch') {
+      addRow(
+        'closed',
+        select(
+          c.closed ? '1' : '0',
+          [
+            { value: '1', label: 'closed (on)' },
+            { value: '0', label: 'open (off)' },
+          ],
+          (v) => {
+            this.editor?.setSwitchClosed(c.id, v === '1');
+            this.refresh();
+          },
+        ),
+      );
+      const note = document.createElement('div');
+      note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
+      note.textContent = 'Pass: closed merges in↔out into one net';
+      body.appendChild(note);
+    }
+
     if (c.kind === 'clock') {
       addRow(
         'mode',
@@ -616,7 +637,7 @@ export class ObjectInspector {
       );
     }
 
-    if (c.kind === 'probe' || c.kind === 'busprobe' || c.kind === 'busswitch') {
+    if (c.kind === 'probe' || c.kind === 'busprobe' || c.kind === 'busswitch' || c.kind === 'buspass') {
       addRow(
         'label',
         textInput(c.label ?? '', (v) => {
@@ -1026,6 +1047,50 @@ export class ObjectInspector {
       const note = document.createElement('div');
       note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
       note.textContent = 'DIP: paddle = toggle bit · readout = +1 · b0 = LSB';
+      body.appendChild(note);
+    }
+
+    if (c.kind === 'buspass') {
+      addRow(
+        'width',
+        (() => {
+          const inp = document.createElement('input');
+          inp.type = 'number';
+          inp.min = '1';
+          inp.max = '32';
+          inp.value = String(c.bitWidth);
+          inp.style.cssText = 'width:4em;background:#12141a;color:#e7e9ef;border:1px solid #3a4154;border-radius:4px;padding:2px 4px';
+          inp.addEventListener('change', () => {
+            const n = parseInt(inp.value, 10);
+            if (!Number.isFinite(n)) return;
+            this.editor?.setBusPassWidth(c.id, n);
+            this.refresh();
+          });
+          return inp;
+        })(),
+      );
+      addRow(
+        'closed',
+        (() => {
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          inp.value = c.closed.toString(16).toUpperCase();
+          inp.title = 'Hex bitmask of closed poles (bit0 = a0↔b0)';
+          inp.style.cssText =
+            'width:6em;background:#12141a;color:#e7e9ef;border:1px solid #3a4154;border-radius:4px;padding:2px 4px;font-family:ui-monospace,monospace';
+          inp.addEventListener('change', () => {
+            const raw = inp.value.trim().replace(/^0x/i, '');
+            const parsed = parseInt(raw, 16);
+            if (!Number.isFinite(parsed)) return;
+            this.editor?.setBusPassClosed(c.id, parsed);
+            this.refresh();
+          });
+          return inp;
+        })(),
+      );
+      const note = document.createElement('div');
+      note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
+      note.textContent = 'Pass bank: paddle = toggle pole · closed merges aᵢ↔bᵢ';
       body.appendChild(note);
     }
   }

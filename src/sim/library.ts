@@ -8,6 +8,7 @@ import type { ChipDef } from './ChipLibrary.js';
 import { Circuit, nextId } from './Circuit.js';
 import type {
   AnalyzerComponent,
+  BusPassComponent,
   BusProbeComponent,
   BusSwitchComponent,
   ButtonComponent,
@@ -26,6 +27,7 @@ import type {
   RomComponent,
   SevenSegComponent,
   SourceComponent,
+  SwitchComponent,
   TransistorComponent,
   TransistorType,
   TtyComponent,
@@ -53,6 +55,10 @@ export const ANALYZER_PIN_PITCH = 20;
 export const BUS_SWITCH_BODY_W = 100;
 /** Output pin bank just outside the right edge of the package. */
 export const BUS_SWITCH_PIN_DX = BUS_SWITCH_BODY_W / 2 + 4;
+/** Pass-switch bank body width (left aᵢ + paddles + right bᵢ). */
+export const BUS_PASS_BODY_W = 56;
+/** Left/right pin offset for buspass (outside package edge). */
+export const BUS_PASS_PIN_DX = BUS_PASS_BODY_W / 2 + 4;
 
 export function chipPinDys(portCount: number): number[] {
   let dys = chipPinDyByCount[portCount];
@@ -107,6 +113,7 @@ export const LAYOUT = {
   source: { out: [0, 15], gndOut: [0, -15] },
   input: { out: [15, 0] },
   button: { out: [16, 0] },
+  switch: { in: [-16, 0], out: [16, 0] },
   led: { in: [-14, 0] },
   /** Left-stack pin X for sevenseg (dys from chipPinDys). */
   sevenseg: { pinDx: -36 },
@@ -217,6 +224,29 @@ export function makeButton(
     mirrorX: false,
     mirrorY: false,
     pins: { out: pin(id, 'out', pos, ...LAYOUT.button.out) },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function makeSwitch(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  closed = false,
+): SwitchComponent {
+  const id = nextId('sw');
+  const c: SwitchComponent = {
+    id,
+    kind: 'switch',
+    closed,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pins: {
+      in: pin(id, 'in', pos, ...LAYOUT.switch.in),
+      out: pin(id, 'out', pos, ...LAYOUT.switch.out),
+    },
   };
   circuit.addComponent(c);
   return c;
@@ -482,6 +512,78 @@ export function relayoutBusSwitchPins(c: BusSwitchComponent): void {
   c.pinOrder = pinOrder;
   const mask = n >= 31 ? 0x7fffffff : (1 << n) - 1;
   c.value = (c.value | 0) & mask;
+}
+
+/** Bank of SPST pass switches (aᵢ↔bᵢ when closed bit i is set). */
+export function makeBusPass(
+  circuit: Circuit,
+  bitWidth = 8,
+  pos: Point = { x: 0, y: 0 },
+  closed = 0,
+): BusPassComponent {
+  const n = Math.max(1, Math.min(32, bitWidth | 0));
+  const id = nextId('bpass');
+  const pins: Record<string, Pin> = {};
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const dy = (i - mid) * ANALYZER_PIN_PITCH;
+    const an = `a${i}`;
+    const bn = `b${i}`;
+    pinOrder.push(an, bn);
+    pins[an] = pin(id, an, pos, -BUS_PASS_PIN_DX, dy);
+    pins[bn] = pin(id, bn, pos, BUS_PASS_PIN_DX, dy);
+  }
+  const mask = n >= 31 ? 0x7fffffff : (1 << n) - 1;
+  const c: BusPassComponent = {
+    id,
+    kind: 'buspass',
+    bitWidth: n,
+    closed: (closed | 0) & mask,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder,
+    pins,
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function busPassPortCount(c: BusPassComponent): number {
+  return c.bitWidth;
+}
+
+/** Relayout bus-pass pins after bitWidth change. */
+export function relayoutBusPassPins(c: BusPassComponent): void {
+  const n = c.bitWidth;
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const dy = (i - mid) * ANALYZER_PIN_PITCH;
+    const an = `a${i}`;
+    const bn = `b${i}`;
+    pinOrder.push(an, bn);
+    const existingA = c.pins[an];
+    const existingB = c.pins[bn];
+    if (existingA) {
+      existingA.pos = { x: c.pos.x - BUS_PASS_PIN_DX, y: c.pos.y + dy };
+    } else {
+      c.pins[an] = pin(c.id, an, c.pos, -BUS_PASS_PIN_DX, dy);
+    }
+    if (existingB) {
+      existingB.pos = { x: c.pos.x + BUS_PASS_PIN_DX, y: c.pos.y + dy };
+    } else {
+      c.pins[bn] = pin(c.id, bn, c.pos, BUS_PASS_PIN_DX, dy);
+    }
+  }
+  for (const name of Object.keys(c.pins)) {
+    if (!pinOrder.includes(name)) delete c.pins[name];
+  }
+  c.pinOrder = pinOrder;
+  const mask = n >= 31 ? 0x7fffffff : (1 << n) - 1;
+  c.closed = (c.closed | 0) & mask;
 }
 
 /** TTY / machine console instrument (no electrical pins). */

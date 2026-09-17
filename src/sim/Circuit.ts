@@ -163,7 +163,8 @@ export class Circuit {
    *    global name ("VCC", "GND"), or
    *  - they both belong to `label` components with the same name (a
    *    same-named label ties nets together without drawing a wire, mirroring
-   *    the reference simulator's "Label (net)" primitive).
+   *    the reference simulator's "Label (net)" primitive), or
+   *  - a closed `switch` / `buspass` pole merges its two pins (pass topology).
    */
   computeNets(): NetMap {
     // Same shared structure-version cache flatten() uses (see hierarchy.ts)
@@ -206,6 +207,20 @@ export class Circuit {
     for (const list of byName.values()) {
       for (let i = 1; i < list.length; i++) {
         uf.union(list[0] as string, list[i] as string);
+      }
+    }
+
+    // Pass switches: closed poles merge a↔b (topology, not drivers).
+    for (const c of this.components.values()) {
+      if (c.kind === 'switch' && c.closed) {
+        uf.union(c.pins.in.id, c.pins.out.id);
+      } else if (c.kind === 'buspass') {
+        for (let i = 0; i < c.bitWidth; i++) {
+          if (((c.closed >> i) & 1) === 0) continue;
+          const a = c.pins[`a${i}`];
+          const b = c.pins[`b${i}`];
+          if (a && b) uf.union(a.id, b.id);
+        }
       }
     }
 

@@ -757,12 +757,14 @@ const CURSOR: Record<Tool['kind'], string> = {
   gnd: 'copy',
   input: 'copy',
   button: 'copy',
+  switch: 'copy',
   led: 'copy',
   sevenseg: 'copy',
   clock: 'copy',
   analyzer: 'copy',
   busprobe: 'copy',
   busswitch: 'copy',
+  buspass: 'copy',
   tty: 'copy',
   probe: 'copy',
   label: 'copy',
@@ -784,12 +786,14 @@ const PLACE_TOOL_LABELS: Partial<Record<Tool['kind'], string>> = {
   gnd: 'placing GND',
   input: 'placing input',
   button: 'placing button',
+  switch: 'placing switch',
   led: 'placing LED',
   sevenseg: 'placing 7-seg',
   clock: 'placing pulse gen',
   analyzer: 'placing analyzer',
   busprobe: 'placing bus probe',
   busswitch: 'placing bus switch',
+  buspass: 'placing pass switch bank',
   tty: 'placing TTY',
   probe: 'placing probe',
   label: 'placing net label',
@@ -2014,12 +2018,24 @@ function exportSchematicSvg(): void {
     switch (c.kind) {
       case 'transistor': {
         const stroke = c.type === 'N' ? '#5fd0d6' : '#e8b358';
-        parts.push(
-          `<rect x="${x - 18}" y="${y - 24}" width="36" height="48" rx="4" fill="#191c25" stroke="${stroke}" stroke-width="1.5"/>`,
-        );
-        parts.push(
-          `<text x="${x}" y="${y + 4}" text-anchor="middle" fill="#e7e9ef" font-family="ui-monospace,monospace" font-size="11">${c.type}</text>`,
-        );
+        const isN = c.type === 'N';
+        const srcBarY = isN ? 10 : -10;
+        const g = (dx: number, dy: number) => `${x + dx},${y + dy}`;
+        parts.push(`<g stroke="${stroke}" fill="${stroke}" stroke-width="1.8" stroke-linecap="butt">`);
+        parts.push(`<line x1="${x - 28}" y1="${y}" x2="${x - 7}" y2="${y}" fill="none"/>`);
+        parts.push(`<line x1="${x - 7}" y1="${y - 14}" x2="${x - 7}" y2="${y + 14}" fill="none"/>`);
+        for (const cy of [-10, 0, 10]) {
+          parts.push(`<rect x="${x - 2.5}" y="${y + cy - 3.5}" width="5" height="7" stroke="none"/>`);
+        }
+        parts.push(`<line x1="${x}" y1="${y - 28}" x2="${x}" y2="${y - 13.5}" fill="none"/>`);
+        parts.push(`<line x1="${x}" y1="${y + 28}" x2="${x}" y2="${y + 13.5}" fill="none"/>`);
+        parts.push(`<polyline points="${g(2.5, 0)} ${g(11, 0)} ${g(11, srcBarY)} ${g(2.5, srcBarY)}" fill="none"/>`);
+        if (isN) {
+          parts.push(`<polygon points="${g(2.5, 0)} ${g(7.5, -3.2)} ${g(7.5, 3.2)}" stroke="none"/>`);
+        } else {
+          parts.push(`<polygon points="${g(10, 0)} ${g(5, -3.2)} ${g(5, 3.2)}" stroke="none"/>`);
+        }
+        parts.push(`</g>`);
         break;
       }
       case 'source': {
@@ -2056,6 +2072,15 @@ function exportSchematicSvg(): void {
         parts.push(`<circle cx="${x}" cy="${y - 3}" r="10" fill="#2a3140" stroke="#8a93a8" stroke-width="1.3"/>`);
         parts.push(
           `<text x="${x}" y="${y + 12}" text-anchor="middle" fill="#9aa1b3" font-family="ui-monospace,monospace" font-size="7">${c.mode === 'toggle' ? 'TOG' : 'MOM'}</text>`,
+        );
+        break;
+      }
+      case 'switch': {
+        parts.push(
+          `<rect x="${x - 18}" y="${y - 11}" width="36" height="22" rx="4" fill="#151820" stroke="${c.closed ? '#8fd46a' : '#7d8496'}" stroke-width="1.3"/>`,
+        );
+        parts.push(
+          `<text x="${x}" y="${y + 4}" text-anchor="middle" fill="#e7e9ef" font-family="ui-monospace,monospace" font-size="9">${c.closed ? 'ON' : 'OFF'}</text>`,
         );
         break;
       }
@@ -2140,6 +2165,7 @@ function exportSchematicSvg(): void {
       case 'analyzer':
       case 'busprobe':
       case 'busswitch':
+      case 'buspass':
       case 'tty': {
         const label =
           c.kind === 'clock'
@@ -2150,7 +2176,9 @@ function exportSchematicSvg(): void {
                 ? 'BUS'
                 : c.kind === 'busswitch'
                   ? 'DIP'
-                  : 'TTY';
+                  : c.kind === 'buspass'
+                    ? 'PASS'
+                    : 'TTY';
         parts.push(
           `<rect x="${x - 28}" y="${y - 18}" width="56" height="36" rx="6" fill="#191c25" stroke="#f5c518" stroke-width="1.3"/>`,
         );

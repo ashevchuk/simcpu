@@ -158,7 +158,7 @@ describe('edit history + clipboard', () => {
     expect(still.some((p) => farX.some((x) => Math.abs(x - p.x) < 0.5))).toBe(true);
   });
 
-  it('mid-drag repair keeps one-sided wires orthogonal', () => {
+  it('mid-drag stub reflow keeps one-sided wires orthogonal', () => {
     const lib = new ChipLibrary();
     const c = new Circuit();
     const ed = new Editor(c, lib);
@@ -180,6 +180,22 @@ describe('edit history + clipboard', () => {
     }
     // Far column should still be present mid-drag.
     expect(w.waypoints?.some((p) => Math.abs(p.x - 180) < 0.5)).toBe(true);
+  });
+
+  it('mid-drag Y move only nudges the near stub, not the far jog', () => {
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const left = makeButton(c, { x: 0, y: 40 });
+    const right = makeButton(c, { x: 200, y: 80 });
+    const w = c.addWire(left.pins.out.id, right.pins.out.id, [
+      { x: 180, y: 40 },
+      { x: 180, y: 80 },
+    ]);
+    c.moveComponent(left.id, 0, 30);
+    ed.pushWiresWithDrag([left.id], 0, 30);
+    expect(w.waypoints?.[0]).toEqual({ x: 180, y: left.pins.out.pos.y });
+    expect(w.waypoints?.[1]).toEqual({ x: 180, y: 80 });
   });
 
   it('tidy keeps intentional ortho bends that clear bodies', () => {
