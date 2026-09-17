@@ -238,6 +238,7 @@ export function makeSwitch(
   const c: SwitchComponent = {
     id,
     kind: 'switch',
+    mode: 'toggle',
     closed,
     pos,
     rotation: 0,
@@ -538,6 +539,7 @@ export function makeBusPass(
   const c: BusPassComponent = {
     id,
     kind: 'buspass',
+    mode: 'toggle',
     bitWidth: n,
     closed: (closed | 0) & mask,
     pos,

@@ -107,10 +107,12 @@ export interface ButtonComponent {
 /**
  * SPST pass-through switch. When `closed`, `in` and `out` share one net
  * (Circuit.computeNets unions them). Open = electrically separate. Not a driver.
+ * `toggle` (default): click flips closed. `momentary`: closed while mouse held.
  */
 export interface SwitchComponent {
   id: string;
   kind: 'switch';
+  mode: 'momentary' | 'toggle';
   closed: boolean;
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
@@ -239,10 +241,12 @@ export interface BusSwitchComponent {
 /**
  * Bank of SPST pass switches. Bit *i* of `closed` merges pins `a{i}` ↔ `b{i}`
  * into one net when set. Not a driver (unlike `busswitch`).
+ * `toggle` (default): paddle click flips that bit. `momentary`: bit closed while held.
  */
 export interface BusPassComponent {
   id: string;
   kind: 'buspass';
+  mode: 'momentary' | 'toggle';
   bitWidth: number;
   /** Bitmask: bit i closed ⇒ aᵢ connected to bᵢ. */
   closed: number;

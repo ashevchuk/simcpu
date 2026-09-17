@@ -102,6 +102,14 @@ function fromSerializedComponent(c: SerializedComponent): Component {
   if (c.kind === 'port') {
     return { ...c, dir: c.dir ?? 'inout' };
   }
+  if (c.kind === 'switch') {
+    const raw = c as import('./types.js').SwitchComponent & { mode?: 'momentary' | 'toggle' };
+    return { ...raw, mode: raw.mode === 'momentary' ? 'momentary' : 'toggle' };
+  }
+  if (c.kind === 'buspass') {
+    const raw = c as import('./types.js').BusPassComponent & { mode?: 'momentary' | 'toggle' };
+    return { ...raw, mode: raw.mode === 'momentary' ? 'momentary' : 'toggle' };
+  }
   if (c.kind === 'sevenseg') {
     const raw = c as import('./types.js').SevenSegComponent & { color?: string; hasDp?: boolean };
     const names =

@@ -129,14 +129,16 @@ const SECTIONS: Section[] = [
       '  N-MOS (4), P-MOS (5), VCC (6), GND (7).\n\n' +
       'Drivers & I/O:\n' +
       '  Input (8) — sticky 0/1. Port (O) — chip pin when folding; Shift+O names / bus D[7:0].\n' +
-      '  Button (B) — momentary (hold mouse) / toggle. LED (E). 7-seg (S). Probe (9). Net label (L).\n\n' +
+      '  Button (B) — momentary (hold mouse) / toggle. Switch / Pass switch… — same modes in inspector.\n' +
+      '  LED (E). 7-seg (S). Probe (9). Net label (L).\n\n' +
       'Instruments:\n' +
       '  Pulse generator (K) — OUT + TRIG.\n' +
       '  Logic analyzer… — multi-channel capture (see Soft Lab → Logic analyzer).\n' +
       '  Bus probe… — hex/dec/bin readout (asks width).\n' +
       '  Bus switch… — DIP/hex writable bus (width 4 or 8).\n' +
+      '  Pass switch… — bank of SPST poles (aᵢ↔bᵢ); toggle or hold.\n' +
       '  TTY console — soft-machine console / Spectrum UI host.\n\n' +
-      'Select tool: click Button/Clock to interact; double-click Analyzer or chip to open/dive.',
+      'Select tool: click Button/Clock/Switch to interact; double-click Analyzer or chip to open/dive.',
     figures: [
       { src: img31, caption: 'Place menu — primitives through instruments.' },
       { src: img24, caption: 'Place open on a Soft Lab bench.' },

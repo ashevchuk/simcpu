@@ -57,4 +57,50 @@ describe('SPST switch / buspass net merge', () => {
       expect(busPassBitAt(bp, center!)).toBe(i);
     }
   });
+
+  it('momentary switch closes while mouse held', async () => {
+    const { Editor } = await import('../src/ui/Editor.js');
+    const { ChipLibrary } = await import('../src/sim/ChipLibrary.js');
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const sw = makeSwitch(c, { x: 0, y: 0 }, false);
+    sw.mode = 'momentary';
+    ed.handleMouseDown({ x: 0, y: 0 });
+    expect(sw.closed).toBe(true);
+    ed.handleMouseUp({ x: 0, y: 0 }, false);
+    expect(sw.closed).toBe(false);
+  });
+
+  it('momentary buspass pole closes while paddle held', async () => {
+    const { Editor } = await import('../src/ui/Editor.js');
+    const { ChipLibrary } = await import('../src/sim/ChipLibrary.js');
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const bp = makeBusPass(c, 4, { x: 0, y: 0 });
+    bp.mode = 'momentary';
+    const paddle = busPassPaddleCenter(bp, 2)!;
+    ed.handleMouseDown(paddle);
+    expect(bp.closed & (1 << 2)).toBeTruthy();
+    ed.handleMouseUp(paddle, false);
+    expect(bp.closed & (1 << 2)).toBe(0);
+  });
+
+  it('toggle switch still flips on click', async () => {
+    const { Editor } = await import('../src/ui/Editor.js');
+    const { ChipLibrary } = await import('../src/sim/ChipLibrary.js');
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const sw = makeSwitch(c, { x: 0, y: 0 }, false);
+    expect(sw.mode).toBe('toggle');
+    ed.handleMouseDown({ x: 0, y: 0 });
+    expect(sw.closed).toBe(false); // not pressed on down in toggle mode
+    ed.handleMouseUp({ x: 0, y: 0 }, false);
+    expect(sw.closed).toBe(true);
+    ed.handleMouseDown({ x: 0, y: 0 });
+    ed.handleMouseUp({ x: 0, y: 0 }, false);
+    expect(sw.closed).toBe(false);
+  });
 });

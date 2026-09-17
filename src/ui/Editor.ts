@@ -152,8 +152,12 @@ export class Editor {
   private draggingComponents: { ids: string[]; lastPoint: Point } | null = null;
   /** Drag a chip pin across the body center to flip left/right stack (Alt/Shift+drag). */
   private pinSideDrag: { componentId: string; pinName: string; startX: number } | null = null;
-  /** Momentary button held by pointer (value=1 until mouseup or drag-to-move). */
-  private heldMomentaryButtonId: string | null = null;
+  /** Momentary control held by pointer until mouseup or drag-to-move. */
+  private heldMomentary:
+    | { kind: 'button'; id: string }
+    | { kind: 'switch'; id: string }
+    | { kind: 'buspass'; id: string; bit: number }
+    | null = null;
 
   /** Placement / move / wire bend snap: full grid, half grid, or free. Cycle with G. */
   snapMode: SnapMode = 'grid';
@@ -279,12 +283,25 @@ export class Editor {
       // the "plain click, no drag" case; a real drag always moves the set
       // computed right here, decided before the gesture can change it).
       const ids = this.selectedIds.has(hit.id) && this.selectedIds.size > 1 ? [...this.selectedIds] : [hit.id];
-      // Momentary pushbutton: press for the whole mouse-down gesture (unless
-      // Shift multi-select). Dragging past the threshold releases and moves.
-      if (hit.kind === 'button' && hit.mode === 'momentary' && !opts?.shiftKey) {
-        this.pressMomentaryButton(hit.id);
-        this.selectedIds = new Set([hit.id]);
-        this.selectedWireId = null;
+      // Momentary button / switch / pass pole: press for the whole mouse-down
+      // gesture (unless Shift multi-select). Dragging past the threshold releases and moves.
+      if (!opts?.shiftKey) {
+        if (hit.kind === 'button' && hit.mode === 'momentary') {
+          this.pressMomentaryButton(hit.id);
+          this.selectedIds = new Set([hit.id]);
+          this.selectedWireId = null;
+        } else if (hit.kind === 'switch' && hit.mode === 'momentary') {
+          this.pressMomentarySwitch(hit.id);
+          this.selectedIds = new Set([hit.id]);
+          this.selectedWireId = null;
+        } else if (hit.kind === 'buspass' && hit.mode === 'momentary') {
+          const bit = busPassBitAt(hit, p);
+          if (bit != null) {
+            this.pressMomentaryBusPass(hit.id, bit);
+            this.selectedIds = new Set([hit.id]);
+            this.selectedWireId = null;
+          }
+        }
       }
       this.pendingComponentDrag = { ids, downPoint: p };
       return;
@@ -317,7 +334,7 @@ export class Editor {
       const { ids, downPoint } = this.pendingComponentDrag;
       if (Math.hypot(p.x - downPoint.x, p.y - downPoint.y) > DRAG_THRESHOLD) {
         // Moving the part — drop the momentary press so it doesn't stick on.
-        this.releaseMomentaryButton();
+        this.releaseMomentary();
         if (!this.dragCheckpointTaken) {
           this.noteEdit();
           this.dragCheckpointTaken = true;
@@ -384,7 +401,7 @@ export class Editor {
   handleMouseUp(p: Point, additive: boolean): void {
     let didDrag = false;
     // Release before click handling so performClick does not see a stuck press.
-    this.releaseMomentaryButton();
+    this.releaseMomentary();
 
     if (this.pinSideDrag) {
       const { componentId, pinName, startX } = this.pinSideDrag;
@@ -1344,21 +1361,66 @@ export class Editor {
   private pressMomentaryButton(id: string): void {
     const c = this.circuit.components.get(id);
     if (!c || c.kind !== 'button' || c.mode !== 'momentary') return;
-    this.heldMomentaryButtonId = id;
+    this.releaseMomentary();
+    this.heldMomentary = { kind: 'button', id };
     c.holdFrames = 0;
     c.value = 1;
   }
 
-  /** Release the pointer-held momentary button, if any. */
-  private releaseMomentaryButton(): void {
-    const id = this.heldMomentaryButtonId;
-    if (!id) return;
-    this.heldMomentaryButtonId = null;
+  /** Close a momentary SPST switch while the pointer is held. */
+  private pressMomentarySwitch(id: string): void {
     const c = this.circuit.components.get(id);
-    if (!c || c.kind !== 'button') return;
-    if (c.mode === 'momentary' && c.value !== 0) {
-      c.value = 0;
-      c.holdFrames = 0;
+    if (!c || c.kind !== 'switch' || c.mode !== 'momentary') return;
+    this.releaseMomentary();
+    this.heldMomentary = { kind: 'switch', id };
+    if (!c.closed) {
+      c.closed = true;
+      bumpStructureVersion();
+    }
+  }
+
+  /** Close one bus-pass pole while the pointer is held on that paddle. */
+  private pressMomentaryBusPass(id: string, bit: number): void {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'buspass' || c.mode !== 'momentary') return;
+    const mask = 1 << bit;
+    this.releaseMomentary();
+    this.heldMomentary = { kind: 'buspass', id, bit };
+    if ((c.closed & mask) === 0) {
+      c.closed |= mask;
+      bumpStructureVersion();
+    }
+  }
+
+  /** Release any pointer-held momentary control. */
+  private releaseMomentary(): void {
+    const held = this.heldMomentary;
+    if (!held) return;
+    this.heldMomentary = null;
+    if (held.kind === 'button') {
+      const c = this.circuit.components.get(held.id);
+      if (!c || c.kind !== 'button') return;
+      if (c.mode === 'momentary' && c.value !== 0) {
+        c.value = 0;
+        c.holdFrames = 0;
+      }
+      return;
+    }
+    if (held.kind === 'switch') {
+      const c = this.circuit.components.get(held.id);
+      if (!c || c.kind !== 'switch') return;
+      if (c.mode === 'momentary' && c.closed) {
+        c.closed = false;
+        bumpStructureVersion();
+      }
+      return;
+    }
+    const c = this.circuit.components.get(held.id);
+    if (!c || c.kind !== 'buspass') return;
+    const mask = 1 << held.bit;
+    if (c.mode === 'momentary' && (c.closed & mask) !== 0) {
+      c.closed &= ~mask;
+      bumpStructureVersion();
     }
   }
 
@@ -1407,15 +1469,21 @@ export class Editor {
           }
         }
         if (hit.kind === 'buspass' && !additive) {
-          const bit = busPassBitAt(hit, p);
-          if (bit != null) {
-            hit.closed ^= 1 << bit;
-            bumpStructureVersion();
+          if (hit.mode !== 'momentary') {
+            const bit = busPassBitAt(hit, p);
+            if (bit != null) {
+              hit.closed ^= 1 << bit;
+              bumpStructureVersion();
+            }
           }
+          // Momentary: press/release is handled on mousedown / mouseup.
         }
         if (hit.kind === 'switch' && !additive) {
-          hit.closed = !hit.closed;
-          bumpStructureVersion();
+          if (hit.mode !== 'momentary') {
+            hit.closed = !hit.closed;
+            bumpStructureVersion();
+          }
+          // Momentary: press/release is handled on mousedown / mouseup.
         }
         if (hit.kind === 'button') {
           if (hit.mode === 'toggle') {
