@@ -3,6 +3,7 @@ import { Circuit } from '../src/sim/Circuit.js';
 import { makeInput, makeProbe } from '../src/sim/library.js';
 import {
   distanceToSegment,
+  findSameNetTees,
   findWaypointNear,
   findWireNear,
   pathOverlapLength,
@@ -13,6 +14,51 @@ import {
   simplifyOrthoPath,
   type Aabb,
 } from '../src/ui/geometry.js';
+
+describe('findSameNetTees', () => {
+  const trunk = [
+    { x: 0, y: 100 },
+    { x: 300, y: 100 },
+  ];
+
+  it('dots a wire ending on the interior of another run', () => {
+    const drop = [
+      { x: 150, y: 200 },
+      { x: 150, y: 100 },
+    ];
+    expect(findSameNetTees([trunk, drop])).toEqual([{ x: 150, y: 100 }]);
+  });
+
+  it('dots the point where two colinear wires part ways', () => {
+    // Branch shares the trunk from x=0 to x=200, then turns south.
+    const branch = [
+      { x: 0, y: 100 },
+      { x: 200, y: 100 },
+      { x: 200, y: 300 },
+    ];
+    expect(findSameNetTees([trunk, branch])).toEqual([{ x: 200, y: 100 }]);
+  });
+
+  it('ignores plain H×V crossings, shared pins and lone corners', () => {
+    const cross = [
+      { x: 150, y: 0 },
+      { x: 150, y: 200 },
+    ];
+    expect(findSameNetTees([trunk, cross])).toEqual([]);
+    // Two wires leaving one pin in opposite directions: two directions only.
+    const west = [
+      { x: 0, y: 100 },
+      { x: -100, y: 100 },
+    ];
+    expect(findSameNetTees([trunk, west])).toEqual([]);
+    const corner = [
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+      { x: 50, y: 50 },
+    ];
+    expect(findSameNetTees([corner, trunk])).toEqual([]);
+  });
+});
 
 describe('distanceToSegment', () => {
   it('is 0 for a point on the segment', () => {

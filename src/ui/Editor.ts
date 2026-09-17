@@ -25,7 +25,7 @@ import {
 import { firePulse } from '../sim/labTick.js';
 import { applyPinLayout, syncPinSidesFromDef } from '../sim/orientation.js';
 import { captureCircuit, type CircuitSnapshot } from '../sim/serialize.js';
-import type { ChipInstanceComponent, Component, Pin, Point } from '../sim/types.js';
+import type { ChipInstanceComponent, Component, Pin, Point, Wire } from '../sim/types.js';
 import { showPrompt } from './Dialog.js';
 import type { TutorialHint } from './Tutorial.js';
 import {
@@ -46,10 +46,17 @@ import {
   hostBodyObstacles,
   excludePathsSharingEndpoint,
   snap,
+  simplifyOrthoPath,
   wireApproachLanes,
   wirePolyline,
   type RouteLane,
 } from './geometry.js';
+import {
+  assignRibbonRails,
+  channelRoutePenalty,
+  OVERLAP_BASE,
+  type RibbonWire,
+} from './routeChannel.js';
 
 export type SnapMode = 'grid' | 'half' | 'free';
 
@@ -394,7 +401,10 @@ export class Editor {
 
     if (this.dragWaypoint) {
       const wire = this.circuit.wires.get(this.dragWaypoint.wireId);
-      if (wire?.waypoints) wire.waypoints[this.dragWaypoint.index] = this.getSnap(p);
+      if (wire?.waypoints) {
+        wire.waypoints[this.dragWaypoint.index] = this.getSnap(p);
+        cleanupStoredWaypoints(this.circuit, wire);
+      }
       this.dragWaypoint = null;
       didDrag = true;
     }
@@ -448,6 +458,7 @@ export class Editor {
       if (wire?.waypoints) {
         wire.waypoints.splice(wp.index, 1);
         if (wire.waypoints.length === 0) delete wire.waypoints;
+        else cleanupStoredWaypoints(this.circuit, wire);
       }
     }
     return null;
@@ -832,6 +843,8 @@ export class Editor {
   pushWiresWithDrag(ids: string[], dx: number, dy: number): void {
     if (dx === 0 && dy === 0) return;
     const sel = new Set(ids);
+    const pinById = new Map<string, Pin>();
+    for (const p of this.circuit.allPins()) pinById.set(p.id, p);
 
     for (const w of this.circuit.wires.values()) {
       const aComp = w.a.split(':')[0]!;
@@ -849,8 +862,19 @@ export class Editor {
         continue;
       }
 
-      // One endpoint moved — clear stale elbows (mouseup tidy re-routes).
-      delete w.waypoints;
+      // One endpoint moved — keep the orthogonal chain still attached to the
+      // fixed pin so mouseup tidy can re-route only the short leg to that join
+      // (KiCad-style: the untouched half stays put).
+      const wps = w.waypoints;
+      if (!wps?.length) continue;
+      const fixed = pinById.get(aSel ? w.b : w.a);
+      if (!fixed) {
+        delete w.waypoints;
+        continue;
+      }
+      const keep = orthoWaypointChainFrom(fixed.pos, wps, /*fromEnd=*/ aSel);
+      if (keep.length) w.waypoints = keep;
+      else delete w.waypoints;
     }
   }
 
@@ -934,27 +958,22 @@ export class Editor {
       );
     }
 
-    let n = 0;
-    for (let idx = 0; idx < orderedIds.length; idx++) {
-      const id = orderedIds[idx]!;
+    // Facing ribbons (E↔W / N↕S between the same two hosts): assign rails jointly
+    // so verticals don't braid, including explicit sharing in tight gaps.
+    const preferRailById = assignFacingRibbonRails(this.circuit, orderedIds, pinById);
+
+    const routeOne = (id: string, frozen: Point[][], reservedLanes: RouteLane[]): Point[] | null => {
       const w = this.circuit.wires.get(id);
-      if (!w) continue;
+      if (!w) return null;
       const a = pinById.get(w.a);
       const b = pinById.get(w.b);
-      if (!a || !b) continue;
+      if (!a || !b) return null;
       const aComp = this.circuit.components.get(a.componentId);
       const bComp = this.circuit.components.get(b.componentId);
       const exclude = new Set([a.componentId, b.componentId]);
-      const reservedLanes: RouteLane[] = [];
-      for (let j = idx + 1; j < orderedIds.length; j++) {
-        const lanes = lanesByWireId.get(orderedIds[j]!);
-        if (lanes) reservedLanes.push(...lanes);
-      }
       const netId = nets.netOf.get(w.a);
       const aIsNode = aComp?.kind === 'junction' || aComp?.kind === 'label';
       const bIsNode = bComp?.kind === 'junction' || bComp?.kind === 'label';
-      // Same-net bundling into a junction creates overshoot loops (approach the
-      // node along an existing trunk from the far side). Skip preferAlong then.
       const preferAlong: Point[][] = [];
       if (netId && !aIsNode && !bIsNode) {
         for (const ow of this.circuit.wires.values()) {
@@ -964,17 +983,35 @@ export class Editor {
           if (drawn) preferAlong.push(drawn);
         }
       }
-      const routed = routeWirePoints([a.pos, b.pos], {
+      return routeWirePoints([a.pos, b.pos], {
         obstacles: routingObstacles(this.circuit, exclude),
         hostObstacles: hostBodyObstacles(this.circuit, exclude),
         startDir: pinRouteDir(a.pos, aComp),
         endDir: pinRouteDir(b.pos, bComp),
-        avoidCrossings: otherPaths,
-        avoidOverlap: excludePathsSharingEndpoint(otherPaths, a.pos, b.pos),
+        avoidCrossings: frozen,
+        avoidOverlap: excludePathsSharingEndpoint(frozen, a.pos, b.pos),
         preferAlong,
         reservedLanes,
+        preferRail: preferRailById.get(id),
         router: 'channel',
       });
+    };
+
+    let n = 0;
+    for (let idx = 0; idx < orderedIds.length; idx++) {
+      const id = orderedIds[idx]!;
+      const reservedLanes: RouteLane[] = [];
+      for (let j = idx + 1; j < orderedIds.length; j++) {
+        const lanes = lanesByWireId.get(orderedIds[j]!);
+        if (lanes) reservedLanes.push(...lanes);
+      }
+      // Full rebuild on tidy — preserved far-side waypoints from drag are only
+      // a mid-drag preview; reusing them here left 6-bend joins on busy fans.
+      const w0 = this.circuit.wires.get(id);
+      if (w0) delete w0.waypoints;
+      const routed = routeOne(id, otherPaths, reservedLanes);
+      if (!routed) continue;
+      const w = this.circuit.wires.get(id)!;
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       if (mid.length > 0) w.waypoints = mid;
       else delete w.waypoints;
@@ -982,6 +1019,69 @@ export class Editor {
       otherPaths.push(routed);
       n++;
     }
+
+    // Bounded rip-up: any wire still carrying a heavy penalty re-routes once
+    // with every other path frozen (fixes "first wire stole the only good lane").
+    const maxRip = Math.min(orderedIds.length, 24);
+    let ripped = 0;
+    for (const id of orderedIds) {
+      if (ripped >= maxRip) break;
+      const w = this.circuit.wires.get(id);
+      const path = pathByWireId.get(id);
+      const a = w && pinById.get(w.a);
+      const b = w && pinById.get(w.b);
+      if (!w || !path || !a || !b) continue;
+      const aComp = this.circuit.components.get(a.componentId);
+      const bComp = this.circuit.components.get(b.componentId);
+      const exclude = new Set([a.componentId, b.componentId]);
+      const frozen = [...pathByWireId.entries()]
+        .filter(([wid]) => wid !== id)
+        .map(([, p]) => p);
+      const netId = nets.netOf.get(w.a);
+      const aIsNode = aComp?.kind === 'junction' || aComp?.kind === 'label';
+      const bIsNode = bComp?.kind === 'junction' || bComp?.kind === 'label';
+      const preferAlong: Point[][] = [];
+      if (netId && !aIsNode && !bIsNode) {
+        for (const [wid, drawn] of pathByWireId) {
+          if (wid === id) continue;
+          const ow = this.circuit.wires.get(wid);
+          if (!ow || nets.netOf.get(ow.a) !== netId) continue;
+          preferAlong.push(drawn);
+        }
+      }
+      const penalty = channelRoutePenalty(
+        {
+          from: a.pos,
+          to: b.pos,
+          obstacles: routingObstacles(this.circuit, exclude),
+          hostObstacles: hostBodyObstacles(this.circuit, exclude),
+          startDir: pinRouteDir(a.pos, aComp),
+          endDir: pinRouteDir(b.pos, bComp),
+          avoidOverlap: excludePathsSharingEndpoint(frozen, a.pos, b.pos),
+          avoidCrossings: frozen,
+          preferAlong,
+          preferRail: preferRailById.get(id),
+        },
+        path,
+      );
+      if (penalty < OVERLAP_BASE) continue;
+      const reservedLanes: RouteLane[] = [];
+      for (const oid of orderedIds) {
+        if (oid === id) continue;
+        const lanes = lanesByWireId.get(oid);
+        if (lanes) reservedLanes.push(...lanes);
+      }
+      // Clear preserved waypoints so rip-up can pick a fresh shape.
+      delete w.waypoints;
+      const rerouted = routeOne(id, frozen, reservedLanes);
+      if (!rerouted) continue;
+      const mid = rerouted.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
+      if (mid.length > 0) w.waypoints = mid;
+      else delete w.waypoints;
+      pathByWireId.set(id, rerouted);
+      ripped++;
+    }
+
     return n;
   }
 
@@ -1821,6 +1921,126 @@ export class Editor {
     }
     return n;
   }
+}
+
+/**
+ * Waypoints still reachable by an orthogonal walk from `pin` (fixed end after
+ * a one-sided drag). `fromEnd` walks the array toward index 0.
+ */
+function orthoWaypointChainFrom(pin: Point, wps: Point[], fromEnd: boolean): Point[] {
+  const keep: Point[] = [];
+  let cur = pin;
+  if (fromEnd) {
+    for (let i = wps.length - 1; i >= 0; i--) {
+      const p = wps[i]!;
+      if (Math.abs(p.x - cur.x) > 0.5 && Math.abs(p.y - cur.y) > 0.5) break;
+      if (Math.abs(p.x - cur.x) < 0.5 && Math.abs(p.y - cur.y) < 0.5) continue;
+      keep.unshift(p);
+      cur = p;
+    }
+  } else {
+    for (let i = 0; i < wps.length; i++) {
+      const p = wps[i]!;
+      if (Math.abs(p.x - cur.x) > 0.5 && Math.abs(p.y - cur.y) > 0.5) break;
+      if (Math.abs(p.x - cur.x) < 0.5 && Math.abs(p.y - cur.y) < 0.5) continue;
+      keep.push(p);
+      cur = p;
+    }
+  }
+  return keep;
+}
+
+/**
+ * Drop colinear / duplicate bend knobs after a manual kink edit so orphan
+ * yellow handles don't float off the drawn polyline.
+ */
+function cleanupStoredWaypoints(circuit: Circuit, wire: Wire): void {
+  const raw = rawWirePolyline(circuit, wire);
+  if (!raw || raw.length < 2) {
+    delete wire.waypoints;
+    return;
+  }
+  const simplified = simplifyOrthoPath(raw);
+  const mid = simplified.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
+  if (mid.length > 0) wire.waypoints = mid;
+  else delete wire.waypoints;
+}
+
+/**
+ * Facing E↔W / N↕S ribbons between the same two hosts → joint rail map.
+ */
+function assignFacingRibbonRails(
+  circuit: Circuit,
+  orderedIds: string[],
+  pinById: Map<string, Pin>,
+): Map<string, number> {
+  type Group = {
+    h: boolean;
+    gapFrom: number;
+    gapTo: number;
+    wires: RibbonWire[];
+  };
+  const groups = new Map<string, Group>();
+  for (const id of orderedIds) {
+    const w = circuit.wires.get(id);
+    const a = w && pinById.get(w.a);
+    const b = w && pinById.get(w.b);
+    if (!w || !a || !b) continue;
+    const aComp = circuit.components.get(a.componentId);
+    const bComp = circuit.components.get(b.componentId);
+    const aDir = pinRouteDir(a.pos, aComp);
+    const bDir = pinRouteDir(b.pos, bComp);
+    if (!aDir || !bDir) continue;
+    const ew = (aDir === 'E' && bDir === 'W') || (aDir === 'W' && bDir === 'E');
+    const ns = (aDir === 'N' && bDir === 'S') || (aDir === 'S' && bDir === 'N');
+    if (!ew && !ns) continue;
+
+    // Source = pin whose exit points toward its partner.
+    let src = a;
+    let dst = b;
+    let sDir = aDir;
+    if (ew) {
+      const aFacesB = (aDir === 'E' && b.pos.x > a.pos.x) || (aDir === 'W' && b.pos.x < a.pos.x);
+      if (!aFacesB) {
+        src = b;
+        dst = a;
+        sDir = bDir!;
+      }
+    } else {
+      const aFacesB = (aDir === 'S' && b.pos.y > a.pos.y) || (aDir === 'N' && b.pos.y < a.pos.y);
+      if (!aFacesB) {
+        src = b;
+        dst = a;
+        sDir = bDir!;
+      }
+    }
+    void sDir;
+    const h = ew;
+    const key = `${src.componentId}>${dst.componentId}|${h ? 'h' : 'v'}`;
+    const gapFrom = h ? src.pos.x : src.pos.y;
+    const gapTo = h ? dst.pos.x : dst.pos.y;
+    const wire: RibbonWire = {
+      id,
+      src: h ? src.pos.y : src.pos.x,
+      dst: h ? dst.pos.y : dst.pos.x,
+    };
+    const g = groups.get(key);
+    if (g) g.wires.push(wire);
+    else groups.set(key, { h, gapFrom, gapTo, wires: [wire] });
+  }
+
+  const rails = new Map<string, number>();
+  for (const g of groups.values()) {
+    if (g.wires.length < 2) continue;
+    const gap = Math.abs(g.gapTo - g.gapFrom);
+    // A contiguous block of n lanes at the dest needs n·GRID of space; if that
+    // overruns mid-gap the joint assignment pushes verticals past the half-way
+    // mark and looks worse than per-wire near-dest picks — skip it.
+    if (g.wires.length * GRID > gap / 2 + 0.5) continue;
+    const assigned = assignRibbonRails(g.wires, g.gapFrom, g.gapTo, { step: GRID });
+    for (const [id, rail] of assigned) rails.set(id, rail);
+  }
+  return rails;
 }
 
 /** Exact name pairs first, then bus remaps; each pin used at most once. */

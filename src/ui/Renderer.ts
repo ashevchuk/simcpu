@@ -7,7 +7,7 @@ import { hasSoftLabModel, isSoftLabEnabled } from '../sim/softLab.js';
 import type { Component, Level, Pin, Point, Wire } from '../sim/types.js';
 import type { Camera } from './Camera.js';
 import type { Editor } from './Editor.js';
-import { GRID, BUS_SWITCH_BODY_W, busSwitchPaddleCenter, busSwitchSideUnit, isBusName, pinExitDir, pinRouteDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
+import { GRID, BUS_SWITCH_BODY_W, busSwitchPaddleCenter, busSwitchSideUnit, findSameNetTees, isBusName, pinExitDir, pinRouteDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
 
 const COLOR = {
   bg: '#12141a',
@@ -277,6 +277,7 @@ export function draw(
   // Crossings stay unmarked (KiCad/Logisim style). Connection dots belong on
   // real junction nodes / T-splices — not on every H×V geometric cross.
   // findWireCrossings() remains available if we later draw hop bridges.
+  drawSameNetTees(ctx, wireEntries, nets.netOf, resolve, visible);
   // Rubber-band while a wire is in progress: the start pin, every bend
   // point committed so far, then a dashed segment out to the cursor.
   if (editor.tool.kind === 'wire' && editor.wireStartPinId) {
@@ -407,7 +408,14 @@ export function draw(
       tip = net ? `${pin.name} · ${net} · ${lvl}` : `${pin.name} · ${lvl}`;
     }
   }
-  if (!tip) tip = editor.formatNetName(glowNet) ?? '';
+  if (!tip) {
+    // Sticky H / wire-select still glows the net, but the name chip only
+    // appears while the pointer is actually on a pin or wire — otherwise it
+    // sticks to empty canvas after a bend edit or selection.
+    if (editor.hoveredPinId || editor.hoveredWireId) {
+      tip = editor.formatNetName(glowNet) ?? '';
+    }
+  }
   // Chip dive preview while hovering an instance in select tool.
   if (
     !tip &&
@@ -498,6 +506,42 @@ function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, viewportW: numb
 
   ctx.fillStyle = COLOR.grid;
   ctx.fill(gridPathCache.path);
+}
+
+/**
+ * Solder dots where same-net wires split: a wire ending on another's run, or
+ * two wires that ran colinear and part ways. Nets are electrical truth, so
+ * these dots only make the drawing say what the netlist already does — no
+ * `junction` component required.
+ */
+function drawSameNetTees(
+  ctx: CanvasRenderingContext2D,
+  wires: Array<{ w: Wire; points: Point[] }>,
+  netOf: Map<string, string>,
+  resolve: LevelResolver,
+  visible: WorldBounds,
+): void {
+  const byNet = new Map<string, Array<{ w: Wire; points: Point[] }>>();
+  for (const entry of wires) {
+    const net = netOf.get(entry.w.a);
+    if (!net) continue;
+    const list = byNet.get(net);
+    if (list) list.push(entry);
+    else byNet.set(net, [entry]);
+  }
+  for (const entries of byNet.values()) {
+    if (entries.length < 2) continue;
+    const tees = findSameNetTees(entries.map((e) => e.points));
+    if (!tees.length) continue;
+    const { level, contended } = resolve(entries[0]!.w.a);
+    ctx.fillStyle = levelColor(level, contended);
+    for (const p of tees) {
+      if (p.x < visible.minX || p.x > visible.maxX || p.y < visible.minY || p.y > visible.maxY) continue;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 }
 
 /** Draws a wire as a rounded orthogonal polyline (schematic-style). */

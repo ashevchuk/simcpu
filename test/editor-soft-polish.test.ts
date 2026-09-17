@@ -110,4 +110,29 @@ describe('edit history + clipboard', () => {
     expect(ed.hoveredWireId).toBeNull();
     expect(ed.formatNetName(ed.netIdUnderPointer())).toBeNull();
   });
+
+  it('collapses colinear bend knobs after a waypoint drag', () => {
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const a = makeTransistor(c, 'N', { x: 0, y: 0 });
+    const b = makeTransistor(c, 'N', { x: 100, y: 0 });
+    // Midpoint sits on the straight A→B run — should vanish after cleanup.
+    const w = c.addWire(a.pins.drain.id, b.pins.drain.id, [
+      { x: 40, y: 0 },
+      { x: 40, y: 30 },
+      { x: 70, y: 30 },
+      { x: 70, y: 0 },
+    ]);
+    ed.selectedWireId = w.id;
+    // Simulate releasing a bend on the horizontal return (makes 70,0 colinear).
+    (ed as unknown as { dragWaypoint: { wireId: string; index: number } | null }).dragWaypoint = {
+      wireId: w.id,
+      index: 3,
+    };
+    ed.handleMouseUp({ x: 70, y: 0 }, false);
+    // Colinear 70,0 between 70,30 and pin B is dropped; spur at the pin gone.
+    expect(w.waypoints?.some((p) => Math.abs(p.y) < 0.5 && Math.abs(p.x - 70) < 0.5)).toBeFalsy();
+    expect(w.waypoints?.length).toBeGreaterThanOrEqual(1);
+  });
 });

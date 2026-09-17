@@ -3,6 +3,8 @@
  * editor share one implementation.
  */
 export {
+  assignRibbonRails,
+  channelRoutePenalty,
   escapePoint,
   routeEscapeChannel,
   simplifyChannelPath as simplifyOrthoPath,

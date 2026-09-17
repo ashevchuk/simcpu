@@ -55,6 +55,8 @@ export interface RouteOpts {
   preferAlong?: Point[][];
   /** Pin approach lanes of wires still waiting to be routed (channel router). */
   reservedLanes?: RouteLane[];
+  /** Ribbon rail (x for E↔W, y for N↕S) assigned by the tidy pass (channel router). */
+  preferRail?: number;
   /**
    * `channel` = escape-then-A* (tidy/commit). Default `pattern` = L/Z catalog
    * (rubber-band draw — cheap and stable while dragging).
@@ -560,7 +562,10 @@ function routeSegmentSmart(a: Point, b: Point, opts: RouteOpts): Point[] {
       startDir: opts.startDir,
       endDir: opts.endDir,
       avoidOverlap: opts.avoidOverlap,
+      avoidCrossings: opts.avoidCrossings,
+      preferAlong: opts.preferAlong,
       reservedLanes: opts.reservedLanes,
+      preferRail: opts.preferRail,
     });
     // Trust the maze (it blocks inflated interiors). Do not re-check with the
     // pattern pad=1 hit test — pins sit on package edges and would false-positive.
@@ -925,6 +930,63 @@ export function findWireCrossings(paths: Point[][]): Point[] {
       if (seen.has(k)) continue;
       seen.add(k);
       out.push(p);
+    }
+  }
+  return out;
+}
+
+/**
+ * Solder dots for wires of one net: every point where three or more distinct
+ * directions of same-net wire leave — a wire ending on another's run, or two
+ * colinear wires parting ways. Pure H×V crossings (two directions each) and
+ * plain corners never qualify. Cosmetic only; topology comes from the nets.
+ */
+export function findSameNetTees(paths: Point[][]): Point[] {
+  if (paths.length < 2) return [];
+  type Seg = { a: Point; b: Point };
+  const vert = new Map<number, Seg[]>();
+  const horiz = new Map<number, Seg[]>();
+  const push = (map: Map<number, Seg[]>, key: number, seg: Seg) => {
+    const list = map.get(key);
+    if (list) list.push(seg);
+    else map.set(key, [seg]);
+  };
+  for (const path of paths) {
+    for (let i = 0; i < path.length - 1; i++) {
+      const a = path[i]!;
+      const b = path[i + 1]!;
+      if (Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5) continue;
+      if (Math.abs(a.x - b.x) < 0.5) push(vert, Math.round(a.x), { a, b });
+      else if (Math.abs(a.y - b.y) < 0.5) push(horiz, Math.round(a.y), { a, b });
+    }
+  }
+  const out: Point[] = [];
+  const seen = new Set<string>();
+  for (const path of paths) {
+    for (const p of path) {
+      const key = `${Math.round(p.x)},${Math.round(p.y)}`;
+      if (seen.has(key)) continue;
+      // Directions (bit 0..3 = N E S W) in which some same-net run leaves `p`.
+      let dirs = 0;
+      for (const s of vert.get(Math.round(p.x)) ?? []) {
+        const lo = Math.min(s.a.y, s.b.y);
+        const hi = Math.max(s.a.y, s.b.y);
+        if (p.y < lo - 0.5 || p.y > hi + 0.5) continue;
+        if (p.y > lo + 0.5) dirs |= 1; // run continues north of p
+        if (p.y < hi - 0.5) dirs |= 4; // ... south
+      }
+      for (const s of horiz.get(Math.round(p.y)) ?? []) {
+        const lo = Math.min(s.a.x, s.b.x);
+        const hi = Math.max(s.a.x, s.b.x);
+        if (p.x < lo - 0.5 || p.x > hi + 0.5) continue;
+        if (p.x < hi - 0.5) dirs |= 2; // east
+        if (p.x > lo + 0.5) dirs |= 8; // west
+      }
+      let count = 0;
+      for (let bit = dirs; bit; bit &= bit - 1) count++;
+      if (count < 3) continue;
+      seen.add(key);
+      out.push({ x: p.x, y: p.y });
     }
   }
   return out;

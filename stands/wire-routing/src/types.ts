@@ -27,6 +27,11 @@ export interface FixtureNet {
   endDir?: RouteDir | null;
   /** Per-net obstacles (endpoint hosts already excluded). Falls back to fixture.obstacles. */
   obstacles?: Aabb[];
+  /**
+   * Electrical net tag. Earlier paths with the same tag become `preferAlong`
+   * (shared spine) instead of `avoidOverlap`.
+   */
+  net?: string;
   /** Soft ceilings; omitted = unchecked. */
   maxBends?: number;
   maxLength?: number;
@@ -37,6 +42,11 @@ export interface Fixture {
   description?: string;
   grid?: number;
   obstacles: Aabb[];
+  /**
+   * Group facing pairs between the same two pin rows/columns and assign a
+   * crossing-free rail to each (`preferRail`), like the editor tidy pass.
+   */
+  ribbonRails?: boolean;
   /** Route nets in order; later nets see earlier paths as avoidOverlap. */
   nets: FixtureNet[];
 }

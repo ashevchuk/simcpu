@@ -1,7 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { listFixtures, loadFixture, runFixture } from '../src/harness.js';
-import { escapePoint, routeEscapeChannel, simplifyOrthoPath } from '../src/route.js';
+import { fixtureRibbonRails, listFixtures, loadFixture, runFixture } from '../src/harness.js';
+import { assignRibbonRails, escapePoint, routeEscapeChannel, simplifyOrthoPath } from '../src/route.js';
 import { pathHitsObstacles, pathOverlapLength } from '../src/score.js';
+import type { Point } from '../src/types.js';
+
+/** H×V crossings between two orthogonal polylines (interior only). */
+function crossings(p: Point[], q: Point[]): number {
+  let n = 0;
+  for (let i = 0; i < p.length - 1; i++) {
+    for (let j = 0; j < q.length - 1; j++) {
+      const [a0, a1, b0, b1] = [p[i]!, p[i + 1]!, q[j]!, q[j + 1]!];
+      const aH = Math.abs(a0.y - a1.y) < 0.5;
+      const bH = Math.abs(b0.y - b1.y) < 0.5;
+      if (aH === bH) continue;
+      const [h0, h1, v0, v1] = aH ? [a0, a1, b0, b1] : [b0, b1, a0, a1];
+      const x = v0.x;
+      const y = h0.y;
+      if (x <= Math.min(h0.x, h1.x) + 0.5 || x >= Math.max(h0.x, h1.x) - 0.5) continue;
+      if (y <= Math.min(v0.y, v1.y) + 0.5 || y >= Math.max(v0.y, v1.y) - 0.5) continue;
+      n++;
+    }
+  }
+  return n;
+}
+
+function railOf(path: Point[]): number | undefined {
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i]!;
+    const b = path[i + 1]!;
+    if (Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) > 0.5) return a.x;
+  }
+  return undefined;
+}
 
 describe('escape-channel stand', () => {
   it('escapePoint walks clear of a body along exit dir', () => {
@@ -84,6 +114,87 @@ describe('escape-channel stand', () => {
     // Must leave the blocked mid-band at y=100 for some vertical run.
     const ys = new Set(r!.path.map((p) => p.y));
     expect([...ys].some((y) => y !== 100)).toBe(true);
+  });
+
+  it('fanout-spine: the same-net branch rides the trunk and splits near its destination', () => {
+    const fixture = loadFixture('fanout-spine');
+    const [trunk, branch] = runFixture(fixture);
+    expect(trunk!.bends).toBe(0);
+    expect(branch!.bends).toBe(2);
+    // Shared spine ≥ 200 of the 220 px trunk (jog just before the chip edge).
+    expect(pathOverlapLength(branch!.path, [trunk!.path])).toBeGreaterThanOrEqual(200);
+    // Without the same-net tag the branch would jog around the gap centre.
+    const untagged = structuredClone(fixture);
+    for (const n of untagged.nets) delete n.net;
+    const [, plain] = runFixture(untagged);
+    expect(pathOverlapLength(plain!.path, [trunk!.path])).toBeLessThan(150);
+  });
+
+  it('ribbon-shifted: rails nest so no two wires cross or merge', () => {
+    const fixture = loadFixture('ribbon-shifted');
+    const results = runFixture(fixture);
+    const rails = results.map((r) => railOf(r.path));
+    // Top wire nearest the destination, one contiguous lane per wire.
+    expect(rails).toEqual([220, 210, 200, 190]);
+    for (let i = 0; i < results.length; i++) {
+      for (let j = i + 1; j < results.length; j++) {
+        const a = results[i]!;
+        const b = results[j]!;
+        expect(crossings(a.path, b.path), `${a.id} crosses ${b.id}`).toBe(0);
+        expect(pathOverlapLength(a.path, [b.path]), `${a.id} overlaps ${b.id}`).toBe(0);
+      }
+    }
+  });
+
+  it('ribbon-tight: wires with disjoint spans pair up on the two clear lanes', () => {
+    const fixture = loadFixture('ribbon-tight');
+    const assigned = fixtureRibbonRails(fixture, 10);
+    expect([...assigned.values()].sort()).toEqual([100, 100, 90, 90]);
+    const results = runFixture(fixture);
+    for (const r of results) {
+      expect(railOf(r.path), `${r.id} rail`).toBe(assigned.get(r.id));
+      expect(r.bends).toBe(2);
+    }
+    for (let i = 0; i < results.length; i++) {
+      for (let j = i + 1; j < results.length; j++) {
+        const a = results[i]!;
+        const b = results[j]!;
+        expect(crossings(a.path, b.path), `${a.id} crosses ${b.id}`).toBe(0);
+        expect(pathOverlapLength(a.path, [b.path]), `${a.id} overlaps ${b.id}`).toBe(0);
+      }
+    }
+  });
+
+  it('assignRibbonRails: converging fan-in nests from both sides and braids fall back to pin order', () => {
+    // Top wires go down, bottom wires go up: the inner wire's source row
+    // would cut the outer wire's vertical, so outer wires take the lanes
+    // nearest the destination and inner wires the lanes nearest the source.
+    const fanIn = assignRibbonRails(
+      [
+        { id: 't1', src: 20, dst: 80 },
+        { id: 't2', src: 40, dst: 90 },
+        { id: 'b2', src: 160, dst: 110 },
+        { id: 'b1', src: 180, dst: 120 },
+      ],
+      100,
+      300,
+    );
+    expect(fanIn.get('t2')!).toBeLessThan(fanIn.get('t1')!);
+    expect(fanIn.get('b2')!).toBeLessThan(fanIn.get('b1')!);
+    // Lanes are distinct and sit clear of the source pins.
+    const lanes = [...fanIn.values()];
+    expect(new Set(lanes).size).toBe(4);
+    for (const l of lanes) expect(l - 100).toBeGreaterThan(25);
+    // A true braid (pins swapped) has no crossing-free order; still one lane each.
+    const braid = assignRibbonRails(
+      [
+        { id: 'p', src: 20, dst: 60 },
+        { id: 'q', src: 60, dst: 20 },
+      ],
+      100,
+      300,
+    );
+    expect(new Set(braid.values()).size).toBe(2);
   });
 
   it('perf: 50 random clear pairs under 2ms average', () => {
