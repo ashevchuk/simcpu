@@ -345,10 +345,12 @@ dist-file/        Generated static app (gitignored; published on `gh-pages`)
 
 ## Third-party / licenses
 
+**SimCPU source** (this repository, excluding `third_party/`) is licensed under the **[MIT License](./LICENSE)**.
+
+Bundled firmware and disk images keep their upstream terms:
+
 - **`third_party/spectrum/`** — ZX Spectrum ROMs (Amstrad permission for emulator redistribution) + freeware games under `games/`. See [`third_party/spectrum/README.md`](./third_party/spectrum/README.md).
 - **`third_party/cpm/`** — CP/M 2.2 + rogue disks via z80pack heritage; educational/non-commercial redistribution. See [`third_party/cpm/README.md`](./third_party/cpm/README.md).
-
-Project code is intended for open research / education. Add a root `LICENSE` before tagging a formal release if you need a specific OSI license statement.
 
 ---
 
