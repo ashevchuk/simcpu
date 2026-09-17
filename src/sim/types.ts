@@ -17,12 +17,14 @@ export type ComponentKind =
   | 'source' // fixed driver: VCC (1) or GND (0)
   | 'input' // user-toggleable driver, e.g. a switch
   | 'button' // lab pushbutton: momentary pulse or toggle
+  | 'switch' // SPST pass: closed merges in↔out into one net
   | 'led' // lab indicator — sink only, like probe with a glow
   | 'sevenseg' // 7-segment display — sense pins a..g (+ optional dp)
   | 'clock' // configurable pulse generator (continuous or one-shot)
   | 'analyzer' // multi-channel logic analyzer instrument (sense pins)
   | 'busprobe' // multi-bit sense bus with hex/dec/bin decode on canvas
   | 'busswitch' // writable multi-bit DIP/hex bus driver (b0.. outputs)
+  | 'buspass' // N SPST passes: closed bit i merges aᵢ↔bᵢ
   | 'tty' // machine TTY / soft console instrument (opens dialog)
   | 'probe' // read-only display of a net's value, no electrical effect
   | 'label' // named net tie point (same name => same net, see Circuit)
@@ -96,6 +98,21 @@ export interface ButtonComponent {
   mirrorX: boolean;
   mirrorY: boolean;
   pins: { out: Pin };
+}
+
+/**
+ * SPST pass-through switch. When `closed`, `in` and `out` share one net
+ * (Circuit.computeNets unions them). Open = electrically separate. Not a driver.
+ */
+export interface SwitchComponent {
+  id: string;
+  kind: 'switch';
+  closed: boolean;
+  pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
+  mirrorY: boolean;
+  pins: { in: Pin; out: Pin };
 }
 
 /** Lab LED — electrically a probe; drawn as a glowing indicator. */
@@ -212,6 +229,26 @@ export interface BusSwitchComponent {
   mirrorY: boolean;
   pinOrder: string[];
   /** b0 .. b{bitWidth-1} — output drivers */
+  pins: Record<string, Pin>;
+}
+
+/**
+ * Bank of SPST pass switches. Bit *i* of `closed` merges pins `a{i}` ↔ `b{i}`
+ * into one net when set. Not a driver (unlike `busswitch`).
+ */
+export interface BusPassComponent {
+  id: string;
+  kind: 'buspass';
+  bitWidth: number;
+  /** Bitmask: bit i closed ⇒ aᵢ connected to bᵢ. */
+  closed: number;
+  label?: string;
+  pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
+  mirrorY: boolean;
+  pinOrder: string[];
+  /** a0..a{n-1}, b0..b{n-1} */
   pins: Record<string, Pin>;
 }
 
@@ -383,12 +420,14 @@ export type Component =
   | SourceComponent
   | InputComponent
   | ButtonComponent
+  | SwitchComponent
   | LedComponent
   | SevenSegComponent
   | ClockComponent
   | AnalyzerComponent
   | BusProbeComponent
   | BusSwitchComponent
+  | BusPassComponent
   | TtyComponent
   | ProbeComponent
   | LabelComponent

@@ -757,12 +757,14 @@ const CURSOR: Record<Tool['kind'], string> = {
   gnd: 'copy',
   input: 'copy',
   button: 'copy',
+  switch: 'copy',
   led: 'copy',
   sevenseg: 'copy',
   clock: 'copy',
   analyzer: 'copy',
   busprobe: 'copy',
   busswitch: 'copy',
+  buspass: 'copy',
   tty: 'copy',
   probe: 'copy',
   label: 'copy',
@@ -784,12 +786,14 @@ const PLACE_TOOL_LABELS: Partial<Record<Tool['kind'], string>> = {
   gnd: 'placing GND',
   input: 'placing input',
   button: 'placing button',
+  switch: 'placing switch',
   led: 'placing LED',
   sevenseg: 'placing 7-seg',
   clock: 'placing pulse gen',
   analyzer: 'placing analyzer',
   busprobe: 'placing bus probe',
   busswitch: 'placing bus switch',
+  buspass: 'placing pass switch bank',
   tty: 'placing TTY',
   probe: 'placing probe',
   label: 'placing net label',
@@ -2059,6 +2063,15 @@ function exportSchematicSvg(): void {
         );
         break;
       }
+      case 'switch': {
+        parts.push(
+          `<rect x="${x - 18}" y="${y - 11}" width="36" height="22" rx="4" fill="#151820" stroke="${c.closed ? '#8fd46a' : '#7d8496'}" stroke-width="1.3"/>`,
+        );
+        parts.push(
+          `<text x="${x}" y="${y + 4}" text-anchor="middle" fill="#e7e9ef" font-family="ui-monospace,monospace" font-size="9">${c.closed ? 'ON' : 'OFF'}</text>`,
+        );
+        break;
+      }
       case 'led': {
         parts.push(`<circle cx="${x}" cy="${y}" r="11" fill="#1a1c22" stroke="${escapeXml(c.color)}" stroke-width="1.4"/>`);
         if (c.label) {
@@ -2140,6 +2153,7 @@ function exportSchematicSvg(): void {
       case 'analyzer':
       case 'busprobe':
       case 'busswitch':
+      case 'buspass':
       case 'tty': {
         const label =
           c.kind === 'clock'
@@ -2150,7 +2164,9 @@ function exportSchematicSvg(): void {
                 ? 'BUS'
                 : c.kind === 'busswitch'
                   ? 'DIP'
-                  : 'TTY';
+                  : c.kind === 'buspass'
+                    ? 'PASS'
+                    : 'TTY';
         parts.push(
           `<rect x="${x - 28}" y="${y - 18}" width="56" height="36" rx="6" fill="#191c25" stroke="#f5c518" stroke-width="1.3"/>`,
         );

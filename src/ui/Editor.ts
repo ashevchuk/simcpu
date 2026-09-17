@@ -1,7 +1,8 @@
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
-import { Circuit, nextId } from '../sim/Circuit.js';
+import { Circuit, bumpStructureVersion, nextId } from '../sim/Circuit.js';
 import {
   makeAnalyzer,
+  makeBusPass,
   makeBusProbe,
   makeBusSwitch,
   makeButton,
@@ -15,10 +16,12 @@ import {
   makeProbe,
   makeSevenSeg,
   makeSource,
+  makeSwitch,
   makeTransistor,
   makeTty,
   nextAutoPortName,
   parseBusPortSpec,
+  relayoutBusPassPins,
   relayoutBusProbePins,
   relayoutBusSwitchPins,
 } from '../sim/library.js';
@@ -30,6 +33,7 @@ import { showPrompt } from './Dialog.js';
 import type { TutorialHint } from './Tutorial.js';
 import {
   busSwitchBitAt,
+  busPassBitAt,
   dist,
   findComponentNear,
   findPinNear,
@@ -38,6 +42,7 @@ import {
   GRID,
   interiorWaypoints,
   nearestOnPolyline,
+  orthoCorners,
   pinExitDir,
   pinRouteDir,
   rawWirePolyline,
@@ -49,6 +54,7 @@ import {
   simplifyOrthoPath,
   pathHitsObstacles,
   wireApproachLanes,
+  wireLaneOf,
   wirePolyline,
   type RouteLane,
   type RouteOpts,
@@ -72,12 +78,14 @@ export type Tool =
   | { kind: 'gnd' }
   | { kind: 'input' }
   | { kind: 'button' }
+  | { kind: 'switch' }
   | { kind: 'led' }
   | { kind: 'sevenseg' }
   | { kind: 'clock' }
   | { kind: 'analyzer' }
   | { kind: 'busprobe' }
   | { kind: 'busswitch' }
+  | { kind: 'buspass' }
   | { kind: 'tty' }
   | { kind: 'probe' }
   | { kind: 'label' }
@@ -397,7 +405,8 @@ export class Editor {
       this.selectedWireId = null;
       this.draggingComponents = null;
       didDrag = true;
-      this.tidySelectedWires(false, { preserveManual: false });
+      // Khanin-style: mid-drag stub reflow already kept wires orthogonal —
+      // no full tidy rebuild on mouseup (T / tidy still available explicitly).
     }
     this.pendingComponentDrag = null; // never promoted past the threshold — a plain click, see performClick
 
@@ -838,8 +847,8 @@ export class Editor {
 
   /**
    * While dragging components: translate waypoints of wires whose both ends
-   * move together. For one-sided wires, keep the far ortho stub and locally
-   * repair the moved-pin leg every frame so the preview does not diagonalize.
+   * move together. For one-sided wires, reflow only the stub adjacent to the
+   * moving pin (Khanin `_reflowEndSegs`) — far geometry stays put.
    */
   pushWiresWithDrag(ids: string[], dx: number, dy: number): void {
     if (dx === 0 && dy === 0) return;
@@ -863,48 +872,24 @@ export class Editor {
         continue;
       }
 
-      // One endpoint moved — keep the orthogonal chain on the fixed pin, then
-      // re-route only moved→join (KiCad-style; far half stays put mid-drag).
+      // Exactly one end moved — keep far waypoints; nudge the near stub so the
+      // exit from the moving pin stays orthogonal (H stub → match pin Y, V → X).
       const wps = w.waypoints;
       if (!wps?.length) continue;
       const pa = pinById.get(w.a);
       const pb = pinById.get(w.b);
-      const fixed = aSel ? pb : pa;
-      if (!pa || !pb || !fixed) {
-        delete w.waypoints;
-        continue;
-      }
-      const keep = orthoWaypointChainFrom(fixed.pos, wps, /*fromEnd=*/ aSel);
-      if (!keep.length) {
-        delete w.waypoints;
-        continue;
-      }
-      w.waypoints = keep;
-      const aHost = this.circuit.components.get(pa.componentId);
-      const bHost = this.circuit.components.get(pb.componentId);
-      const exclude = new Set([pa.componentId, pb.componentId]);
-      const dragOpts = {
-        obstacles: routingObstacles(this.circuit, exclude),
-        hostObstacles: hostBodyObstacles(this.circuit, exclude),
-        startDir: pinRouteDir(pa.pos, aHost),
-        endDir: pinRouteDir(pb.pos, bHost),
-        router: 'channel' as const,
-      };
-      let repaired = tryLocalRepairRoute(pa.pos, pb.pos, keep, dragOpts);
-      // Channel repair that freezes a stair/mid-gap jog is worse than a simple
-      // L to the far join — keep the preview orthogonal either way.
-      if (
-        !repaired ||
-        hasPinColumnStair(repaired) ||
-        verticalPastMidGap(repaired)
-      ) {
-        repaired = simpleRepairToFarStub(pa.pos, pb.pos, keep, aSel);
-      }
-      if (repaired && repaired.length >= 2) {
-        const mid = repaired.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
-        if (mid.length) w.waypoints = mid;
-        else delete w.waypoints;
-      }
+      if (!pa || !pb) continue;
+      const moved = aSel ? pa : pb;
+      const idx = aSel ? 0 : wps.length - 1;
+      const adj = wps[idx];
+      if (!adj) continue;
+      // Orientation vs pin *before* this frame's move (pin already advanced).
+      const prevY = moved.pos.y - dy;
+      const prevX = moved.pos.x - dx;
+      const horiz = Math.abs(adj.y - prevY) < 0.5;
+      const vert = Math.abs(adj.x - prevX) < 0.5;
+      if (horiz) adj.y = moved.pos.y;
+      else if (vert) adj.x = moved.pos.x;
     }
   }
 
@@ -1294,6 +1279,54 @@ export class Editor {
     return true;
   }
 
+  /** Change bus-pass width (1–32); drops wires on removed poles. */
+  setBusPassWidth(id: string, bitWidth: number): boolean {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'buspass') return false;
+    const n = Math.max(1, Math.min(32, bitWidth | 0));
+    if (n === c.bitWidth) return false;
+    this.noteEdit();
+    const removed: string[] = [];
+    for (let i = n; i < c.bitWidth; i++) {
+      const a = c.pins[`a${i}`];
+      const b = c.pins[`b${i}`];
+      if (a) removed.push(a.id);
+      if (b) removed.push(b.id);
+    }
+    c.bitWidth = n;
+    relayoutBusPassPins(c);
+    applyPinLayout(c);
+    bumpStructureVersion();
+    if (removed.length) {
+      for (const [wid, w] of [...this.circuit.wires]) {
+        if (removed.includes(w.a) || removed.includes(w.b)) this.circuit.removeWire(wid);
+      }
+    }
+    return true;
+  }
+
+  setBusPassClosed(id: string, closed: number): boolean {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'buspass') return false;
+    const mask = c.bitWidth >= 31 ? 0x7fffffff : (1 << c.bitWidth) - 1;
+    const v = (closed | 0) & mask;
+    if (v === c.closed) return false;
+    this.noteEdit();
+    c.closed = v;
+    bumpStructureVersion();
+    return true;
+  }
+
+  setSwitchClosed(id: string, closed: boolean): boolean {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'switch') return false;
+    if (c.closed === closed) return false;
+    this.noteEdit();
+    c.closed = closed;
+    bumpStructureVersion();
+    return true;
+  }
+
   /** Optional custom chip body width / silkscreen marking. */
   setChipAppearance(componentId: string, opts: { boxWidth?: number; marking?: string }): boolean {
     const c = this.circuit.components.get(componentId);
@@ -1338,6 +1371,17 @@ export class Editor {
             hit.value = (hit.value + 1) & mask;
           }
         }
+        if (hit.kind === 'buspass' && !additive) {
+          const bit = busPassBitAt(hit, p);
+          if (bit != null) {
+            hit.closed ^= 1 << bit;
+            bumpStructureVersion();
+          }
+        }
+        if (hit.kind === 'switch' && !additive) {
+          hit.closed = !hit.closed;
+          bumpStructureVersion();
+        }
         if (hit.kind === 'button') {
           if (hit.mode === 'toggle') {
             hit.value = hit.value === 1 ? 0 : 1;
@@ -1373,8 +1417,8 @@ export class Editor {
   /**
    * Click-to-route wiring: first click on a pin (or wire node / mid-wire T-junction)
    * starts the wire; further empty clicks add bends; click a pin or another wire
-   * commits. Pin→pin with no manual bends uses smart orthogonal routing (obstacles /
-   * crossings) like Tidy — same as Turing Complete nodes + our auto-route.
+   * commits. Pin→pin with no manual bends bakes a simple ortho L/Z (lane-aware);
+   * use Tidy for channel re-route around bodies.
    */
   private handleWireClick(p: Point): void {
     const pin = findPinNear(this.circuit, p, 22);
@@ -1436,8 +1480,9 @@ export class Editor {
   }
 
   /**
-   * Add a wire with smart ortho routing when the user did not place bends;
-   * otherwise keep their waypoints.
+   * Add a wire: manual bends are kept as-is; pin→pin with no bends bakes a
+   * Khanin-style L/Z (`orthoCorners` + lane) so the wire owns its shape.
+   * Channel tidy remains available via T / tidySelectedWires.
    */
   private commitRoutedWire(aId: string, bId: string, manualWaypoints: Point[]): void {
     if (manualWaypoints.length > 0) {
@@ -1454,32 +1499,17 @@ export class Editor {
     }
     const aComp = this.circuit.components.get(a.componentId);
     const bComp = this.circuit.components.get(b.componentId);
-    const exclude = new Set([a.componentId, b.componentId]);
-    const nets = this.circuit.computeNets();
-    const otherPaths: Point[][] = [];
-    const preferAlong: Point[][] = [];
-    const netId = nets.netOf.get(aId);
-    const aIsNode = aComp?.kind === 'junction' || aComp?.kind === 'label';
-    const bIsNode = bComp?.kind === 'junction' || bComp?.kind === 'label';
-    for (const ow of this.circuit.wires.values()) {
-      const poly = rawWirePolyline(this.circuit, ow);
-      if (!poly) continue;
-      const drawn = routeWirePoints(poly);
-      otherPaths.push(drawn);
-      if (netId && !aIsNode && !bIsNode && nets.netOf.get(ow.a) === netId) preferAlong.push(drawn);
-    }
-    const routed = routeWirePoints([a.pos, b.pos], {
-      obstacles: routingObstacles(this.circuit, exclude),
-      hostObstacles: hostBodyObstacles(this.circuit, exclude),
-      startDir: pinRouteDir(a.pos, aComp),
-      endDir: pinRouteDir(b.pos, bComp),
-      avoidCrossings: otherPaths,
-      avoidOverlap: excludePathsSharingEndpoint(otherPaths, a.pos, b.pos),
-      preferAlong,
-      router: 'channel',
-    });
-    const mid = interiorWaypoints(routed);
-    this.circuit.addWire(aId, bId, mid.length ? mid : undefined);
+    const lane = wireLaneOf(this.circuit, aId);
+    const corners = orthoCorners(
+      a.pos,
+      b.pos,
+      pinRouteDir(a.pos, aComp),
+      pinRouteDir(b.pos, bComp),
+      lane,
+    );
+    const mid = interiorWaypoints([a.pos, ...corners, b.pos]);
+    const w = this.circuit.addWire(aId, bId, mid.length ? mid : undefined);
+    cleanupStoredWaypoints(this.circuit, w);
   }
 
   /** Split wire at a stored waypoint index → junction pin (replaces that bend). */
@@ -1568,6 +1598,9 @@ export class Editor {
       case 'button':
         place(() => makeButton(this.circuit, p));
         break;
+      case 'switch':
+        place(() => makeSwitch(this.circuit, p));
+        break;
       case 'led':
         place(() => makeLed(this.circuit, p));
         break;
@@ -1605,6 +1638,16 @@ export class Editor {
           if (n !== 4 && n !== 8) n = n <= 4 ? 4 : 8;
           this.noteEdit();
           makeBusSwitch(this.circuit, n, p);
+        });
+        break;
+      }
+      case 'buspass': {
+        void showPrompt('Pass switch bank width (1–32):', '8').then((raw) => {
+          if (!raw) return;
+          const n = parseInt(raw, 10);
+          if (!Number.isFinite(n) || n < 1) return;
+          this.noteEdit();
+          makeBusPass(this.circuit, Math.min(32, n), p);
         });
         break;
       }
@@ -2017,33 +2060,6 @@ function cleanupStoredWaypoints(circuit: Circuit, wire: Wire): void {
 }
 
 type ChannelRouteOpts = RouteOpts;
-
-/**
- * Cheap ortho leg from the moved pin to the far stub join (HV into the join
- * column/row). Used mid-drag when channel repair would freeze a stair.
- */
-function simpleRepairToFarStub(
-  a: Point,
-  b: Point,
-  keep: Point[],
-  aMoved: boolean,
-): Point[] | null {
-  if (!keep.length) return null;
-  if (aMoved) {
-    const join = keep[0]!;
-    const leg =
-      Math.abs(a.x - join.x) < 0.5 || Math.abs(a.y - join.y) < 0.5
-        ? [a, join]
-        : [a, { x: join.x, y: a.y }, join];
-    return simplifyOrthoPath(concatOrtho(leg, keep, b));
-  }
-  const join = keep[keep.length - 1]!;
-  const leg =
-    Math.abs(b.x - join.x) < 0.5 || Math.abs(b.y - join.y) < 0.5
-      ? [join, b]
-      : [join, { x: join.x, y: b.y }, b];
-  return simplifyOrthoPath(concatOrtho([a, ...keep], leg.slice(1), b));
-}
 
 /**
  * Keep user/drag ortho waypoints on tidy when the path is still orthogonal,

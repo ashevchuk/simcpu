@@ -2,12 +2,12 @@ import { bodyEdgeToward, getOrientation, transformOffset } from '../sim/orientat
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import { decodeBusProbe } from '../sim/busProbe.js';
-import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from '../sim/library.js';
+import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, BUS_PASS_BODY_W, ramPortCount, romPortCount } from '../sim/library.js';
 import { hasSoftLabModel, isSoftLabEnabled } from '../sim/softLab.js';
 import type { Component, Level, Pin, Point, Wire } from '../sim/types.js';
 import type { Camera } from './Camera.js';
 import type { Editor } from './Editor.js';
-import { GRID, BUS_SWITCH_BODY_W, busSwitchPaddleCenter, busSwitchSideUnit, findSameNetTees, isBusName, pinExitDir, pinRouteDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
+import { GRID, BUS_SWITCH_BODY_W, busPassPaddleCenter, busSwitchPaddleCenter, busSwitchSideUnit, findSameNetTees, isBusName, pinExitDir, pinRouteDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
 
 const COLOR = {
   bg: '#12141a',
@@ -67,6 +67,8 @@ export function componentRadius(c: Component): { rx: number; ry: number } {
       return { rx: 30, ry: 34 };
     case 'button':
       return { rx: 28, ry: 26 };
+    case 'switch':
+      return { rx: 28, ry: 22 };
     case 'source':
       return { rx: 28, ry: 30 };
     case 'input':
@@ -79,6 +81,8 @@ export function componentRadius(c: Component): { rx: number; ry: number } {
       return { rx: 52, ry: Math.max(28, (c.bitWidth * 16) / 2 + 24) };
     case 'busswitch':
       return { rx: 60, ry: Math.max(28, (c.bitWidth * 16) / 2 + 24) };
+    case 'buspass':
+      return { rx: BUS_PASS_BODY_W / 2 + 16, ry: Math.max(28, (c.bitWidth * 16) / 2 + 24) };
     case 'tty':
       return { rx: 44, ry: 30 };
     case 'probe':
@@ -1200,6 +1204,41 @@ function drawComponent(
       drawPinDot(ctx, c.pins.out, resolve);
       break;
     }
+    case 'switch': {
+      const { x, y } = c.pos;
+      const w = 36;
+      const h = 22;
+      if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 4, ringColor);
+      ctx.fillStyle = '#151820';
+      roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 4);
+      ctx.fill();
+      ctx.strokeStyle = bodyStroke(c.closed ? '#8fd46a' : COLOR.bodyStroke);
+      ctx.lineWidth = selected || hovered ? 2 : 1.2;
+      ctx.stroke();
+      stubPin(x, y, w / 2, h / 2, c.pins.in);
+      stubPin(x, y, w / 2, h / 2, c.pins.out);
+      drawPinDot(ctx, c.pins.in, resolve);
+      drawPinDot(ctx, c.pins.out, resolve);
+      // Knife blade: closed = bridge across, open = lifted toward out side.
+      ctx.strokeStyle = c.closed ? '#8fd46a' : '#8a93a8';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      if (c.closed) {
+        ctx.moveTo(x - 8, y);
+        ctx.lineTo(x + 8, y);
+      } else {
+        ctx.moveTo(x - 8, y);
+        ctx.lineTo(x + 6, y - 7);
+      }
+      ctx.stroke();
+      ctx.fillStyle = COLOR.textDim;
+      ctx.font = '7px ui-monospace, "SF Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(c.closed ? 'ON' : 'OFF', x, y + 8);
+      break;
+    }
     case 'clock': {
       const { x, y } = c.pos;
       const w = 44;
@@ -1375,6 +1414,53 @@ function drawComponent(
         const ky = pad.y + (on ? -3.5 : 3.5);
         ctx.fillStyle = on ? '#8fd46a' : '#5a6270';
         roundRectPath(ctx, pad.x - 4, ky - 3.5, 8, 7, 1.5);
+        ctx.fill();
+      }
+      break;
+    }
+    case 'buspass': {
+      const { x, y } = c.pos;
+      const n = c.bitWidth;
+      const h = Math.max(44, (n - 1) * 20 + 28);
+      const w = BUS_PASS_BODY_W;
+      if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 5, ringColor);
+      ctx.fillStyle = '#141820';
+      roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 5);
+      ctx.fill();
+      ctx.strokeStyle = bodyStroke('#5a8aaa');
+      ctx.lineWidth = selected || hovered ? 2 : 1.25;
+      ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = COLOR.textDim;
+      ctx.font = '8px ui-monospace, "SF Mono", monospace';
+      ctx.fillText(c.label?.trim() || `SW×${n}`, x, y - h / 2 + 10);
+      for (let i = 0; i < n; i++) {
+        const pa = c.pins[`a${i}`];
+        const pb = c.pins[`b${i}`];
+        if (pa) {
+          stubPin(x, y, w / 2, h / 2, pa);
+          drawPinDot(ctx, pa, resolve);
+          drawBodyPinLabel(ctx, pa, x, y, String(i), w, h);
+        }
+        if (pb) {
+          stubPin(x, y, w / 2, h / 2, pb);
+          drawPinDot(ctx, pb, resolve);
+        }
+        const pad = busPassPaddleCenter(c, i);
+        if (!pad) continue;
+        const on = ((c.closed >> i) & 1) === 1;
+        const slotW = 12;
+        const slotH = 14;
+        ctx.fillStyle = '#0c0e12';
+        roundRectPath(ctx, pad.x - slotW / 2, pad.y - slotH / 2, slotW, slotH, 2);
+        ctx.fill();
+        ctx.strokeStyle = '#3a4558';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        const ky = pad.y + (on ? -3.5 : 3.5);
+        ctx.fillStyle = on ? '#6ab0e8' : '#5a6270';
+        roundRectPath(ctx, pad.x - 4.5, ky - 3.5, 9, 7, 1.5);
         ctx.fill();
       }
       break;

@@ -10,6 +10,7 @@ import type { Circuit } from './Circuit.js';
 import {
   ANALYZER_PIN_DX,
   analyzerPinDys,
+  BUS_PASS_PIN_DX,
   BUS_SWITCH_PIN_DX,
   CHIP_PIN_DX,
   CHIP_PIN_DX_RIGHT,
@@ -99,7 +100,9 @@ export function isOrientable(c: Component): boolean {
     c.kind === 'rom' ||
     c.kind === 'analyzer' ||
     c.kind === 'busprobe' ||
-    c.kind === 'busswitch'
+    c.kind === 'busswitch' ||
+    c.kind === 'switch' ||
+    c.kind === 'buspass'
   );
 }
 
@@ -170,6 +173,10 @@ export function applyPinLayout(c: Component): void {
     case 'button':
       setPin(c.pins.out, cx, cy, LAYOUT.button.out[0], LAYOUT.button.out[1], rotation, mirrorX, mirrorY);
       break;
+    case 'switch':
+      setPin(c.pins.in, cx, cy, LAYOUT.switch.in[0], LAYOUT.switch.in[1], rotation, mirrorX, mirrorY);
+      setPin(c.pins.out, cx, cy, LAYOUT.switch.out[0], LAYOUT.switch.out[1], rotation, mirrorX, mirrorY);
+      break;
     case 'led':
       setPin(c.pins.in, cx, cy, LAYOUT.led.in[0], LAYOUT.led.in[1], rotation, mirrorX, mirrorY);
       break;
@@ -236,6 +243,17 @@ export function applyPinLayout(c: Component): void {
       if (!c.pinOrder?.length) c.pinOrder = order;
       // Outputs on the right (outside package), same side for every bit including ends.
       applyStackedPins(c, BUS_SWITCH_PIN_DX, analyzerPinDys(order.length), rotation, mirrorX, mirrorY);
+      break;
+    }
+    case 'buspass': {
+      const dys = analyzerPinDys(c.bitWidth);
+      for (let i = 0; i < c.bitWidth; i++) {
+        const a = c.pins[`a${i}`];
+        const b = c.pins[`b${i}`];
+        const dy = dys[i] ?? 0;
+        if (a) setPin(a, cx, cy, -BUS_PASS_PIN_DX, dy, rotation, mirrorX, mirrorY);
+        if (b) setPin(b, cx, cy, BUS_PASS_PIN_DX, dy, rotation, mirrorX, mirrorY);
+      }
       break;
     }
     default:
