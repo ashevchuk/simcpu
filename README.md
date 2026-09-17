@@ -2,8 +2,6 @@
 
 **Transistor-level schematic editor** with live switch-level simulation, foldable chips, a Soft Lab digital pack, and an optional soft Z80 machine (TTY, ZX Spectrum, CP/M) — all in the browser.
 
-Inspired by [cs.khanin.info](https://cs.khanin.info/).
-
 ---
 
 ### Try it in the browser

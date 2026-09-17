@@ -405,7 +405,7 @@ export class Editor {
       this.selectedWireId = null;
       this.draggingComponents = null;
       didDrag = true;
-      // Khanin-style: mid-drag stub reflow already kept wires orthogonal —
+      // Mid-drag stub reflow already kept wires orthogonal —
       // no full tidy rebuild on mouseup (T / tidy still available explicitly).
     }
     this.pendingComponentDrag = null; // never promoted past the threshold — a plain click, see performClick
@@ -848,7 +848,7 @@ export class Editor {
   /**
    * While dragging components: translate waypoints of wires whose both ends
    * move together. For one-sided wires, reflow only the stub adjacent to the
-   * moving pin (Khanin `_reflowEndSegs`) — far geometry stays put.
+   * moving pin — far geometry stays put.
    */
   pushWiresWithDrag(ids: string[], dx: number, dy: number): void {
     if (dx === 0 && dy === 0) return;
@@ -1481,7 +1481,7 @@ export class Editor {
 
   /**
    * Add a wire: manual bends are kept as-is; pin→pin with no bends bakes a
-   * Khanin-style L/Z (`orthoCorners` + lane) so the wire owns its shape.
+   * simple L/Z (`orthoCorners` + lane) so the wire owns its shape.
    * Channel tidy remains available via T / tidySelectedWires.
    */
   private commitRoutedWire(aId: string, bId: string, manualWaypoints: Point[]): void {

@@ -2,7 +2,7 @@
   "name": "z80-circuit-sim",
   "version": "0.1.0",
   "private": true,
-  "description": "Transistor-level circuit simulator, foundation for an in-browser Z80-based retro computer (inspired by cs.khanin.info).",
+  "description": "Transistor-level circuit simulator with Soft Lab chips and an in-browser Z80 / ZX Spectrum machine.",
   "type": "module",
   "scripts": {
     "dev": "vite",

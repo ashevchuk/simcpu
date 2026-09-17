@@ -64,7 +64,7 @@ export type LevelResolver = (pinId: string) => { level: Level; contended: boolea
 export function componentRadius(c: Component): { rx: number; ry: number } {
   switch (c.kind) {
     case 'transistor':
-      return { rx: 30, ry: 34 };
+      return { rx: 36, ry: 34 };
     case 'button':
       return { rx: 28, ry: 26 };
     case 'switch':
@@ -891,8 +891,10 @@ function drawBodyPinLabel(
 }
 
 /**
- * Classic enhancement-mode MOSFET in local coords (gate left, D/S vertical),
- * then oriented via rotation / flip H/V on the canvas transform.
+ * Enhancement MOSFET matching the lab reference card:
+ * three thick channel bars, narrow gate gap, substrate stub from the
+ * middle bar (arrow N→in / P→out) then L-bend into the source-side
+ * channel rectangle (not into the D/S stem wire).
  */
 function drawMosfetSymbol(
   ctx: CanvasRenderingContext2D,
@@ -902,14 +904,25 @@ function drawMosfetSymbol(
   hovered: boolean,
 ): void {
   const { rotation, mirrorX, mirrorY } = getOrientation(c);
-  const chanX = 2;
-  const gatePlateX = -8;
+  const isN = c.type === 'N';
   const gateX = -28;
-  const topY = -28;
-  const botY = 28;
-  const midY = 0;
-  const sourceY = c.type === 'P' ? -28 : 28;
-  const drainY = c.type === 'P' ? 28 : -28;
+  // Narrow insulator gap (≈ stroke width), like the reference card.
+  const gatePlateX = -7;
+  const chanX = 0;
+  const bodyX = 11;
+  const topPinY = -28;
+  const botPinY = 28;
+  const sourceY = isN ? botPinY : topPinY;
+  const drainY = isN ? topPinY : botPinY;
+  const barW = 5;
+  const barH = 7;
+  const barGap = 3;
+  const barPitch = barH + barGap;
+  const bars = [-barPitch, 0, barPitch] as const;
+  const topBarTop = bars[0]! - barH / 2;
+  const botBarBot = bars[2]! + barH / 2;
+  // Source-side channel bar (bottom for N, top for P) — L ends on this rectangle.
+  const srcBarY = isN ? bars[2]! : bars[0]!;
 
   ctx.save();
   ctx.translate(c.pos.x, c.pos.y);
@@ -919,89 +932,80 @@ function drawMosfetSymbol(
 
   if (selected || hovered) {
     ctx.strokeStyle = selected ? COLOR.selected : COLOR.hover;
-    ctx.globalAlpha = 0.35;
-    ctx.lineWidth = 8;
+    ctx.globalAlpha = 0.3;
+    ctx.lineWidth = 7;
     ctx.beginPath();
-    ctx.moveTo(gateX, midY);
-    ctx.lineTo(gatePlateX, midY);
-    ctx.moveTo(chanX, topY);
-    ctx.lineTo(chanX, botY);
+    ctx.moveTo(gateX, 0);
+    ctx.lineTo(gatePlateX, 0);
+    ctx.moveTo(chanX, topPinY);
+    ctx.lineTo(chanX, botPinY);
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = selected || hovered ? 2 : 1.6;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
+  ctx.lineWidth = selected || hovered ? 2.2 : 1.8;
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
 
+  // Gate lead + insulated gate plate.
   ctx.beginPath();
-  if (c.type === 'P') {
-    const bx = (gateX + gatePlateX) / 2;
-    ctx.moveTo(gateX, midY);
-    ctx.lineTo(bx - 3.5, midY);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(bx, midY, 3.2, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(bx + 3.5, midY);
-    ctx.lineTo(gatePlateX, midY);
-  } else {
-    ctx.moveTo(gateX, midY);
-    ctx.lineTo(gatePlateX, midY);
-  }
+  ctx.moveTo(gateX, 0);
+  ctx.lineTo(gatePlateX, 0);
+  ctx.moveTo(gatePlateX, topBarTop - 1);
+  ctx.lineTo(gatePlateX, botBarBot + 1);
   ctx.stroke();
 
-  ctx.beginPath();
-  ctx.moveTo(gatePlateX, midY - 10);
-  ctx.lineTo(gatePlateX, midY + 10);
-  ctx.moveTo(gatePlateX + 3.5, midY - 10);
-  ctx.lineTo(gatePlateX + 3.5, midY + 10);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.moveTo(chanX, topY);
-  ctx.lineTo(chanX, botY);
-  ctx.stroke();
-  for (const dy of [-8, 0, 8]) {
-    ctx.beginPath();
-    ctx.moveTo(gatePlateX + 5.5, midY + dy);
-    ctx.lineTo(chanX, midY + dy);
-    ctx.stroke();
+  // Three thick channel bars.
+  for (const cy of bars) {
+    ctx.fillRect(chanX - barW / 2, cy - barH / 2, barW, barH);
   }
 
+  // Drain / source stems (same vertical as the bars).
   ctx.beginPath();
-  ctx.moveTo(chanX, drainY);
-  ctx.lineTo(0, drainY);
-  ctx.moveTo(chanX, sourceY);
-  ctx.lineTo(0, sourceY);
+  ctx.moveTo(chanX, topPinY);
+  ctx.lineTo(chanX, topBarTop);
+  ctx.moveTo(chanX, botPinY);
+  ctx.lineTo(chanX, botBarBot);
   ctx.stroke();
 
-  const ay = sourceY > 0 ? midY + 12 : midY - 12;
-  const ax = chanX;
-  const s = 3.4;
+  // Substrate: middle bar → right → L into the *source-side rectangle*.
+  const midRight = chanX + barW / 2;
   ctx.beginPath();
-  if (c.type === 'N') {
-    ctx.moveTo(ax - 6, ay - s);
-    ctx.lineTo(ax - 6, ay + s);
-    ctx.lineTo(ax - 1, ay);
+  ctx.moveTo(midRight, 0);
+  ctx.lineTo(bodyX, 0);
+  ctx.lineTo(bodyX, srcBarY);
+  ctx.lineTo(midRight, srcBarY);
+  ctx.stroke();
+
+  // Arrow on the stub off the middle bar (N tip touches the bar; P points out).
+  const ah = 3.2;
+  const aw = 5;
+  ctx.beginPath();
+  if (isN) {
+    ctx.moveTo(midRight, 0);
+    ctx.lineTo(midRight + aw, -ah);
+    ctx.lineTo(midRight + aw, ah);
   } else {
-    ctx.moveTo(ax - 1, ay - s);
-    ctx.lineTo(ax - 1, ay + s);
-    ctx.lineTo(ax - 6, ay);
+    const tip = bodyX - 1;
+    ctx.moveTo(tip, 0);
+    ctx.lineTo(tip - aw, -ah);
+    ctx.lineTo(tip - aw, ah);
   }
   ctx.closePath();
   ctx.fill();
 
-  ctx.font = '9px ui-monospace, "SF Mono", monospace';
-  ctx.textAlign = 'left';
+  // G / D / S captions.
+  ctx.font = '8px ui-monospace, "SF Mono", monospace';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = color;
-  ctx.globalAlpha = 0.85;
-  ctx.fillText(c.type === 'N' ? 'n' : 'p', chanX + 5, midY);
+  ctx.globalAlpha = 0.8;
+  ctx.textAlign = 'center';
+  ctx.fillText('G', gateX + 6, -8);
+  ctx.fillText('D', 8, drainY + (drainY < 0 ? 9 : -9));
+  ctx.fillText('S', 8, sourceY + (sourceY < 0 ? 9 : -9));
   ctx.globalAlpha = 1;
+
   ctx.restore();
 }
 

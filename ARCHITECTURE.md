@@ -1,7 +1,6 @@
 # Architecture
 
-A transistor-level digital circuit simulator, in the spirit of
-[cs.khanin.info](https://cs.khanin.info/): build gates from transistors,
+A transistor-level digital circuit simulator: build gates from transistors,
 gates from wires, and eventually a Z80-flavored 8-bit computer from gates —
 all running in the browser, no accounts, no install.
 
@@ -142,9 +141,10 @@ src/ui/         Canvas editor — thin layer on top of src/sim, swappable.
                    a LevelResolver callback (see "Rendering a nested level"
                    below) — chip instances and port boundary markers
                    included, with hover/selection glow and an adaptive
-                   (zoom-aware) dot grid. Transistors render as classic
-                   enhancement MOSFET symbols (gate plate, channel fingers,
-                   PMOS gate bubble, source-side type arrow). Wires draw as
+                   (zoom-aware) dot grid. Transistors render as IEEE-style
+                   enhancement MOSFET symbols (gate plate, three channel
+                   bars, substrate stub with N/P arrow tied to the source
+                   bar). Wires draw as
                    rounded orthogonal polylines (HVH legs + curved corners)
                    so CMOS guts read like a schematic rather than spaghetti.
   MachinePanel.ts Soft text TTY: samples `ram.bytes[FB_BASE..]`, injects

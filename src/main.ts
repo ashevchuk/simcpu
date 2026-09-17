@@ -2018,12 +2018,24 @@ function exportSchematicSvg(): void {
     switch (c.kind) {
       case 'transistor': {
         const stroke = c.type === 'N' ? '#5fd0d6' : '#e8b358';
-        parts.push(
-          `<rect x="${x - 18}" y="${y - 24}" width="36" height="48" rx="4" fill="#191c25" stroke="${stroke}" stroke-width="1.5"/>`,
-        );
-        parts.push(
-          `<text x="${x}" y="${y + 4}" text-anchor="middle" fill="#e7e9ef" font-family="ui-monospace,monospace" font-size="11">${c.type}</text>`,
-        );
+        const isN = c.type === 'N';
+        const srcBarY = isN ? 10 : -10;
+        const g = (dx: number, dy: number) => `${x + dx},${y + dy}`;
+        parts.push(`<g stroke="${stroke}" fill="${stroke}" stroke-width="1.8" stroke-linecap="butt">`);
+        parts.push(`<line x1="${x - 28}" y1="${y}" x2="${x - 7}" y2="${y}" fill="none"/>`);
+        parts.push(`<line x1="${x - 7}" y1="${y - 14}" x2="${x - 7}" y2="${y + 14}" fill="none"/>`);
+        for (const cy of [-10, 0, 10]) {
+          parts.push(`<rect x="${x - 2.5}" y="${y + cy - 3.5}" width="5" height="7" stroke="none"/>`);
+        }
+        parts.push(`<line x1="${x}" y1="${y - 28}" x2="${x}" y2="${y - 13.5}" fill="none"/>`);
+        parts.push(`<line x1="${x}" y1="${y + 28}" x2="${x}" y2="${y + 13.5}" fill="none"/>`);
+        parts.push(`<polyline points="${g(2.5, 0)} ${g(11, 0)} ${g(11, srcBarY)} ${g(2.5, srcBarY)}" fill="none"/>`);
+        if (isN) {
+          parts.push(`<polygon points="${g(2.5, 0)} ${g(7.5, -3.2)} ${g(7.5, 3.2)}" stroke="none"/>`);
+        } else {
+          parts.push(`<polygon points="${g(10, 0)} ${g(5, -3.2)} ${g(5, 3.2)}" stroke="none"/>`);
+        }
+        parts.push(`</g>`);
         break;
       }
       case 'source': {

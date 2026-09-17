@@ -3,9 +3,7 @@
 // The simulator works at the switch level: every net (a maximal group of
 // electrically connected pins) carries a logic Level. Transistors are the
 // only active devices — everything else (gates, latches, registers, a CPU)
-// is built by wiring transistors together, exactly like the reference
-// project at cs.khanin.info builds its 6502-like machine from single
-// transistors upward.
+// is built by wiring transistors together from the bottom up.
 
 /** Logic level of a net. 'Z' means floating / not driven by anything. */
 export type Level = 0 | 1 | 'Z';

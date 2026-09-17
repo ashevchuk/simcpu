@@ -131,7 +131,7 @@ export function orthogonalPoints(a: Point, b: Point): Point[] {
 }
 
 /**
- * Khanin-style interior corners for a pin→pin wire (no maze / body avoid).
+ * Deterministic interior corners for a pin→pin wire (no maze / body avoid).
  * Facing comes from pin exit dirs; `lane` fans parallel exits by one GRID.
  * Returns waypoints only (excludes endpoints).
  */
@@ -182,7 +182,7 @@ function isHorizFacing(dir: RouteDir | null, from: Point, to: Point): boolean {
 
 /**
  * Lane index among wires that already touch `fromPinId` (0 = first bus mate).
- * Call before inserting the new wire so the count matches Khanin's `_laneOf`.
+ * Call before inserting the new wire so the count matches parallel-exit lane indexing.
  */
 export function wireLaneOf(circuit: Circuit, fromPinId: string): number {
   let idx = 0;
@@ -1089,7 +1089,7 @@ function boundsHalfSize(c: Component): [number, number] {
       case 'source':
         return [16, 8];
       case 'transistor':
-        return [22, 28];
+        return [26, 28];
       case 'input':
       case 'button':
         return [14, 12];
