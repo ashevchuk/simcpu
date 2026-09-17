@@ -2324,7 +2324,10 @@ function openCanvasContextMenu(ev: MouseEvent): void {
     kbd: 'Del',
     danger: true,
     disabled: !hasSel,
-    run: () => editor.handleDelete(),
+    run: () => {
+      editor.handleDelete();
+      uiDirty = true;
+    },
   });
   if (chipSel.length === 1) {
     const inst = chipSel[0]!;
@@ -2632,6 +2635,7 @@ window.addEventListener('keydown', (ev) => {
     if (editor.pasteClipboard()) uiDirty = true;
   } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
     editor.handleDelete();
+    uiDirty = true;
   } else if (ev.key === 'Escape') {
     if (editor.wireStartPinId) {
       editor.escapeWireStep();

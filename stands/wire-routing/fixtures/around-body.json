@@ -1,0 +1,19 @@
+{
+  "name": "around-body",
+  "description": "Direct L would cut through a blocking package — must skirt it.",
+  "grid": 10,
+  "obstacles": [
+    { "minX": 80, "minY": 40, "maxX": 200, "maxY": 160 }
+  ],
+  "nets": [
+    {
+      "id": "around",
+      "from": { "x": 40, "y": 100 },
+      "to": { "x": 240, "y": 100 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 4,
+      "maxLength": 420
+    }
+  ]
+}

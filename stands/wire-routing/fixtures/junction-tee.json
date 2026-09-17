@@ -1,0 +1,38 @@
+{
+  "name": "junction-tee",
+  "description": "Through trunk + branch into isotropic junction (null dirs on node).",
+  "grid": 10,
+  "obstacles": [
+    { "minX": 0, "minY": 40, "maxX": 60, "maxY": 120 },
+    { "minX": 200, "minY": 40, "maxX": 260, "maxY": 120 }
+  ],
+  "nets": [
+    {
+      "id": "left",
+      "from": { "x": 60, "y": 80 },
+      "to": { "x": 130, "y": 80 },
+      "startDir": "E",
+      "endDir": null,
+      "maxBends": 0,
+      "maxLength": 80
+    },
+    {
+      "id": "right",
+      "from": { "x": 130, "y": 80 },
+      "to": { "x": 200, "y": 80 },
+      "startDir": null,
+      "endDir": "W",
+      "maxBends": 0,
+      "maxLength": 80
+    },
+    {
+      "id": "branch",
+      "from": { "x": 146, "y": 140 },
+      "to": { "x": 130, "y": 80 },
+      "startDir": "E",
+      "endDir": null,
+      "maxBends": 2,
+      "maxLength": 120
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 # Wire routing algorithms (stand / future rewrite)
 
-Status: **draft for a simplified routing stand**. Production code lives in
-`src/ui/geometry.ts`. Current smart ortho is usable but still picks awkward
-paths around bodies; do **not** treat this doc as the shipped behavior contract.
+Status: **stand + tidy/commit integration**. Production tidy/commit/ribbon use
+`router: 'channel'` (escape → A\*). Rubber-band draw still uses the L/Z pattern
+catalog. Run `npm run test:routing` and `npx vitest run test/route-channel.test.ts`.
 
 Goal for the stand: pin→pin orthogonal routes that
 
@@ -33,7 +33,7 @@ routeWirePoints()
 |-------|------|
 | `pinExitDir` | Unit axis away from component center through the pin |
 | `orthogonalPoints` / HV·VH | Single-corner L between two points |
-| `collectPatternCandidates` | Catalog of L/Z + stub escapes for start/end dirs |
+| `collectPatternCandidates` | Catalog of L/Z + escape stubs for start/end dirs |
 | `pickBestPath` | Score length, bends, obstacle penetration |
 | `routeAStar` | Coarse grid maze; null if window too big / blocked |
 | `simplifyOrthoPath` | Drop colinear / duplicate verts |
@@ -49,89 +49,81 @@ routeWirePoints()
 
 ---
 
-## Proposed stand algorithms
+## Stand algorithms (`stands/wire-routing`)
 
-Build a **headless** harness: pins + AABBs in, polyline out, golden fixtures,
-visual HTML dump optional. Iterate here before touching the editor again.
+Headless harness: pins + AABBs in, polyline out, golden fixtures, SVG dump.
+
+```bash
+npm run test:routing
+npx vite-node stands/wire-routing/src/dump.ts ribbon-4 --out /tmp/ribbon.svg
+```
 
 ### A. Pattern-first with hard obstacle veto (small change)
 
 1. Generate the same L/Z/stub catalog.
 2. **Reject** any candidate that intersects an obstacle interior (not merely score higher).
 3. If none remain → A*.
-4. If A* fails → longest clear stub + L to the other pin (always succeeds topologically if pins are outside boxes).
+4. If A* fails → longest clear stub + L to the other pin.
 
 Acceptance: no segment midpoint inside a body AABB.
 
-### B. Escape-then-channel (recommended next)
+### B. Escape-then-channel (implemented in stand)
 
-1. **Escape:** from each pin, walk `exitDir` by `k·GRID` until clear of own body (+ margin).
-2. **Channel graph:** on a GRID, nodes = free cells; edges = 4-neighbor ortho.
-3. **A\*** from escape(start) to escape(end) with costs:
-   - unit length = 1
-   - bend (direction change) = `B` (try 1.5–3)
-   - running alongside an existing wire of same net = small bonus (optional later)
-4. **Simplify** colinear points; attach pin→escape stubs.
+1. **Escape:** from each pin, walk `exitDir` until clear (+ min stub). Skip forced stub when the target lies against the exit dir.
+2. **Channel A\*** on GRID from escape(start) to escape(end):
+   - length = 1 per step
+   - bend (direction change) = 2.5
+   - occupied trunk (fanout) = 6
+3. **Simplify** colinear / overshoot verts; attach pin stubs.
 
-Acceptance fixtures: latch example, counter→7seg ribbon, two chips face-to-face with pins on facing edges.
+State is `(cell, incomingDir)`. Fixtures: `face-to-face`, `around-body`, `ribbon-4`, `junction-tee`.
+
+### B.1 Pin escape lanes (post-drag artifacts)
+
+Dragging a chip drops the waypoints of half-attached wires, so mouseup re-runs
+`tidySelectedWires` and every route is rebuilt from scratch. Two rules keep that
+rebuild from producing the stubs and stair-steps users reported:
+
+- **Candidate shapes follow the pin axes, not the span aspect.** A pin firing
+  E/W always starts the route horizontally, so a vertical jog on (or beside) its
+  own column is never proposed — that jog is the "stair right after the pin".
+  Facing pairs get one rail (`from → (railX, from.y) → (railX, to.y) → to`),
+  perpendicular pairs get a single corner.
+- **Its own package is an obstacle for the maze.** Endpoint bodies are excluded
+  from `obstacles` so pin stubs can leave them; they are passed separately as
+  `hostObstacles` and block the channel A\*, which otherwise tunnelled through a
+  chip to reach a pin from the wrong side.
+
+Both the shape candidates and the maze result are ranked by one metric
+(`scorePath`): bends, length, jogs inside a pin's clearance (graded, so a
+congested gap degrades to the next lane instead of a multi-bend detour),
+long runs hugging a pin column, backtracking, and colinear overlap with
+already-routed wires. Rails come from up to four free channels around the gap
+centre, so fan-ins spread instead of stacking.
+
+Regression cover: `test/route-drag-tidy.test.ts` (move COUNTER4 in
+`examples/lab-counter-7seg.json`, then tidy) and
+`npx vite-node stands/wire-routing/src/dragRepro.ts <example.json> <NAME> <dx> <dy>`
+for an ad-hoc dump of every wire on the moved part.
 
 ### C. Visibility / rectilinear visibility graph
 
-1. Inflate obstacles by half-wire clearance.
-2. Steiner candidates: pin escapes + obstacle corners (rectilinear).
-3. Connect mutually visible ortho pairs; shortest path + bend penalty.
-4. Good for sparse boards; can explode with many chips — cap corner set.
-
-Use when B’s grid is too coarse or too slow on dense netlists.
+Later: inflate obstacles, Steiner at corners, shortest ortho path. Use when grid A\* is too coarse/slow.
 
 ### D. Incremental / local repair (editor UX)
 
-On drag of a waypoint or component:
-
-1. Freeze unrelated wires.
-2. Re-route only segments that intersect moved AABB or that shared the dragged node.
-3. Prefer keeping user’s explicit waypoints unless they become collinear.
-
-Junction delete already heals through-wires — keep that contract.
-
----
-
-## Scoring sketch (shared by A/B)
-
-```
-cost = length
-     + bendPenalty * (#corners)
-     + obstaclePenalty * (penetration depth or binary hit)
-     + viaPenalty * (optional layer changes — N/A today)
-```
-
-Prefer binary obstacle rejection over soft penetration when teaching/lab clarity matters more than “almost misses.”
-
----
-
-## Stand file layout (suggested)
-
-```
-stands/wire-routing/
-  README.md          # how to run
-  fixtures/*.json    # pins, obstacles, expected path class
-  src/route.ts       # candidates under test (copy/adapt from geometry.ts)
-  src/score.ts
-  src/viz.html       # optional polyline overlay
-  test/*.test.ts
-```
-
-Do not import the full Editor — keep the stand free of canvas/DOM so algorithms stay honest.
+On drag: re-route only affected segments; keep explicit waypoints.
 
 ---
 
 ## Exit criteria before merging back to geometry.ts
 
-- [ ] All fixtures: zero body intersections
-- [ ] Latch + counter examples: no wire through chip body at default zoom
-- [ ] Pin→pin with facing exits uses ≤ 3 bends in the common case
-- [ ] Explicit waypoint in the middle is preserved under tidy of other legs
-- [ ] T-junction branch still commits with smart first/last legs only
-- [ ] Perf: &lt; 2 ms per route on a 50-obstacle board (desktop)
+- [x] Fixture suite: zero body intersections (`npm run test:routing`)
+- [x] Latch + counter + BUF8 fixtures from real examples
+- [x] Facing exits ≤ 3 bends (`face-to-face`)
+- [ ] Explicit mid-waypoints preserved under tidy of other legs
+- [x] Drop-in behind `routeWirePoints` for tidy/commit/ribbon (`router: 'channel'`)
+- [x] Perf: &lt; 2 ms/route stand microbench
 
-When those pass, replace `routeSegmentSmart` / `routeWirePoints` internals and keep the public signatures stable.
+Rubber-band draw still uses the pattern catalog on purpose (keeps drag cheap).
+Next: waypoint preservation, then optionally channel for rubber-band too.

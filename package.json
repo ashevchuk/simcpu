@@ -13,6 +13,8 @@
     "gen:spectrum-games": "npx vite-node scripts/gen-spectrum-games.ts",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:routing": "vitest run stands/wire-routing",
+    "dump:routing": "vite-node stands/wire-routing/src/dump.ts",
     "test:watch": "vitest",
     "test:spectrum-play": "vitest run test/spectrum-playability.test.ts test/spectrum-glazx-im2.test.ts test/spectrum.test.ts",
     "test:e2e": "npm run build:dist-file && playwright test",

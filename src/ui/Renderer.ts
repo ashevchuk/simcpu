@@ -7,7 +7,7 @@ import { hasSoftLabModel, isSoftLabEnabled } from '../sim/softLab.js';
 import type { Component, Level, Pin, Point, Wire } from '../sim/types.js';
 import type { Camera } from './Camera.js';
 import type { Editor } from './Editor.js';
-import { GRID, BUS_SWITCH_BODY_W, busSwitchPaddleCenter, busSwitchSideUnit, findWireCrossings, isBusName, pinExitDir, pinRouteDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
+import { GRID, BUS_SWITCH_BODY_W, busSwitchPaddleCenter, busSwitchSideUnit, isBusName, pinExitDir, pinRouteDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
 
 const COLOR = {
   bg: '#12141a',
@@ -274,17 +274,9 @@ export function draw(
     drawWire(ctx, points, levelColor(level, contended), contended, emphasis, bus);
   }
 
-  // Schematic-style dots where orthogonal wires cross (not join).
-  ctx.save();
-  ctx.fillStyle = COLOR.bodyStroke;
-  for (const p of findWireCrossings(routedWires)) {
-    if (p.x < visible.minX || p.x > visible.maxX || p.y < visible.minY || p.y > visible.maxY) continue;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 2.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
-
+  // Crossings stay unmarked (KiCad/Logisim style). Connection dots belong on
+  // real junction nodes / T-splices — not on every H×V geometric cross.
+  // findWireCrossings() remains available if we later draw hop bridges.
   // Rubber-band while a wire is in progress: the start pin, every bend
   // point committed so far, then a dashed segment out to the cursor.
   if (editor.tool.kind === 'wire' && editor.wireStartPinId) {
@@ -989,7 +981,7 @@ function strokeRoundedPolyline(
     const d2y = next.y - cur.y;
     const len1 = Math.hypot(d1x, d1y) || 1;
     const len2 = Math.hypot(d2x, d2y) || 1;
-    const r = Math.min(cornerR, len1 / 2, len2 / 2);
+    const r = Math.min(cornerR, len1 / 3, len2 / 3, 4);
     const p1 = { x: cur.x - (d1x / len1) * r, y: cur.y - (d1y / len1) * r };
     const p2 = { x: cur.x + (d2x / len2) * r, y: cur.y + (d2y / len2) * r };
     ctx.lineTo(p1.x, p1.y);

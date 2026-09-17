@@ -1,0 +1,20 @@
+{
+  "name": "face-to-face",
+  "description": "Two chip bodies facing; pins leave E then enter W on a clear channel.",
+  "grid": 10,
+  "obstacles": [
+    { "minX": 0, "minY": 20, "maxX": 80, "maxY": 140 },
+    { "minX": 220, "minY": 20, "maxX": 300, "maxY": 140 }
+  ],
+  "nets": [
+    {
+      "id": "q0",
+      "from": { "x": 80, "y": 60 },
+      "to": { "x": 220, "y": 60 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2,
+      "maxLength": 200
+    }
+  ]
+}

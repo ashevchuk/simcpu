@@ -1,0 +1,1188 @@
+{
+  "name": "lab-buf8-oe",
+  "description": "Extracted from ./examples/lab-buf8-oe.json (per-net obstacles exclude endpoint hosts).",
+  "grid": 10,
+  "obstacles": [
+    {
+      "minX": 65,
+      "minY": 7,
+      "maxX": 95,
+      "maxY": 33
+    },
+    {
+      "minX": 274,
+      "minY": 107,
+      "maxX": 366,
+      "maxY": 293
+    },
+    {
+      "minX": 65,
+      "minY": 47,
+      "maxX": 95,
+      "maxY": 73
+    },
+    {
+      "minX": 65,
+      "minY": 87,
+      "maxX": 95,
+      "maxY": 113
+    },
+    {
+      "minX": 65,
+      "minY": 127,
+      "maxX": 95,
+      "maxY": 153
+    },
+    {
+      "minX": 65,
+      "minY": 167,
+      "maxX": 95,
+      "maxY": 193
+    },
+    {
+      "minX": 65,
+      "minY": 207,
+      "maxX": 95,
+      "maxY": 233
+    },
+    {
+      "minX": 65,
+      "minY": 247,
+      "maxX": 95,
+      "maxY": 273
+    },
+    {
+      "minX": 65,
+      "minY": 287,
+      "maxX": 95,
+      "maxY": 313
+    },
+    {
+      "minX": 65,
+      "minY": 327,
+      "maxX": 95,
+      "maxY": 353
+    }
+  ],
+  "nets": [
+    {
+      "id": "w244142",
+      "from": {
+        "x": 96,
+        "y": 20
+      },
+      "to": {
+        "x": 280,
+        "y": 120
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244144",
+      "from": {
+        "x": 96,
+        "y": 60
+      },
+      "to": {
+        "x": 280,
+        "y": 140
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244146",
+      "from": {
+        "x": 360,
+        "y": 130
+      },
+      "to": {
+        "x": 546,
+        "y": 60
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244148",
+      "from": {
+        "x": 96,
+        "y": 100
+      },
+      "to": {
+        "x": 280,
+        "y": 160
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244150",
+      "from": {
+        "x": 360,
+        "y": 150
+      },
+      "to": {
+        "x": 546,
+        "y": 100
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244152",
+      "from": {
+        "x": 96,
+        "y": 140
+      },
+      "to": {
+        "x": 280,
+        "y": 180
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244154",
+      "from": {
+        "x": 360,
+        "y": 170
+      },
+      "to": {
+        "x": 546,
+        "y": 140
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244156",
+      "from": {
+        "x": 96,
+        "y": 180
+      },
+      "to": {
+        "x": 280,
+        "y": 200
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244158",
+      "from": {
+        "x": 360,
+        "y": 190
+      },
+      "to": {
+        "x": 546,
+        "y": 180
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244160",
+      "from": {
+        "x": 96,
+        "y": 220
+      },
+      "to": {
+        "x": 280,
+        "y": 220
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244162",
+      "from": {
+        "x": 360,
+        "y": 210
+      },
+      "to": {
+        "x": 546,
+        "y": 220
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244164",
+      "from": {
+        "x": 96,
+        "y": 260
+      },
+      "to": {
+        "x": 280,
+        "y": 240
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244166",
+      "from": {
+        "x": 360,
+        "y": 230
+      },
+      "to": {
+        "x": 546,
+        "y": 260
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244168",
+      "from": {
+        "x": 96,
+        "y": 300
+      },
+      "to": {
+        "x": 280,
+        "y": 260
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244170",
+      "from": {
+        "x": 360,
+        "y": 250
+      },
+      "to": {
+        "x": 546,
+        "y": 300
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    },
+    {
+      "id": "w244172",
+      "from": {
+        "x": 96,
+        "y": 340
+      },
+      "to": {
+        "x": 280,
+        "y": 280
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        }
+      ]
+    },
+    {
+      "id": "w244174",
+      "from": {
+        "x": 360,
+        "y": 270
+      },
+      "to": {
+        "x": 546,
+        "y": 340
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 65,
+          "minY": 7,
+          "maxX": 95,
+          "maxY": 33
+        },
+        {
+          "minX": 65,
+          "minY": 47,
+          "maxX": 95,
+          "maxY": 73
+        },
+        {
+          "minX": 65,
+          "minY": 87,
+          "maxX": 95,
+          "maxY": 113
+        },
+        {
+          "minX": 65,
+          "minY": 127,
+          "maxX": 95,
+          "maxY": 153
+        },
+        {
+          "minX": 65,
+          "minY": 167,
+          "maxX": 95,
+          "maxY": 193
+        },
+        {
+          "minX": 65,
+          "minY": 207,
+          "maxX": 95,
+          "maxY": 233
+        },
+        {
+          "minX": 65,
+          "minY": 247,
+          "maxX": 95,
+          "maxY": 273
+        },
+        {
+          "minX": 65,
+          "minY": 287,
+          "maxX": 95,
+          "maxY": 313
+        },
+        {
+          "minX": 65,
+          "minY": 327,
+          "maxX": 95,
+          "maxY": 353
+        }
+      ]
+    }
+  ]
+}

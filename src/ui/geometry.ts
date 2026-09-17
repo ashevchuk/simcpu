@@ -1,6 +1,7 @@
 import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, BUS_SWITCH_BODY_W, ramPortCount, romPortCount } from '../sim/library.js';
 import type { Circuit } from '../sim/Circuit.js';
 import type { BusSwitchComponent, Component, Pin, Point, Wire } from '../sim/types.js';
+import { routeEscapeChannel } from './routeChannel.js';
 
 export const GRID = 10;
 
@@ -18,9 +19,27 @@ export function dist(a: Point, b: Point): number {
 /** Preferred leave/arrive direction for a pin (schematic exit). */
 export type RouteDir = 'N' | 'S' | 'E' | 'W';
 
+/**
+ * A row (`axis: 'h'`, y = coord, x ∈ [lo, hi]) or column (`axis: 'v'`) that a
+ * not-yet-routed wire will need to leave/enter its pin. Running along it is
+ * penalized so an earlier wire does not steal a later pin's approach.
+ */
+export interface RouteLane {
+  axis: 'h' | 'v';
+  coord: number;
+  lo: number;
+  hi: number;
+}
+
 /** Options for schematic orthogonal routing (KiCad/Logisim-style patterns). */
 export interface RouteOpts {
   obstacles?: Aabb[];
+  /**
+   * Bodies of the wire's own endpoint components (excluded from `obstacles` so
+   * pin stubs may leave them). The channel router still keeps its search out of
+   * them, so a route never crosses its own package to reach a pin's back side.
+   */
+  hostObstacles?: Aabb[];
   /** Direction the wire should leave the start point (away from component body). */
   startDir?: RouteDir | null;
   /** Direction the wire should leave the end pin — arrival travel is opposite. */
@@ -34,6 +53,13 @@ export interface RouteOpts {
   avoidOverlap?: Point[][];
   /** Same-net polylines — overlapping them is rewarded (bus bundling). */
   preferAlong?: Point[][];
+  /** Pin approach lanes of wires still waiting to be routed (channel router). */
+  reservedLanes?: RouteLane[];
+  /**
+   * `channel` = escape-then-A* (tidy/commit). Default `pattern` = L/Z catalog
+   * (rubber-band draw — cheap and stable while dragging).
+   */
+  router?: 'pattern' | 'channel';
 }
 
 /**
@@ -272,6 +298,58 @@ export function pathOverlapLength(path: Point[], others: Point[][]): number {
   return total;
 }
 
+function nearPoint(a: Point, b: Point, eps = 0.5): boolean {
+  return Math.abs(a.x - b.x) < eps && Math.abs(a.y - b.y) < eps;
+}
+
+/**
+ * Drop paths that share an endpoint with `from`/`to` (junction splices).
+ * Those may legally occupy the same trunk; treating them as avoidOverlap
+ * forces U-shaped overshoots around the node.
+ */
+export function excludePathsSharingEndpoint(
+  paths: Point[][],
+  from: Point,
+  to: Point,
+): Point[][] {
+  return paths.filter((path) => {
+    if (path.length < 1) return true;
+    const a = path[0]!;
+    const b = path[path.length - 1]!;
+    return !(nearPoint(a, from) || nearPoint(a, to) || nearPoint(b, from) || nearPoint(b, to));
+  });
+}
+
+/**
+ * Approach lanes a pin→pin wire will need: from each pin, along its exit
+ * axis, back to the midpoint of the pair. Earlier-routed wires that run along
+ * these rows/columns force the later wire into a stair or a shared trunk.
+ */
+export function wireApproachLanes(
+  a: Point,
+  aDir: RouteDir | null | undefined,
+  b: Point,
+  bDir: RouteDir | null | undefined,
+): RouteLane[] {
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const out: RouteLane[] = [];
+  for (const [pin, dir, other] of [
+    [a, aDir, b],
+    [b, bDir, a],
+  ] as const) {
+    if (!dir) continue;
+    if (dir === 'E' || dir === 'W') {
+      // Partner must lie ahead of the pin, else the exit row is not an approach.
+      if ((other.x - pin.x) * (dir === 'E' ? 1 : -1) <= 0.5) continue;
+      out.push({ axis: 'h', coord: pin.y, lo: Math.min(pin.x, mid.x), hi: Math.max(pin.x, mid.x) });
+    } else {
+      if ((other.y - pin.y) * (dir === 'S' ? 1 : -1) <= 0.5) continue;
+      out.push({ axis: 'v', coord: pin.x, lo: Math.min(pin.y, mid.y), hi: Math.max(pin.y, mid.y) });
+    }
+  }
+  return out;
+}
+
 function alongBonus(path: Point[], along: Point[][]): number {
   return pathOverlapLength(path, along);
 }
@@ -472,6 +550,23 @@ function collectPatternCandidates(a: Point, b: Point, opts: RouteOpts): Point[][
 
 function routeSegmentSmart(a: Point, b: Point, opts: RouteOpts): Point[] {
   const obstacles = opts.obstacles ?? [];
+
+  if (opts.router === 'channel') {
+    const channelled = routeEscapeChannel({
+      from: a,
+      to: b,
+      obstacles,
+      hostObstacles: opts.hostObstacles,
+      startDir: opts.startDir,
+      endDir: opts.endDir,
+      avoidOverlap: opts.avoidOverlap,
+      reservedLanes: opts.reservedLanes,
+    });
+    // Trust the maze (it blocks inflated interiors). Do not re-check with the
+    // pattern pad=1 hit test — pins sit on package edges and would false-positive.
+    if (channelled.length >= 2) return simplifyOrthoPath(channelled);
+  }
+
   const candidates = collectPatternCandidates(a, b, opts);
   let best = pickBestPath(candidates, obstacles, opts);
   // Pattern catalog failed to clear bodies → maze-route on the grid.
@@ -692,7 +787,8 @@ export function routeWirePoints(raw: Point[], obstaclesOrOpts?: Aabb[] | RouteOp
     opts.endDir != null ||
     (opts.avoidCrossings?.length ?? 0) > 0 ||
     (opts.avoidOverlap?.length ?? 0) > 0 ||
-    (opts.preferAlong?.length ?? 0) > 0;
+    (opts.preferAlong?.length ?? 0) > 0 ||
+    opts.router === 'channel';
 
   if (!hasSmart) {
     const out: Point[] = [raw[0]!];
@@ -735,6 +831,13 @@ export function routeWirePoints(raw: Point[], obstaclesOrOpts?: Aabb[] | RouteOp
  * Body AABBs of chips / RAM / ROM / buttons / 7seg for obstacle-aware routing.
  * Pass `excludeIds` for the wire's endpoint hosts so stubs may enter those bodies.
  */
+/** Body AABBs of just `ids` — the endpoint hosts left out of `routingObstacles`. */
+export function hostBodyObstacles(circuit: Circuit, ids: ReadonlySet<string>): Aabb[] {
+  const others = new Set<string>();
+  for (const id of circuit.components.keys()) if (!ids.has(id)) others.add(id);
+  return routingObstacles(circuit, others);
+}
+
 export function routingObstacles(circuit: Circuit, excludeIds?: ReadonlySet<string>): Aabb[] {
   const out: Aabb[] = [];
   for (const c of circuit.components.values()) {

@@ -43,8 +43,12 @@ import {
   rawWirePolyline,
   routeWirePoints,
   routingObstacles,
+  hostBodyObstacles,
+  excludePathsSharingEndpoint,
   snap,
+  wireApproachLanes,
   wirePolyline,
+  type RouteLane,
 } from './geometry.js';
 
 export type SnapMode = 'grid' | 'half' | 'free';
@@ -455,6 +459,7 @@ export class Editor {
     if (this.selectedWireIds.size > 0) {
       for (const id of this.selectedWireIds) this.circuit.removeWire(id);
       this.selectedWireIds.clear();
+      this.clearStaleHoverAfterMutation();
       return;
     }
     const removed = [...this.selectedIds];
@@ -465,6 +470,21 @@ export class Editor {
     }
     this.selectedIds.clear();
     if (removed.length > 0) this.onComponentsRemoved?.(removed);
+    this.clearStaleHoverAfterMutation();
+  }
+
+  /**
+   * Selecting a wire sets sticky net highlight for glow + cursor tip. After
+   * delete the selection is gone but highlight/hover ids can linger, so the
+   * tip (`7seg:…:g`) stays glued to the mouse over empty space. Drop highlight
+   * and re-hit-test at the current cursor.
+   */
+  private clearStaleHoverAfterMutation(): void {
+    this.highlightedNetId = null;
+    this.hoveredPinId = null;
+    this.hoveredWireId = null;
+    this.hoveredComponentId = null;
+    this.handleMouseMove(this.mouse);
   }
 
   /**
@@ -805,14 +825,13 @@ export class Editor {
 
   /**
    * While dragging components: translate waypoints of wires whose both ends
-   * are selected; for wires with one end in the selection, shift only the
-   * elbow nearest that pin. Full tidy still runs on mouseup.
+   * move together. For wires with only one end in the selection, drop
+   * waypoints — shifting a single elbow leaves diagonal stubs that look like
+   * spurs/loops until mouseup; tidy on mouseup rebuilds a clean route.
    */
   pushWiresWithDrag(ids: string[], dx: number, dy: number): void {
     if (dx === 0 && dy === 0) return;
     const sel = new Set(ids);
-    const pinById = new Map<string, Pin>();
-    for (const p of this.circuit.allPins()) pinById.set(p.id, p);
 
     for (const w of this.circuit.wires.values()) {
       const aComp = w.a.split(':')[0]!;
@@ -830,21 +849,8 @@ export class Editor {
         continue;
       }
 
-      if (!w.waypoints?.length) continue;
-      const pin = pinById.get(aSel ? w.a : w.b);
-      if (!pin) continue;
-      let bestI = 0;
-      let bestD = Infinity;
-      for (let i = 0; i < w.waypoints.length; i++) {
-        const d = dist(w.waypoints[i]!, pin.pos);
-        if (d < bestD) {
-          bestD = d;
-          bestI = i;
-        }
-      }
-      const elbow = w.waypoints[bestI]!;
-      elbow.x += dx;
-      elbow.y += dy;
+      // One endpoint moved — clear stale elbows (mouseup tidy re-routes).
+      delete w.waypoints;
     }
   }
 
@@ -911,8 +917,26 @@ export class Editor {
       return ida.localeCompare(idb);
     });
 
-    let n = 0;
+    // Pin approach lanes of every wire in the set; a wire routed earlier must
+    // not run along a row a later wire needs to leave/enter its pin (that
+    // forces the later one into a stair next to its pin or onto a shared trunk).
+    const lanesByWireId = new Map<string, RouteLane[]>();
     for (const id of orderedIds) {
+      const w = this.circuit.wires.get(id);
+      const a = w && pinById.get(w.a);
+      const b = w && pinById.get(w.b);
+      if (!w || !a || !b) continue;
+      const aComp = this.circuit.components.get(a.componentId);
+      const bComp = this.circuit.components.get(b.componentId);
+      lanesByWireId.set(
+        id,
+        wireApproachLanes(a.pos, pinRouteDir(a.pos, aComp), b.pos, pinRouteDir(b.pos, bComp)),
+      );
+    }
+
+    let n = 0;
+    for (let idx = 0; idx < orderedIds.length; idx++) {
+      const id = orderedIds[idx]!;
       const w = this.circuit.wires.get(id);
       if (!w) continue;
       const a = pinById.get(w.a);
@@ -921,6 +945,11 @@ export class Editor {
       const aComp = this.circuit.components.get(a.componentId);
       const bComp = this.circuit.components.get(b.componentId);
       const exclude = new Set([a.componentId, b.componentId]);
+      const reservedLanes: RouteLane[] = [];
+      for (let j = idx + 1; j < orderedIds.length; j++) {
+        const lanes = lanesByWireId.get(orderedIds[j]!);
+        if (lanes) reservedLanes.push(...lanes);
+      }
       const netId = nets.netOf.get(w.a);
       const aIsNode = aComp?.kind === 'junction' || aComp?.kind === 'label';
       const bIsNode = bComp?.kind === 'junction' || bComp?.kind === 'label';
@@ -937,11 +966,14 @@ export class Editor {
       }
       const routed = routeWirePoints([a.pos, b.pos], {
         obstacles: routingObstacles(this.circuit, exclude),
+        hostObstacles: hostBodyObstacles(this.circuit, exclude),
         startDir: pinRouteDir(a.pos, aComp),
         endDir: pinRouteDir(b.pos, bComp),
         avoidCrossings: otherPaths,
-        avoidOverlap: otherPaths,
+        avoidOverlap: excludePathsSharingEndpoint(otherPaths, a.pos, b.pos),
         preferAlong,
+        reservedLanes,
+        router: 'channel',
       });
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       if (mid.length > 0) w.waypoints = mid;
@@ -1288,11 +1320,13 @@ export class Editor {
     }
     const routed = routeWirePoints([a.pos, b.pos], {
       obstacles: routingObstacles(this.circuit, exclude),
+      hostObstacles: hostBodyObstacles(this.circuit, exclude),
       startDir: pinRouteDir(a.pos, aComp),
       endDir: pinRouteDir(b.pos, bComp),
       avoidCrossings: otherPaths,
-      avoidOverlap: otherPaths,
+      avoidOverlap: excludePathsSharingEndpoint(otherPaths, a.pos, b.pos),
       preferAlong,
+      router: 'channel',
     });
     const mid = interiorWaypoints(routed);
     this.circuit.addWire(aId, bId, mid.length ? mid : undefined);
@@ -1614,10 +1648,12 @@ export class Editor {
       const exclude = new Set([sw.id, host.id]);
       const routed = routeWirePoints([pa.pos, pb.pos], {
         obstacles: routingObstacles(this.circuit, exclude),
+        hostObstacles: hostBodyObstacles(this.circuit, exclude),
         startDir: pinExitDir(pa.pos, sw.pos),
         endDir: pinExitDir(pb.pos, host.pos),
         avoidCrossings: otherPaths,
         avoidOverlap: otherPaths,
+        router: 'channel',
       });
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       this.circuit.addWire(pa.id, pb.id, mid.length ? mid : undefined, bundleId);
@@ -1712,10 +1748,12 @@ export class Editor {
       const exclude = new Set([a.id, b.id]);
       const routed = routeWirePoints([pa.pos, pb.pos], {
         obstacles: routingObstacles(this.circuit, exclude),
+        hostObstacles: hostBodyObstacles(this.circuit, exclude),
         startDir: pinExitDir(pa.pos, a.pos),
         endDir: pinExitDir(pb.pos, b.pos),
         avoidCrossings: otherPaths,
         avoidOverlap: otherPaths,
+        router: 'channel',
       });
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       this.circuit.addWire(pa.id, pb.id, mid.length ? mid : undefined, bundleId);
@@ -1768,10 +1806,12 @@ export class Editor {
       const exclude = new Set([host.id, bank.id]);
       const routed = routeWirePoints([bankPin.pos, hostPin.pos], {
         obstacles: routingObstacles(this.circuit, exclude),
+        hostObstacles: hostBodyObstacles(this.circuit, exclude),
         startDir: pinExitDir(bankPin.pos, bank.pos),
         endDir: pinExitDir(hostPin.pos, host.pos),
         avoidCrossings: otherPaths,
         avoidOverlap: otherPaths,
+        router: 'channel',
       });
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       this.circuit.addWire(bankPin.id, hostPin.id, mid.length ? mid : undefined, bundleId);

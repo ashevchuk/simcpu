@@ -90,4 +90,24 @@ describe('edit history + clipboard', () => {
     expect([...c.components.values()].some((x) => x.kind === 'chip')).toBe(false);
     expect([...c.components.values()].some((x) => x.kind === 'transistor')).toBe(true);
   });
+
+  it('clears sticky net tip after deleting a selected wire', () => {
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const a = makeTransistor(c, 'N', { x: 0, y: 0 });
+    const b = makeTransistor(c, 'N', { x: 80, y: 0 });
+    const w = c.addWire(a.pins.drain.id, b.pins.drain.id);
+    ed.selectedWireId = w.id;
+    ed.highlightNetOfWire(w.id);
+    ed.hoveredWireId = w.id;
+    expect(ed.highlightedNetId).toBeTruthy();
+
+    ed.handleDelete();
+
+    expect(c.wires.size).toBe(0);
+    expect(ed.highlightedNetId).toBeNull();
+    expect(ed.hoveredWireId).toBeNull();
+    expect(ed.formatNetName(ed.netIdUnderPointer())).toBeNull();
+  });
 });
