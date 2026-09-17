@@ -39,18 +39,33 @@ export interface RouteOpts {
 /**
  * Infer pin exit direction: away from the component body center.
  * MOSFET gate (left of body) → W; drain (above) → N; chip left stack → W.
- * Near-corner stack pins prefer the side (H) exit so routes don't run along
+ * Near-corner stack pins prefer the side (H) exit so routes don't leave along
  * the package face into the body.
+ * Returns null when the pin sits on the body center (no meaningful exit).
  */
-export function pinExitDir(pinPos: Point, bodyPos: Point): RouteDir {
+export function pinExitDir(pinPos: Point, bodyPos: Point): RouteDir | null {
   const dx = pinPos.x - bodyPos.x;
   const dy = pinPos.y - bodyPos.y;
   const ax = Math.abs(dx);
   const ay = Math.abs(dy);
+  if (ax < 0.5 && ay < 0.5) return null;
   if (ax >= ay) return dx >= 0 ? 'E' : 'W';
   // Corner of a side stack: still leave horizontally off the package edge.
   if (ax >= ay * 0.45) return dx >= 0 ? 'E' : 'W';
   return dy >= 0 ? 'S' : 'N';
+}
+
+/**
+ * Exit dir for routing, or null for isotropic nodes (junction / label) that
+ * must not force an approach side — otherwise tidy creates overshoot loops.
+ */
+export function pinRouteDir(
+  pinPos: Point,
+  comp: { kind: string; pos: Point } | null | undefined,
+): RouteDir | null {
+  if (!comp) return null;
+  if (comp.kind === 'junction' || comp.kind === 'label') return null;
+  return pinExitDir(pinPos, comp.pos);
 }
 
 function oppositeDir(d: RouteDir): RouteDir {

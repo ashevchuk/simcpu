@@ -3,7 +3,7 @@ import { Circuit } from '../src/sim/Circuit.js';
 import { makeInput, makeJunction, makeLed, wire } from '../src/sim/library.js';
 import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import { Editor } from '../src/ui/Editor.js';
-import { interiorWaypoints, nearestOnPolyline } from '../src/ui/geometry.js';
+import { interiorWaypoints, nearestOnPolyline, routeWirePoints } from '../src/ui/geometry.js';
 
 describe('wire smart route + junctions', () => {
   it('interiorWaypoints drops endpoints', () => {
@@ -82,6 +82,46 @@ describe('wire smart route + junctions', () => {
     click(c.pins.in.pos);
     const nets = circuit.computeNets();
     expect(nets.netOf.get(a.pins.out.id)).toBe(nets.netOf.get(c.pins.in.id));
+  });
+
+  it('tidy keeps through-wires straight and branch as short L at a junction', () => {
+    const library = new ChipLibrary();
+    const circuit = new Circuit();
+    const editor = new Editor(circuit, library);
+    const a = makeInput(circuit, 0, { x: 0, y: 0 });
+    const b = makeLed(circuit, { x: 200, y: 0 });
+    const branch = makeLed(circuit, { x: 100, y: 100 });
+    const j = makeJunction(circuit, { x: 100, y: 0 });
+    wire(circuit, a.pins.out, j.pins.net);
+    wire(circuit, j.pins.net, b.pins.in);
+    // Deliberately overshooting branch path (old preferAlong bug).
+    wire(circuit, j.pins.net, branch.pins.in, [
+      { x: 160, y: 0 },
+      { x: 160, y: 100 },
+    ]);
+    editor.selectedWireIds = new Set(circuit.wires.keys());
+    editor.tidySelectedWires(false);
+
+    const pinById = new Map([...circuit.allPins()].map((p) => [p.id, p]));
+    const drawn = [...circuit.wires.values()].map((w) => {
+      const pa = pinById.get(w.a)!;
+      const pb = pinById.get(w.b)!;
+      return routeWirePoints([pa.pos, ...(w.waypoints ?? []), pb.pos]);
+    });
+    const through = drawn.filter((p) => p.every((pt) => pt.y === 0));
+    expect(through.length).toBe(2);
+    for (const path of through) {
+      expect(path.length).toBe(2);
+      expect(Math.max(...path.map((p) => p.x)) - Math.min(...path.map((p) => p.x))).toBeLessThanOrEqual(120);
+    }
+    const branchPath = drawn.find((p) => p.some((pt) => pt.y !== 0))!;
+    // Short L into the LED pin (may include a small side stub); never the old
+    // preferAlong overshoot that ran past the junction along the trunk.
+    expect(Math.max(...branchPath.map((p) => p.x))).toBeLessThanOrEqual(100);
+    expect(branchPath.reduce((len, p, i, arr) => {
+      if (i === 0) return 0;
+      return len + Math.abs(p.x - arr[i - 1]!.x) + Math.abs(p.y - arr[i - 1]!.y);
+    }, 0)).toBeLessThan(220);
   });
 
   it('deleting junction heals through-wire and drops branch only', () => {

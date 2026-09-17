@@ -7,7 +7,7 @@ import { hasSoftLabModel, isSoftLabEnabled } from '../sim/softLab.js';
 import type { Component, Level, Pin, Point, Wire } from '../sim/types.js';
 import type { Camera } from './Camera.js';
 import type { Editor } from './Editor.js';
-import { GRID, BUS_SWITCH_BODY_W, busSwitchPaddleCenter, busSwitchSideUnit, findWireCrossings, isBusName, pinExitDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
+import { GRID, BUS_SWITCH_BODY_W, busSwitchPaddleCenter, busSwitchSideUnit, findWireCrossings, isBusName, pinExitDir, pinRouteDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
 
 const COLOR = {
   bg: '#12141a',
@@ -303,8 +303,8 @@ export function draw(
       const raw = [start.pos, ...editor.wireWaypoints, hoverPin?.pos ?? editor.mouse];
       const points = routeWirePoints(raw, {
         obstacles: routingObstacles(circuit, exclude),
-        startDir: startComp ? pinExitDir(start.pos, startComp.pos) : null,
-        endDir: hoverPin && endComp ? pinExitDir(hoverPin.pos, endComp.pos) : null,
+        startDir: pinRouteDir(start.pos, startComp),
+        endDir: hoverPin ? pinRouteDir(hoverPin.pos, endComp) : null,
         avoidCrossings,
       });
       ctx.save();

@@ -7,6 +7,7 @@ import {
   findWireNear,
   pathOverlapLength,
   pinExitDir,
+  pinRouteDir,
   routeAStar,
   routeWirePoints,
   simplifyOrthoPath,
@@ -70,6 +71,12 @@ describe('routeWirePoints obstacles', () => {
   it('pinExitDir prefers leaving away from the body', () => {
     expect(pinExitDir({ x: 0, y: 50 }, { x: 28, y: 50 })).toBe('W'); // gate-like
     expect(pinExitDir({ x: 50, y: 0 }, { x: 50, y: 28 })).toBe('N'); // drain-like
+    expect(pinExitDir({ x: 10, y: 10 }, { x: 10, y: 10 })).toBeNull(); // coincident
+  });
+
+  it('pinRouteDir is null for junctions (no forced approach side)', () => {
+    expect(pinRouteDir({ x: 100, y: 100 }, { kind: 'junction', pos: { x: 100, y: 100 } })).toBeNull();
+    expect(pinRouteDir({ x: 0, y: 50 }, { kind: 'chip', pos: { x: 28, y: 50 } })).toBe('W');
   });
 
   it('uses a single L-corner by default (not a mid-Z)', () => {

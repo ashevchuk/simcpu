@@ -39,6 +39,7 @@ import {
   interiorWaypoints,
   nearestOnPolyline,
   pinExitDir,
+  pinRouteDir,
   rawWirePolyline,
   routeWirePoints,
   routingObstacles,
@@ -921,8 +922,12 @@ export class Editor {
       const bComp = this.circuit.components.get(b.componentId);
       const exclude = new Set([a.componentId, b.componentId]);
       const netId = nets.netOf.get(w.a);
+      const aIsNode = aComp?.kind === 'junction' || aComp?.kind === 'label';
+      const bIsNode = bComp?.kind === 'junction' || bComp?.kind === 'label';
+      // Same-net bundling into a junction creates overshoot loops (approach the
+      // node along an existing trunk from the far side). Skip preferAlong then.
       const preferAlong: Point[][] = [];
-      if (netId) {
+      if (netId && !aIsNode && !bIsNode) {
         for (const ow of this.circuit.wires.values()) {
           if (ow.id === id) continue;
           if (nets.netOf.get(ow.a) !== netId) continue;
@@ -932,8 +937,8 @@ export class Editor {
       }
       const routed = routeWirePoints([a.pos, b.pos], {
         obstacles: routingObstacles(this.circuit, exclude),
-        startDir: aComp ? pinExitDir(a.pos, aComp.pos) : null,
-        endDir: bComp ? pinExitDir(b.pos, bComp.pos) : null,
+        startDir: pinRouteDir(a.pos, aComp),
+        endDir: pinRouteDir(b.pos, bComp),
         avoidCrossings: otherPaths,
         avoidOverlap: otherPaths,
         preferAlong,
@@ -1272,17 +1277,19 @@ export class Editor {
     const otherPaths: Point[][] = [];
     const preferAlong: Point[][] = [];
     const netId = nets.netOf.get(aId);
+    const aIsNode = aComp?.kind === 'junction' || aComp?.kind === 'label';
+    const bIsNode = bComp?.kind === 'junction' || bComp?.kind === 'label';
     for (const ow of this.circuit.wires.values()) {
       const poly = rawWirePolyline(this.circuit, ow);
       if (!poly) continue;
       const drawn = routeWirePoints(poly);
       otherPaths.push(drawn);
-      if (netId && nets.netOf.get(ow.a) === netId) preferAlong.push(drawn);
+      if (netId && !aIsNode && !bIsNode && nets.netOf.get(ow.a) === netId) preferAlong.push(drawn);
     }
     const routed = routeWirePoints([a.pos, b.pos], {
       obstacles: routingObstacles(this.circuit, exclude),
-      startDir: aComp ? pinExitDir(a.pos, aComp.pos) : null,
-      endDir: bComp ? pinExitDir(b.pos, bComp.pos) : null,
+      startDir: pinRouteDir(a.pos, aComp),
+      endDir: pinRouteDir(b.pos, bComp),
       avoidCrossings: otherPaths,
       avoidOverlap: otherPaths,
       preferAlong,
