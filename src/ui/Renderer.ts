@@ -1589,7 +1589,7 @@ function drawComponent(
         ctx.fillText(badge, bx + 3, by + 1);
         ctx.restore();
         // Sequential Soft Lab value under marking (skip combinatorial q.length===0).
-        if (c.softState && c.softState.q.length > 0) {
+        if (c.softState && c.softState.q instanceof Uint8Array && c.softState.q.length > 0) {
           let v = 0;
           for (let i = 0; i < c.softState.q.length; i++) v |= (c.softState.q[i]! & 1) << i;
           const hex = `0x${v.toString(16).toUpperCase()}`;

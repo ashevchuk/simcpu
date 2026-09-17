@@ -9,9 +9,9 @@
 //   `{"0":1,"1":2,...}`, an object with numeric string keys, not an array
 //   — JSON.parse would hand that back as-is, with no `.length` and none of
 //   Uint8Array's methods, quietly corrupting every RAM the moment a project
-//   round-trips through save/load). `toSerializedComponent`/
-//   `fromSerializedComponent` below convert it to/from a plain `number[]`
-//   at the boundary; nothing else in this file needs to know RAM exists.
+//   round-trips through save/load). Soft Lab `softState.q` has the same
+//   trap. `toSerializedComponent`/`fromSerializedComponent` convert both
+//   to/from plain `number[]` at the boundary.
 // - Importing a *single* chip def into an already-running session
 //   (importChipDef): its ids were assigned by some other session's own
 //   counter, so they can collide with ids already in use here, and it may
@@ -35,14 +35,57 @@ import type {
   Wire,
 } from './types.js';
 
-/** Every Component variant, except memory `bytes` is a plain number array instead of a Uint8Array — see the file header for why. */
+/** Every Component variant, except typed arrays become plain number arrays — see file header. */
+type SerializedSoftState = { model: string; lastClk: 0 | 1 | 'Z'; q: number[] };
 type SerializedComponent =
-  | Exclude<Component, RamComponent | RomComponent>
+  | Exclude<Component, RamComponent | RomComponent | ChipInstanceComponent>
   | (Omit<RamComponent, 'bytes'> & { bytes: number[] })
-  | (Omit<RomComponent, 'bytes'> & { bytes: number[] });
+  | (Omit<RomComponent, 'bytes'> & { bytes: number[] })
+  | (Omit<ChipInstanceComponent, 'softState'> & { softState?: SerializedSoftState });
+
+function softStateToJson(state: NonNullable<ChipInstanceComponent['softState']>): SerializedSoftState {
+  const q = state.q;
+  const arr =
+    q instanceof Uint8Array
+      ? Array.from(q)
+      : Array.isArray(q)
+        ? [...q]
+        : typeof q === 'object' && q != null
+          ? Object.keys(q as object)
+              .filter((k) => /^\d+$/.test(k))
+              .sort((a, b) => Number(a) - Number(b))
+              .map((k) => Number((q as Record<string, number>)[k]) & 1)
+          : [];
+  return { model: state.model, lastClk: state.lastClk, q: arr };
+}
+
+function softStateFromJson(raw: SerializedSoftState | ChipInstanceComponent['softState']): NonNullable<ChipInstanceComponent['softState']> {
+  const q = raw?.q;
+  const bytes =
+    q instanceof Uint8Array
+      ? Uint8Array.from(q)
+      : Array.isArray(q)
+        ? Uint8Array.from(q)
+        : typeof q === 'object' && q != null
+          ? Uint8Array.from(
+              Object.keys(q as object)
+                .filter((k) => /^\d+$/.test(k))
+                .sort((a, b) => Number(a) - Number(b))
+                .map((k) => Number((q as Record<string, number>)[k]) & 1),
+            )
+          : new Uint8Array(0);
+  return {
+    model: raw?.model ?? '',
+    lastClk: raw?.lastClk === 1 || raw?.lastClk === 'Z' ? raw.lastClk : 0,
+    q: bytes,
+  };
+}
 
 function toSerializedComponent(c: Component): SerializedComponent {
   if (c.kind === 'ram' || c.kind === 'rom') return { ...c, bytes: Array.from(c.bytes) };
+  if (c.kind === 'chip' && c.softState) {
+    return { ...c, softState: softStateToJson(c.softState) };
+  }
   // Shallow clone so slim-lab annotate (defName) cannot mutate live instances.
   return { ...c } as SerializedComponent;
 }
@@ -50,6 +93,11 @@ function toSerializedComponent(c: Component): SerializedComponent {
 function fromSerializedComponent(c: SerializedComponent): Component {
   if (c.kind === 'ram' || c.kind === 'rom') {
     return { ...c, bytes: Uint8Array.from(c.bytes) };
+  }
+  if (c.kind === 'chip') {
+    const chip = { ...c } as ChipInstanceComponent;
+    if (chip.softState) chip.softState = softStateFromJson(chip.softState);
+    return chip;
   }
   if (c.kind === 'port') {
     return { ...c, dir: c.dir ?? 'inout' };

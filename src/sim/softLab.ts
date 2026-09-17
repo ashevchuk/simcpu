@@ -148,7 +148,9 @@ export function hasSoftLabModel(chipName: string): boolean {
 
 export function ensureSoftState(chip: ChipInstanceComponent, model: string): SoftLabState {
   const bits = MODEL_BITS[model] ?? 0;
-  if (!chip.softState || chip.softState.model !== model || chip.softState.q.length !== bits) {
+  const q = chip.softState?.q;
+  const qOk = q instanceof Uint8Array && q.length === bits;
+  if (!chip.softState || chip.softState.model !== model || !qOk) {
     chip.softState = {
       model,
       lastClk: 0,

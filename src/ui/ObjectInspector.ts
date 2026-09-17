@@ -114,7 +114,7 @@ export class ObjectInspector {
 
   /** Snapshot Soft q → force transistor expand → settle → bit diff UI. */
   private async runSoftSiliconDiff(c: ChipInstanceComponent, defName: string): Promise<void> {
-    if (!c.softState?.q.length) {
+    if (!(c.softState?.q instanceof Uint8Array) || !c.softState.q.length) {
       this.softDiffNote = 'No Soft Lab q state to compare.';
       this.sync(c, true);
       return;
@@ -617,7 +617,8 @@ export class ObjectInspector {
               const span = document.createElement('span');
               span.style.fontFamily = 'ui-monospace, monospace';
               if (c.softState) {
-                const bits = [...c.softState.q].join('');
+                const q = c.softState.q instanceof Uint8Array ? c.softState.q : null;
+                const bits = q ? Array.from(q).join('') : '—';
                 span.style.color = '#e6a23c';
                 span.textContent = `${c.softState.model} · q=${bits || '—'} · softModel`;
               } else {
@@ -672,7 +673,7 @@ export class ObjectInspector {
           }
 
           // Editable hex for sequential softState.q (registers/counters).
-          if (c.softState && c.softState.q.length > 0 && c.softState.q.length <= 16) {
+          if (c.softState && c.softState.q instanceof Uint8Array && c.softState.q.length > 0 && c.softState.q.length <= 16) {
             addRow(
               'q hex',
               (() => {

@@ -27,6 +27,11 @@ export interface RouteOpts {
   endDir?: RouteDir | null;
   /** Other polylines; H×V crossings are penalized (same-net overlap is fine). */
   avoidCrossings?: Point[][];
+  /**
+   * Other polylines; colinear parallel overlap is penalized so fanouts take
+   * distinct channels. Only used during tidy/commit — never on the draw path.
+   */
+  avoidOverlap?: Point[][];
   /** Same-net polylines — overlapping them is rewarded (bus bundling). */
   preferAlong?: Point[][];
 }
@@ -34,11 +39,17 @@ export interface RouteOpts {
 /**
  * Infer pin exit direction: away from the component body center.
  * MOSFET gate (left of body) → W; drain (above) → N; chip left stack → W.
+ * Near-corner stack pins prefer the side (H) exit so routes don't run along
+ * the package face into the body.
  */
 export function pinExitDir(pinPos: Point, bodyPos: Point): RouteDir {
   const dx = pinPos.x - bodyPos.x;
   const dy = pinPos.y - bodyPos.y;
-  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'E' : 'W';
+  const ax = Math.abs(dx);
+  const ay = Math.abs(dy);
+  if (ax >= ay) return dx >= 0 ? 'E' : 'W';
+  // Corner of a side stack: still leave horizontally off the package edge.
+  if (ax >= ay * 0.45) return dx >= 0 ? 'E' : 'W';
   return dy >= 0 ? 'S' : 'N';
 }
 
@@ -163,7 +174,56 @@ function dirPenalty(pts: Point[], startDir?: RouteDir | null, endDir?: RouteDir 
   return pen;
 }
 
-type PathScore = { hits: boolean; bends: number; len: number; cross: number; dir: number; along: number };
+/**
+ * Penalize trunks on the body side of the *destination* pin.
+ * Left-stack (exit W): long verticals must stay at x <= pin.x - GRID (free space).
+ * Right-stack (exit E): long verticals must stay at x >= pin.x + GRID.
+ */
+function sideKeepoutPenalty(pts: Point[], _startDir?: RouteDir | null, endDir?: RouteDir | null): number {
+  if (pts.length < 2 || !endDir) return 0;
+  let pen = 0;
+  const clear = GRID;
+  const end = pts[pts.length - 1]!;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i]!;
+    const b = pts[i + 1]!;
+    const span = Math.hypot(b.x - a.x, b.y - a.y);
+    if (span < clear - 0.5) continue; // ignore tiny stubs into the pin
+    const vert = Math.abs(a.x - b.x) < 0.5;
+    const horiz = Math.abs(a.y - b.y) < 0.5;
+    if (vert) {
+      const x = a.x;
+      if (endDir === 'W' && x > end.x - clear + 0.5) pen += 80 + Math.max(0, x - (end.x - clear));
+      if (endDir === 'E' && x < end.x + clear - 0.5) pen += 80 + Math.max(0, end.x + clear - x);
+      if (endDir === 'N' && a.y > end.y - clear + 0.5) pen += 40;
+      if (endDir === 'S' && a.y < end.y + clear - 0.5) pen += 40;
+    }
+    if (horiz) {
+      const y = a.y;
+      if (endDir === 'N' && y > end.y - clear + 0.5) pen += 80 + Math.max(0, y - (end.y - clear));
+      if (endDir === 'S' && y < end.y + clear - 0.5) pen += 80 + Math.max(0, end.y + clear - y);
+    }
+  }
+  // Last elbow must sit in free space outside the pin column.
+  const pre = pts[pts.length - 2]!;
+  if (endDir === 'W' && pre.x > end.x - clear + 0.5) pen += 120;
+  if (endDir === 'E' && pre.x < end.x + clear - 0.5) pen += 120;
+  if (endDir === 'N' && pre.y > end.y - clear + 0.5) pen += 120;
+  if (endDir === 'S' && pre.y < end.y + clear - 0.5) pen += 120;
+  return pen;
+}
+
+type PathScore = {
+  hits: boolean;
+  bends: number;
+  len: number;
+  cross: number;
+  dir: number;
+  overlap: number;
+  along: number;
+  /** Vertical/horizontal trunks that sit on the wrong side of a pin (through a body). */
+  side: number;
+};
 
 function orthoOverlapLength(a0: Point, a1: Point, b0: Point, b1: Point): number {
   const aH = Math.abs(a0.y - a1.y) < 0.5;
@@ -181,19 +241,43 @@ function orthoOverlapLength(a0: Point, a1: Point, b0: Point, b1: Point): number 
   return Math.max(0, hi - lo);
 }
 
-function alongBonus(path: Point[], along: Point[][]): number {
-  if (!along.length || path.length < 2) return 0;
-  let bonus = 0;
+/** Total colinear overlap length between `path` and `others`. */
+export function pathOverlapLength(path: Point[], others: Point[][]): number {
+  if (!others.length || path.length < 2) return 0;
+  let total = 0;
   for (let i = 0; i < path.length - 1; i++) {
     const a0 = path[i]!;
     const a1 = path[i + 1]!;
-    for (const other of along) {
+    for (const other of others) {
       for (let j = 0; j < other.length - 1; j++) {
-        bonus += orthoOverlapLength(a0, a1, other[j]!, other[j + 1]!);
+        total += orthoOverlapLength(a0, a1, other[j]!, other[j + 1]!);
       }
     }
   }
-  return bonus;
+  return total;
+}
+
+function alongBonus(path: Point[], along: Point[][]): number {
+  return pathOverlapLength(path, along);
+}
+
+/** Occupied vertical / horizontal trunk coordinates from existing routes. */
+function occupiedTrunks(others: Point[][]): { xs: Set<number>; ys: Set<number> } {
+  const xs = new Set<number>();
+  const ys = new Set<number>();
+  for (const path of others) {
+    for (let i = 0; i < path.length - 1; i++) {
+      const a = path[i]!;
+      const b = path[i + 1]!;
+      if (Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) >= GRID - 0.5) {
+        xs.add(Math.round(a.x / GRID) * GRID);
+      }
+      if (Math.abs(a.y - b.y) < 0.5 && Math.abs(a.x - b.x) >= GRID - 0.5) {
+        ys.add(Math.round(a.y / GRID) * GRID);
+      }
+    }
+  }
+  return { xs, ys };
 }
 
 function scorePath(
@@ -201,20 +285,29 @@ function scorePath(
   obstacles: Aabb[],
   opts: RouteOpts,
 ): PathScore {
+  let overlap = opts.avoidOverlap?.length ? pathOverlapLength(cand, opts.avoidOverlap) : 0;
+  const along = opts.preferAlong?.length ? alongBonus(cand, opts.preferAlong) : 0;
+  if (along > 0) overlap = Math.max(0, overlap - along);
   return {
     hits: pathHitsObstacles(cand, obstacles),
     bends: bendCount(cand),
     len: pathLength(cand),
     cross: opts.avoidCrossings?.length ? countPathCrossings(cand, opts.avoidCrossings) : 0,
     dir: dirPenalty(cand, opts.startDir, opts.endDir),
-    along: opts.preferAlong?.length ? alongBonus(cand, opts.preferAlong) : 0,
+    overlap,
+    along,
+    side: sideKeepoutPenalty(cand, opts.startDir, opts.endDir),
   };
 }
 
 function betterScore(a: PathScore, b: PathScore): boolean {
   if (a.hits !== b.hits) return !a.hits;
-  if (a.bends !== b.bends) return a.bends < b.bends;
+  // Through-body / wrong-side trunks first — readable pin approach.
+  if (a.side !== b.side) return a.side < b.side;
+  // Stacked trunks are worse than an extra bend (BUF8 pin-column VH problem).
+  if (a.overlap !== b.overlap) return a.overlap < b.overlap;
   if (a.dir !== b.dir) return a.dir < b.dir;
+  if (a.bends !== b.bends) return a.bends < b.bends;
   if (a.cross !== b.cross) return a.cross < b.cross;
   if (a.along !== b.along) return a.along > b.along;
   return a.len < b.len - 0.5;
@@ -237,10 +330,11 @@ function pickBestPath(candidates: Point[][], obstacles: Aabb[], opts: RouteOpts)
 function collectPatternCandidates(a: Point, b: Point, opts: RouteOpts): Point[][] {
   const aligned = Math.abs(a.x - b.x) < 0.5 || Math.abs(a.y - b.y) < 0.5;
   const candidates: Point[][] = [];
+  const step = GRID;
+  const trunks = opts.avoidOverlap?.length ? occupiedTrunks(opts.avoidOverlap) : null;
 
   if (aligned) {
     candidates.push([a, b]);
-    const step = GRID;
     if (Math.abs(a.y - b.y) < 0.5) {
       for (let k = 1; k <= 10; k++) {
         for (const sign of [1, -1] as const) {
@@ -261,11 +355,65 @@ function collectPatternCandidates(a: Point, b: Point, opts: RouteOpts): Point[][
     const midX = (a.x + b.x) / 2;
     const midY = (a.y + b.y) / 2;
     candidates.push(hvhPoints(a, b, midX), vhvPoints(a, b, midY));
-    const step = GRID;
     for (let k = 1; k <= 10; k++) {
       for (const sign of [1, -1] as const) {
         candidates.push(hvhPoints(a, b, midX + sign * step * k));
         candidates.push(vhvPoints(a, b, midY + sign * step * k));
+      }
+    }
+  }
+
+  // Free mid-channels: when avoiding overlap, prefer trunks not already used.
+  // Cap the scan so long spans stay cheap (tidy/commit only, but still).
+  if (trunks) {
+    const midX = (a.x + b.x) / 2;
+    const midY = (a.y + b.y) / 2;
+    const maxFree = 12;
+    let addedX = 0;
+    for (let k = 0; k <= 20 && addedX < maxFree; k++) {
+      for (const sign of k === 0 ? [0] : ([1, -1] as const)) {
+        if (k === 0 && sign !== 0) continue;
+        const sx = Math.round((midX + sign * step * k) / step) * step;
+        if (sx <= Math.min(a.x, b.x) || sx >= Math.max(a.x, b.x)) continue;
+        if (trunks.xs.has(sx)) continue;
+        if (Math.abs(sx - a.x) < 0.5 || Math.abs(sx - b.x) < 0.5) continue;
+        candidates.push(hvhPoints(a, b, sx));
+        addedX++;
+        if (addedX >= maxFree) break;
+      }
+    }
+    let addedY = 0;
+    for (let k = 0; k <= 20 && addedY < maxFree; k++) {
+      for (const sign of k === 0 ? [0] : ([1, -1] as const)) {
+        if (k === 0 && sign !== 0) continue;
+        const sy = Math.round((midY + sign * step * k) / step) * step;
+        if (sy <= Math.min(a.y, b.y) || sy >= Math.max(a.y, b.y)) continue;
+        if (trunks.ys.has(sy)) continue;
+        if (Math.abs(sy - a.y) < 0.5 || Math.abs(sy - b.y) < 0.5) continue;
+        candidates.push(vhvPoints(a, b, sy));
+        addedY++;
+        if (addedY >= maxFree) break;
+      }
+    }
+    // Longer escape stubs so the vertical run sits off the pin column.
+    for (const len of [step * 4, step * 5, step * 6]) {
+      if (opts.startDir) {
+        const s = stepDir(a, opts.startDir, len);
+        candidates.push(simplifyOrthoPath([a, s, ...hvhPoints(s, b).slice(1)]));
+        candidates.push(simplifyOrthoPath([a, s, ...vhPoints(s, b).slice(1)]));
+      }
+      if (opts.endDir) {
+        const pre = stepDir(b, oppositeDir(opts.endDir), len);
+        candidates.push(simplifyOrthoPath([...hvPoints(a, pre).slice(0, -1), pre, b]));
+        candidates.push(simplifyOrthoPath([...vhPoints(a, pre).slice(0, -1), pre, b]));
+      }
+      if (opts.startDir && opts.endDir) {
+        const s = stepDir(a, opts.startDir, len);
+        const e = stepDir(b, opts.endDir, len);
+        const mid = Math.round(((s.x + e.x) / 2) / step) * step;
+        if (!trunks.xs.has(mid) && Math.abs(mid - a.x) > 0.5 && Math.abs(mid - b.x) > 0.5) {
+          candidates.push(simplifyOrthoPath([a, s, { x: mid, y: s.y }, { x: mid, y: e.y }, e, b]));
+        }
       }
     }
   }
@@ -444,7 +592,50 @@ export function simplifyOrthoPath(pts: Point[]): Point[] {
       }
     }
   }
-  return out;
+  return pruneOrthoSpurs(out);
+}
+
+/**
+ * Remove a→b→a reverse spurs (e.g. pin approach that overshoots then returns).
+ * These show up as short "tails" with a waypoint knob next to the pin.
+ */
+export function pruneOrthoSpurs(pts: Point[]): Point[] {
+  if (pts.length < 3) return pts;
+  const out = pts.map((p) => ({ ...p }));
+  let changed = true;
+  while (changed && out.length >= 3) {
+    changed = false;
+    for (let i = 0; i < out.length - 2; i++) {
+      const a = out[i]!;
+      const c = out[i + 2]!;
+      if (Math.abs(a.x - c.x) < 0.5 && Math.abs(a.y - c.y) < 0.5) {
+        out.splice(i + 1, 2); // drop spur tip and duplicate return point
+        changed = true;
+        break;
+      }
+    }
+  }
+  // Collapse any new colinear runs without re-entering spur pruning.
+  if (out.length <= 2) return out;
+  const flat: Point[] = [{ ...out[0]! }];
+  for (let i = 1; i < out.length; i++) {
+    const p = out[i]!;
+    const prev = flat[flat.length - 1]!;
+    if (Math.abs(p.x - prev.x) < 0.5 && Math.abs(p.y - prev.y) < 0.5) continue;
+    flat.push({ ...p });
+  }
+  let ch = true;
+  while (ch && flat.length > 2) {
+    ch = false;
+    for (let i = 1; i < flat.length - 1; i++) {
+      if (isStrictlyBetweenOnOrtho(flat[i - 1]!, flat[i]!, flat[i + 1]!)) {
+        flat.splice(i, 1);
+        ch = true;
+        break;
+      }
+    }
+  }
+  return flat;
 }
 
 /** True when b is on the axis-aligned segment a–c (inclusive), not an overshoot past either end. */
@@ -485,6 +676,7 @@ export function routeWirePoints(raw: Point[], obstaclesOrOpts?: Aabb[] | RouteOp
     opts.startDir != null ||
     opts.endDir != null ||
     (opts.avoidCrossings?.length ?? 0) > 0 ||
+    (opts.avoidOverlap?.length ?? 0) > 0 ||
     (opts.preferAlong?.length ?? 0) > 0;
 
   if (!hasSmart) {
@@ -525,7 +717,7 @@ export function routeWirePoints(raw: Point[], obstaclesOrOpts?: Aabb[] | RouteOp
 
 
 /**
- * Body AABBs of chips / RAM / ROM / buttons for obstacle-aware routing.
+ * Body AABBs of chips / RAM / ROM / buttons / 7seg for obstacle-aware routing.
  * Pass `excludeIds` for the wire's endpoint hosts so stubs may enter those bodies.
  */
 export function routingObstacles(circuit: Circuit, excludeIds?: ReadonlySet<string>): Aabb[] {
@@ -550,6 +742,14 @@ export function routingObstacles(circuit: Circuit, excludeIds?: ReadonlySet<stri
       case 'button':
         hw = 17;
         hh = 15;
+        break;
+      case 'sevenseg':
+        hw = 28;
+        hh = 40;
+        break;
+      case 'clock':
+        hw = 22;
+        hh = 18;
         break;
       default:
         continue;

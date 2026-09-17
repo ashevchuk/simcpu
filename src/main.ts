@@ -1631,6 +1631,8 @@ async function loadExampleById(id: string, confirmReplace = true): Promise<boole
   }
   try {
     applyLoadedProject(deserializeProject(ex.project));
+    // One-shot channel assignment (not per-frame) so lab fanouts stay readable.
+    editor.tidyAllWires(false);
     resetViewAfterProjectLoad();
     const ci = labCurriculumIndex(id);
     if (ci >= 0) {

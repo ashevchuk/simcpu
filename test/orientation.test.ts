@@ -11,7 +11,7 @@ import {
 } from '../src/sim/orientation.js';
 import { seedStandardCells } from '../src/sim/stdcells.js';
 import { Editor } from '../src/ui/Editor.js';
-import { routeWirePoints } from '../src/ui/geometry.js';
+import { pathOverlapLength, routeWirePoints } from '../src/ui/geometry.js';
 
 describe('orientation', () => {
   it('transformOffset rotates CW', () => {
@@ -111,6 +111,29 @@ describe('wire tidy', () => {
     const drawn = routeWirePoints([a.pins.in.pos, ...mid, b.pins.in.pos]);
     expect(drawn[0]).toEqual(a.pins.in.pos);
     expect(drawn[drawn.length - 1]).toEqual(b.pins.in.pos);
+  });
+
+  it('tidyAllWires spreads parallel fanouts onto distinct channels', () => {
+    const library = new ChipLibrary();
+    const c = new Circuit();
+    const wires = [];
+    for (let i = 0; i < 4; i++) {
+      const a = makeButton(c, { x: 0, y: i * 20 }, 'toggle');
+      const b = makeLed(c, { x: 200, y: 10 + i * 20 });
+      wires.push(c.addWire(a.pins.out.id, b.pins.in.id));
+    }
+    const editor = new Editor(c, library);
+    expect(editor.tidyAllWires()).toBe(4);
+    const paths = wires.map((w) => {
+      const pinA = [...c.allPins()].find((p) => p.id === w.a)!;
+      const pinB = [...c.allPins()].find((p) => p.id === w.b)!;
+      return routeWirePoints([pinA.pos, ...(w.waypoints ?? []), pinB.pos]);
+    });
+    for (let i = 0; i < paths.length; i++) {
+      for (let j = i + 1; j < paths.length; j++) {
+        expect(pathOverlapLength(paths[i]!, [paths[j]!])).toBe(0);
+      }
+    }
   });
 
   it('formatNetName prefers label names', () => {

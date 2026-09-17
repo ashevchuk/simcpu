@@ -12,6 +12,7 @@ import {
   type SerializedProject,
 } from '../src/sim/serialize.js';
 import { initialState, step } from '../src/sim/solver.js';
+import { seedStandardCells } from '../src/sim/stdcells.js';
 import type { Level } from '../src/sim/types.js';
 
 function levelAt(circuit: Circuit, library: ChipLibrary, pinId: string): Level {
@@ -188,5 +189,26 @@ describe('deserializeProject isolates bundled example JSON', () => {
     const b = deserializeProject(counter.project);
     expect(a.topCircuit.components.size).not.toBe(b.topCircuit.components.size);
     expect([...a.topCircuit.components.keys()][0]).not.toBe([...b.topCircuit.components.keys()][0]);
+  });
+});
+
+describe('softState.q JSON round-trip', () => {
+  it('restores Uint8Array q after JSON.stringify (autosave path)', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const def = library.findByName('COUNTER4');
+    expect(def).toBeTruthy();
+    const circuit = new Circuit();
+    const chip = makeChipInstance(circuit, def!, { x: 0, y: 0 });
+    chip.softState = { model: 'COUNTER4', lastClk: 0, q: new Uint8Array([1, 0, 1, 1]) };
+    const json = JSON.parse(JSON.stringify(serializeProject(circuit, library))) as SerializedProject;
+    // Corrupted shape before the fix: softState.q became {"0":1,"1":0,...}.
+    const loaded = deserializeProject(json);
+    const again = [...loaded.topCircuit.components.values()].find((c) => c.kind === 'chip');
+    expect(again?.kind).toBe('chip');
+    if (again?.kind !== 'chip') return;
+    expect(again.softState?.q).toBeInstanceOf(Uint8Array);
+    expect(Array.from(again.softState!.q)).toEqual([1, 0, 1, 1]);
+    expect([...again.softState!.q].join('')).toBe('1011');
   });
 });

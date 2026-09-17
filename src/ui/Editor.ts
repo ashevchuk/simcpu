@@ -884,7 +884,8 @@ export class Editor {
 
     if (checkpoint) this.noteEdit();
     const nets = this.circuit.computeNets();
-    // Other wires' drawn paths — penalize crossings; same-net rewarded via preferAlong.
+    // Frozen paths of non-selected wires; each retidied wire is appended so
+    // siblings pick distinct channels (cheap — runs only on tidy, not paint).
     const otherPaths: Point[][] = [];
     const pathByWireId = new Map<string, Point[]>();
     for (const ow of this.circuit.wires.values()) {
@@ -894,8 +895,23 @@ export class Editor {
       pathByWireId.set(ow.id, drawn);
       if (!wireIds.has(ow.id)) otherPaths.push(drawn);
     }
+
+    const orderedIds = [...wireIds].sort((ida, idb) => {
+      const wa = this.circuit.wires.get(ida);
+      const wb = this.circuit.wires.get(idb);
+      if (!wa || !wb) return ida.localeCompare(idb);
+      const a0 = pinById.get(wa.a);
+      const a1 = pinById.get(wa.b);
+      const b0 = pinById.get(wb.a);
+      const b1 = pinById.get(wb.b);
+      const ay = ((a0?.pos.y ?? 0) + (a1?.pos.y ?? 0)) / 2;
+      const by = ((b0?.pos.y ?? 0) + (b1?.pos.y ?? 0)) / 2;
+      if (ay !== by) return ay - by;
+      return ida.localeCompare(idb);
+    });
+
     let n = 0;
-    for (const id of wireIds) {
+    for (const id of orderedIds) {
       const w = this.circuit.wires.get(id);
       if (!w) continue;
       const a = pinById.get(w.a);
@@ -919,12 +935,14 @@ export class Editor {
         startDir: aComp ? pinExitDir(a.pos, aComp.pos) : null,
         endDir: bComp ? pinExitDir(b.pos, bComp.pos) : null,
         avoidCrossings: otherPaths,
+        avoidOverlap: otherPaths,
         preferAlong,
       });
-      // Store interior elbows only; drawing re-expands via routeWirePoints.
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       if (mid.length > 0) w.waypoints = mid;
       else delete w.waypoints;
+      pathByWireId.set(id, routed);
+      otherPaths.push(routed);
       n++;
     }
     return n;
@@ -1266,6 +1284,7 @@ export class Editor {
       startDir: aComp ? pinExitDir(a.pos, aComp.pos) : null,
       endDir: bComp ? pinExitDir(b.pos, bComp.pos) : null,
       avoidCrossings: otherPaths,
+      avoidOverlap: otherPaths,
       preferAlong,
     });
     const mid = interiorWaypoints(routed);
@@ -1591,7 +1610,7 @@ export class Editor {
         startDir: pinExitDir(pa.pos, sw.pos),
         endDir: pinExitDir(pb.pos, host.pos),
         avoidCrossings: otherPaths,
-        preferAlong: otherPaths.filter((_, j) => j >= otherPaths.length - n),
+        avoidOverlap: otherPaths,
       });
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       this.circuit.addWire(pa.id, pb.id, mid.length ? mid : undefined, bundleId);
@@ -1689,7 +1708,7 @@ export class Editor {
         startDir: pinExitDir(pa.pos, a.pos),
         endDir: pinExitDir(pb.pos, b.pos),
         avoidCrossings: otherPaths,
-        preferAlong: otherPaths.filter((_, j) => j >= otherPaths.length - n),
+        avoidOverlap: otherPaths,
       });
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       this.circuit.addWire(pa.id, pb.id, mid.length ? mid : undefined, bundleId);
@@ -1745,7 +1764,7 @@ export class Editor {
         startDir: pinExitDir(bankPin.pos, bank.pos),
         endDir: pinExitDir(hostPin.pos, host.pos),
         avoidCrossings: otherPaths,
-        preferAlong: otherPaths.filter((_, j) => j >= otherPaths.length - n),
+        avoidOverlap: otherPaths,
       });
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       this.circuit.addWire(bankPin.id, hostPin.id, mid.length ? mid : undefined, bundleId);

@@ -5,6 +5,7 @@ import {
   distanceToSegment,
   findWaypointNear,
   findWireNear,
+  pathOverlapLength,
   pinExitDir,
   routeAStar,
   routeWirePoints,
@@ -146,6 +147,19 @@ describe('routeWirePoints obstacles', () => {
     expect(drawn.some((p) => Math.abs(p.x - 150) < 0.5 && Math.abs(p.y - 50) < 0.5)).toBe(true);
   });
 
+  it('simplifyOrthoPath drops reverse spurs (pin approach tails)', () => {
+    const spur = [
+      { x: 560, y: 140 },
+      { x: 724, y: 140 },
+      { x: 724, y: 130 },
+      { x: 724, y: 140 },
+    ];
+    expect(simplifyOrthoPath(spur)).toEqual([
+      { x: 560, y: 140 },
+      { x: 724, y: 140 },
+    ]);
+  });
+
   it('routeAStar clears a blocking body', () => {
     const a = { x: 0, y: 0 };
     const b = { x: 100, y: 0 };
@@ -167,4 +181,23 @@ describe('routeWirePoints obstacles', () => {
     expect(hits).toBe(false);
   });
 
+  it('avoidOverlap spreads parallel fanouts onto distinct channels', () => {
+    const paths: Array<Array<{ x: number; y: number }>> = [];
+    for (let i = 0; i < 4; i++) {
+      const a = { x: 0, y: i * 20 };
+      const b = { x: 200, y: 10 + i * 20 };
+      const routed = routeWirePoints([a, b], {
+        startDir: 'E',
+        endDir: 'W',
+        avoidOverlap: paths,
+        avoidCrossings: paths,
+      });
+      paths.push(routed);
+    }
+    for (let i = 0; i < paths.length; i++) {
+      for (let j = i + 1; j < paths.length; j++) {
+        expect(pathOverlapLength(paths[i]!, [paths[j]!])).toBe(0);
+      }
+    }
+  });
 });
