@@ -19,9 +19,8 @@ Inspired by [cs.khanin.info](https://cs.khanin.info/).
 | [`#demo=rainbow`](https://ashevchuk.github.io/simcpu/#demo=rainbow) | Soft Spectrum 48K + rainbow demo |
 | [`#demo=glazx`](https://ashevchuk.github.io/simcpu/#demo=glazx) | Soft Spectrum TAP demo (GLAZX) |
 
-> **First-time Pages setup:** make the repo **public**, then  
-> **Settings → Pages → Build and deployment → Source = GitHub Actions**.  
-> Pushing to `main` (or running the **Deploy GitHub Pages** workflow) publishes `dist-file/`.
+> **Hosted build:** the live site is the `gh-pages` branch (a publish of `dist-file/`).  
+> Refresh it after routing/UI changes with `npm run build:dist-file` and a force-push to `gh-pages` (see [Publishing](#publishing--github-pages)).
 
 Offline / double-click: `npm run build:dist-file` then open `dist-file/index.html` (`file://` works; Spectrum Worker falls back to the main thread on `file://`).
 
@@ -327,8 +326,7 @@ examples/         Built-in project JSON (`#e=…`)
 stands/wire-routing/  Routing fixtures + vitest stand
 scripts/          capture-lab-help*, gen-examples, build-dist-file, …
 third_party/      Spectrum ROMs/games, CP/M disks (see READMEs)
-dist-file/        Generated static app (gitignored; published via Pages)
-.github/workflows/pages.yml   Deploy dist-file → GitHub Pages
+dist-file/        Generated static app (gitignored; published on `gh-pages`)
 ```
 
 ---
@@ -356,13 +354,24 @@ Project code is intended for open research / education. Add a root `LICENSE` bef
 
 ## Publishing / GitHub Pages
 
-1. Push this repo to GitHub (`origin` → `ashevchuk/simcpu`).
-2. Set the repository to **Public** (GitHub Pages on free accounts requires a public repo).
-3. **Settings → Pages → Source: GitHub Actions**.
-4. Merge/push to **`main`**, or run workflow **Deploy GitHub Pages** manually (**Actions** tab).
-5. Open **https://ashevchuk.github.io/simcpu/** (first deploy can take a minute).
+**Live app:** https://ashevchuk.github.io/simcpu/
 
-The workflow runs `npm run build:dist-file` and uploads `dist-file/` (`base: './'`, so it works under the project subpath). Spectrum Worker loads as `spectrum-worker.js` next to the page (same origin over `https://`).
+The static build is published from the **`gh-pages`** branch (contents of `dist-file/`: `index.html`, `app.js`, `spectrum-worker.js`). Relative `base: './'` keeps assets working under the project subpath.
+
+### Refresh the hosted build
+
+```bash
+npm run build:dist-file
+# copy dist-file/* onto an orphan/local gh-pages worktree and force-push:
+rm -rf /tmp/simcpu-gh-pages && mkdir -p /tmp/simcpu-gh-pages
+cp -a dist-file/. /tmp/simcpu-gh-pages/
+cd /tmp/simcpu-gh-pages && git init && git checkout -b gh-pages
+git add -A && git commit -m "Publish dist-file build for GitHub Pages."
+git remote add origin https://github.com/ashevchuk/simcpu.git
+git push -f origin gh-pages
+```
+
+Repo settings: **Pages → Deploy from a branch → `gh-pages` / root**.
 
 Local parity check:
 
