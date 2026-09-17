@@ -1,0 +1,168 @@
+{
+  "format": "z80-sim-project",
+  "version": 1,
+  "topCircuit": {
+    "components": [
+      {
+        "id": "btn205569",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 1,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 100,
+          "y": 80
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn205569:out",
+            "componentId": "btn205569",
+            "name": "out",
+            "pos": {
+              "x": 116,
+              "y": 80
+            }
+          }
+        }
+      },
+      {
+        "id": "clk205570",
+        "kind": "clock",
+        "mode": "continuous",
+        "value": 0,
+        "running": true,
+        "periodFrames": 8,
+        "dutyFrames": 4,
+        "phase": 0,
+        "holdFrames": 0,
+        "lastTrig": 0,
+        "pos": {
+          "x": 100,
+          "y": 180
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "clk205570:out",
+            "componentId": "clk205570",
+            "name": "out",
+            "pos": {
+              "x": 118,
+              "y": 180
+            }
+          },
+          "trig": {
+            "id": "clk205570:trig",
+            "componentId": "clk205570",
+            "name": "trig",
+            "pos": {
+              "x": 82,
+              "y": 180
+            }
+          }
+        }
+      },
+      {
+        "id": "chip205571",
+        "kind": "chip",
+        "defId": "chipdef202249",
+        "pos": {
+          "x": 300,
+          "y": 140
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pinOrder": [
+          "clr",
+          "clk",
+          "out"
+        ],
+        "pinSide": {
+          "clr": -1,
+          "clk": -1,
+          "out": 1
+        },
+        "defRevision": 0,
+        "pins": {
+          "clr": {
+            "id": "chip205571:clr",
+            "componentId": "chip205571",
+            "name": "clr",
+            "pos": {
+              "x": 260,
+              "y": 130
+            }
+          },
+          "clk": {
+            "id": "chip205571:clk",
+            "componentId": "chip205571",
+            "name": "clk",
+            "pos": {
+              "x": 260,
+              "y": 150
+            }
+          },
+          "out": {
+            "id": "chip205571:out",
+            "componentId": "chip205571",
+            "name": "out",
+            "pos": {
+              "x": 340,
+              "y": 140
+            }
+          }
+        },
+        "defName": "CLK_DIV16"
+      },
+      {
+        "id": "led205574",
+        "kind": "led",
+        "label": "out",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 500,
+          "y": 140
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led205574:in",
+            "componentId": "led205574",
+            "name": "in",
+            "pos": {
+              "x": 486,
+              "y": 140
+            }
+          }
+        }
+      }
+    ],
+    "wires": [
+      {
+        "id": "w205572",
+        "a": "btn205569:out",
+        "b": "chip205571:clr"
+      },
+      {
+        "id": "w205573",
+        "a": "clk205570:out",
+        "b": "chip205571:clk"
+      },
+      {
+        "id": "w205575",
+        "a": "chip205571:out",
+        "b": "led205574:in"
+      }
+    ]
+  },
+  "chipDefs": []
+}

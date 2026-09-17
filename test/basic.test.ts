@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compileBasic } from '../src/machine/basic.js';
+import { loadBasicRom } from '../src/machine/basicRom.js';
 import { FB_BASE, KEY_DATA, KEY_STATUS, MACHINE_ADDR_BITS } from '../src/machine/memoryMap.js';
 import { createSoftZ80, softRun } from '../src/machine/softZ80.js';
 import { injectKey } from '../src/machine/tty.js';
@@ -167,7 +168,6 @@ describe('mini BASIC', () => {
     ram.set(bytes, origin);
     const cpu = createSoftZ80(0xdff);
     cpu.pc = origin;
-    // Spin until the wait loop is live, then inject
     softRun(cpu, ram, 20, { clearOnReadKeys: true });
     expect(cpu.halted).toBe(false);
     injectKey(ram, 0x41);
@@ -177,5 +177,34 @@ describe('mini BASIC', () => {
     expect(ram[FB_BASE]).toBe(0x41);
     expect(ram[KEY_STATUS]).toBe(0);
     expect(ram[KEY_DATA]).toBe(0x41);
+  });
+
+  it('supports CLS, GOSUB/RETURN, * / and PRINT expr', () => {
+    const { ram, cpu } = runBasic(
+      `
+      10 CLS
+      20 LET A=2
+      30 LET B=A*3+1
+      40 GOSUB 100
+      50 PRINT B
+      60 END
+      100 PRINT "X"
+      110 RETURN
+      `,
+      8000,
+    );
+    expect(cpu.halted).toBe(true);
+    expect(ram[FB_BASE]).toBe('X'.charCodeAt(0));
+    expect(ram[FB_BASE + 1]).toBe(7);
+    expect(ram[0xc00 + 1]).toBe(7); // B
+  });
+
+  it('loads BASIC demo ROM image and runs from JP @0000', () => {
+    const ram = new Uint8Array(1 << MACHINE_ADDR_BITS);
+    loadBasicRom(ram);
+    const cpu = createSoftZ80(0xdff);
+    softRun(cpu, ram, 20000, { clearOnReadKeys: true });
+    expect(cpu.halted).toBe(true);
+    expect(ram[FB_BASE]).toBe('B'.charCodeAt(0));
   });
 });

@@ -1,0 +1,594 @@
+{
+  "format": "z80-sim-project",
+  "version": 1,
+  "topCircuit": {
+    "components": [
+      {
+        "id": "chip218406",
+        "kind": "chip",
+        "defId": "chipdef215192",
+        "pos": {
+          "x": 400,
+          "y": 200
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pinOrder": [
+          "cin",
+          "a0",
+          "a1",
+          "a2",
+          "a3",
+          "b0",
+          "b1",
+          "b2",
+          "b3",
+          "sum0",
+          "sum1",
+          "sum2",
+          "sum3",
+          "cout"
+        ],
+        "pinSide": {
+          "cin": -1,
+          "a0": -1,
+          "a1": -1,
+          "a2": -1,
+          "a3": -1,
+          "b0": -1,
+          "b1": -1,
+          "b2": -1,
+          "b3": -1,
+          "sum0": 1,
+          "sum1": 1,
+          "sum2": 1,
+          "sum3": 1,
+          "cout": 1
+        },
+        "defRevision": 0,
+        "pins": {
+          "cin": {
+            "id": "chip218406:cin",
+            "componentId": "chip218406",
+            "name": "cin",
+            "pos": {
+              "x": 360,
+              "y": 120
+            }
+          },
+          "a0": {
+            "id": "chip218406:a0",
+            "componentId": "chip218406",
+            "name": "a0",
+            "pos": {
+              "x": 360,
+              "y": 140
+            }
+          },
+          "a1": {
+            "id": "chip218406:a1",
+            "componentId": "chip218406",
+            "name": "a1",
+            "pos": {
+              "x": 360,
+              "y": 160
+            }
+          },
+          "a2": {
+            "id": "chip218406:a2",
+            "componentId": "chip218406",
+            "name": "a2",
+            "pos": {
+              "x": 360,
+              "y": 180
+            }
+          },
+          "a3": {
+            "id": "chip218406:a3",
+            "componentId": "chip218406",
+            "name": "a3",
+            "pos": {
+              "x": 360,
+              "y": 200
+            }
+          },
+          "b0": {
+            "id": "chip218406:b0",
+            "componentId": "chip218406",
+            "name": "b0",
+            "pos": {
+              "x": 360,
+              "y": 220
+            }
+          },
+          "b1": {
+            "id": "chip218406:b1",
+            "componentId": "chip218406",
+            "name": "b1",
+            "pos": {
+              "x": 360,
+              "y": 240
+            }
+          },
+          "b2": {
+            "id": "chip218406:b2",
+            "componentId": "chip218406",
+            "name": "b2",
+            "pos": {
+              "x": 360,
+              "y": 260
+            }
+          },
+          "b3": {
+            "id": "chip218406:b3",
+            "componentId": "chip218406",
+            "name": "b3",
+            "pos": {
+              "x": 360,
+              "y": 280
+            }
+          },
+          "sum0": {
+            "id": "chip218406:sum0",
+            "componentId": "chip218406",
+            "name": "sum0",
+            "pos": {
+              "x": 440,
+              "y": 160
+            }
+          },
+          "sum1": {
+            "id": "chip218406:sum1",
+            "componentId": "chip218406",
+            "name": "sum1",
+            "pos": {
+              "x": 440,
+              "y": 180
+            }
+          },
+          "sum2": {
+            "id": "chip218406:sum2",
+            "componentId": "chip218406",
+            "name": "sum2",
+            "pos": {
+              "x": 440,
+              "y": 200
+            }
+          },
+          "sum3": {
+            "id": "chip218406:sum3",
+            "componentId": "chip218406",
+            "name": "sum3",
+            "pos": {
+              "x": 440,
+              "y": 220
+            }
+          },
+          "cout": {
+            "id": "chip218406:cout",
+            "componentId": "chip218406",
+            "name": "cout",
+            "pos": {
+              "x": 440,
+              "y": 240
+            }
+          }
+        },
+        "defName": "ADDER4"
+      },
+      {
+        "id": "btn218407",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 80,
+          "y": 20
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn218407:out",
+            "componentId": "btn218407",
+            "name": "out",
+            "pos": {
+              "x": 96,
+              "y": 20
+            }
+          }
+        }
+      },
+      {
+        "id": "bsw218409",
+        "kind": "busswitch",
+        "bitWidth": 4,
+        "value": 5,
+        "radix": "hex",
+        "pos": {
+          "x": 80,
+          "y": 120
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pinOrder": [
+          "b0",
+          "b1",
+          "b2",
+          "b3"
+        ],
+        "pins": {
+          "b0": {
+            "id": "bsw218409:b0",
+            "componentId": "bsw218409",
+            "name": "b0",
+            "pos": {
+              "x": 108,
+              "y": 90
+            }
+          },
+          "b1": {
+            "id": "bsw218409:b1",
+            "componentId": "bsw218409",
+            "name": "b1",
+            "pos": {
+              "x": 108,
+              "y": 110
+            }
+          },
+          "b2": {
+            "id": "bsw218409:b2",
+            "componentId": "bsw218409",
+            "name": "b2",
+            "pos": {
+              "x": 108,
+              "y": 130
+            }
+          },
+          "b3": {
+            "id": "bsw218409:b3",
+            "componentId": "bsw218409",
+            "name": "b3",
+            "pos": {
+              "x": 108,
+              "y": 150
+            }
+          }
+        }
+      },
+      {
+        "id": "bsw218410",
+        "kind": "busswitch",
+        "bitWidth": 4,
+        "value": 3,
+        "radix": "hex",
+        "pos": {
+          "x": 80,
+          "y": 280
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pinOrder": [
+          "b0",
+          "b1",
+          "b2",
+          "b3"
+        ],
+        "pins": {
+          "b0": {
+            "id": "bsw218410:b0",
+            "componentId": "bsw218410",
+            "name": "b0",
+            "pos": {
+              "x": 108,
+              "y": 250
+            }
+          },
+          "b1": {
+            "id": "bsw218410:b1",
+            "componentId": "bsw218410",
+            "name": "b1",
+            "pos": {
+              "x": 108,
+              "y": 270
+            }
+          },
+          "b2": {
+            "id": "bsw218410:b2",
+            "componentId": "bsw218410",
+            "name": "b2",
+            "pos": {
+              "x": 108,
+              "y": 290
+            }
+          },
+          "b3": {
+            "id": "bsw218410:b3",
+            "componentId": "bsw218410",
+            "name": "b3",
+            "pos": {
+              "x": 108,
+              "y": 310
+            }
+          }
+        }
+      },
+      {
+        "id": "bus218419",
+        "kind": "busprobe",
+        "bitWidth": 4,
+        "radix": "hex",
+        "pos": {
+          "x": 640,
+          "y": 160
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pinOrder": [
+          "b0",
+          "b1",
+          "b2",
+          "b3"
+        ],
+        "pins": {
+          "b0": {
+            "id": "bus218419:b0",
+            "componentId": "bus218419",
+            "name": "b0",
+            "pos": {
+              "x": 612,
+              "y": 130
+            }
+          },
+          "b1": {
+            "id": "bus218419:b1",
+            "componentId": "bus218419",
+            "name": "b1",
+            "pos": {
+              "x": 612,
+              "y": 150
+            }
+          },
+          "b2": {
+            "id": "bus218419:b2",
+            "componentId": "bus218419",
+            "name": "b2",
+            "pos": {
+              "x": 612,
+              "y": 170
+            }
+          },
+          "b3": {
+            "id": "bus218419:b3",
+            "componentId": "bus218419",
+            "name": "b3",
+            "pos": {
+              "x": 612,
+              "y": 190
+            }
+          }
+        }
+      },
+      {
+        "id": "led218421",
+        "kind": "led",
+        "label": "s0",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 640,
+          "y": 280
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led218421:in",
+            "componentId": "led218421",
+            "name": "in",
+            "pos": {
+              "x": 626,
+              "y": 280
+            }
+          }
+        }
+      },
+      {
+        "id": "led218424",
+        "kind": "led",
+        "label": "s1",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 640,
+          "y": 320
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led218424:in",
+            "componentId": "led218424",
+            "name": "in",
+            "pos": {
+              "x": 626,
+              "y": 320
+            }
+          }
+        }
+      },
+      {
+        "id": "led218427",
+        "kind": "led",
+        "label": "s2",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 640,
+          "y": 360
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led218427:in",
+            "componentId": "led218427",
+            "name": "in",
+            "pos": {
+              "x": 626,
+              "y": 360
+            }
+          }
+        }
+      },
+      {
+        "id": "led218430",
+        "kind": "led",
+        "label": "s3",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 640,
+          "y": 400
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led218430:in",
+            "componentId": "led218430",
+            "name": "in",
+            "pos": {
+              "x": 626,
+              "y": 400
+            }
+          }
+        }
+      },
+      {
+        "id": "led218432",
+        "kind": "led",
+        "label": "cout",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 640,
+          "y": 460
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led218432:in",
+            "componentId": "led218432",
+            "name": "in",
+            "pos": {
+              "x": 626,
+              "y": 460
+            }
+          }
+        }
+      }
+    ],
+    "wires": [
+      {
+        "id": "w218408",
+        "a": "btn218407:out",
+        "b": "chip218406:cin"
+      },
+      {
+        "id": "w218411",
+        "a": "bsw218409:b0",
+        "b": "chip218406:a0"
+      },
+      {
+        "id": "w218412",
+        "a": "bsw218410:b0",
+        "b": "chip218406:b0"
+      },
+      {
+        "id": "w218413",
+        "a": "bsw218409:b1",
+        "b": "chip218406:a1"
+      },
+      {
+        "id": "w218414",
+        "a": "bsw218410:b1",
+        "b": "chip218406:b1"
+      },
+      {
+        "id": "w218415",
+        "a": "bsw218409:b2",
+        "b": "chip218406:a2"
+      },
+      {
+        "id": "w218416",
+        "a": "bsw218410:b2",
+        "b": "chip218406:b2"
+      },
+      {
+        "id": "w218417",
+        "a": "bsw218409:b3",
+        "b": "chip218406:a3"
+      },
+      {
+        "id": "w218418",
+        "a": "bsw218410:b3",
+        "b": "chip218406:b3"
+      },
+      {
+        "id": "w218420",
+        "a": "chip218406:sum0",
+        "b": "bus218419:b0"
+      },
+      {
+        "id": "w218422",
+        "a": "chip218406:sum0",
+        "b": "led218421:in"
+      },
+      {
+        "id": "w218423",
+        "a": "chip218406:sum1",
+        "b": "bus218419:b1"
+      },
+      {
+        "id": "w218425",
+        "a": "chip218406:sum1",
+        "b": "led218424:in"
+      },
+      {
+        "id": "w218426",
+        "a": "chip218406:sum2",
+        "b": "bus218419:b2"
+      },
+      {
+        "id": "w218428",
+        "a": "chip218406:sum2",
+        "b": "led218427:in"
+      },
+      {
+        "id": "w218429",
+        "a": "chip218406:sum3",
+        "b": "bus218419:b3"
+      },
+      {
+        "id": "w218431",
+        "a": "chip218406:sum3",
+        "b": "led218430:in"
+      },
+      {
+        "id": "w218433",
+        "a": "chip218406:cout",
+        "b": "led218432:in"
+      }
+    ]
+  },
+  "chipDefs": []
+}

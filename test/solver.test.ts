@@ -15,6 +15,8 @@ import {
   buildTriStateBuffer,
   buildXor,
   makeInput,
+  makeLabel,
+  makeLed,
   makeSource,
   wire,
 } from '../src/sim/library.js';
@@ -329,6 +331,19 @@ describe('contention', () => {
     const state = step(circuit, netMap, initialState());
     const net = netMap.netOf.get(vcc.pins.out.id) as string;
     expect(state.contended.has(net)).toBe(true);
+  });
+});
+
+describe('implicit rails', () => {
+  it('drives a net named VCC from a label alone (no Source)', () => {
+    const circuit = new Circuit();
+    const led = makeLed(circuit, { x: 100, y: 100 });
+    const label = makeLabel(circuit, 'VCC', { x: 40, y: 100 });
+    wire(circuit, label.pins.net, led.pins.in);
+
+    const { netMap, state } = settle(circuit);
+    expect(netMap.netOf.get(led.pins.in.id)).toBe('VCC');
+    expect(levelAt(state, netMap, led.pins.in.id)).toBe(1);
   });
 });
 

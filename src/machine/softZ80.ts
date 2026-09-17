@@ -32,6 +32,8 @@ export interface SoftZ80State {
   r: number;
   iff1: boolean;
   iff2: boolean;
+  /** Frames until IFF enable after EI (Z80: enables after the following instruction). */
+  eiDelay: number;
   im: 0 | 1 | 2;
   sp: number;
   pc: number;
@@ -40,8 +42,22 @@ export interface SoftZ80State {
 
 export interface SoftMemHooks {
   clearOnReadKeys?: boolean;
+  /** Override KEY_DATA for clear-on-read (64K CP/M map). */
+  keyDataAddr?: number;
+  /** Override KEY_STATUS for clear-on-read (64K CP/M map). */
+  keyStatusAddr?: number;
   portIn?: (port: number) => number;
   portOut?: (port: number, val: number) => void;
+  /**
+   * When true, IN re-executes (blocking I/O). Used for z80pack CONDAT so
+   * BIOS CONIN waits for a key instead of returning NUL.
+   */
+  portInBlock?: (port: number) => boolean;
+  /**
+   * Soft CP/M host trap: if set and returns true, the instruction at PC was
+   * handled in host (BDOS/CCP) — do not fetch/execute.
+   */
+  hostTrap?: (cpu: SoftZ80State, ram: Uint8Array) => boolean;
   /**
    * Truncate PC/SP/memory addresses to `2^addrBits` — matches `buildZ80Cpu`
    * parity harnesses (addrBits=7 → 128-byte RAM).
@@ -52,6 +68,25 @@ export interface SoftMemHooks {
    * (gate scale). PUSH/POP qq and DD/FD IX/IY stay two-byte.
    */
   gateCallStack?: boolean;
+  /** When true, ignore writes to 0000–3FFF (Spectrum ROM). */
+  romProtect?: boolean;
+  /**
+   * Optional full memory map (Spectrum MMU). When set, overrides flat `ram[]`
+   * and `romProtect` for CPU memory access.
+   */
+  memRead?: (addr: number) => number;
+  memWrite?: (addr: number, v: number) => void;
+  /** Level-sensitive IRQ line (Spectrum ULA frame). Cleared when accepted. */
+  irqPending?: () => boolean;
+  /** Optional progress callback (step index, max steps) — used for Spectrum beeper timing. */
+  onStep?: (step: number, max: number) => void;
+  /** Clear IRQ after IM1/IM2 vector taken. */
+  clearIrq?: () => void;
+  /**
+   * Byte placed on the data bus during INTACK (IM 0 / IM 2 low vector byte).
+   * Spectrum ULA floats 0xFF — default when unset.
+   */
+  irqBusByte?: () => number;
 }
 
 const FLAG_C = 0x01;
@@ -87,6 +122,7 @@ export function createSoftZ80(sp = 0xdff): SoftZ80State {
     r: 0,
     iff1: false,
     iff2: false,
+    eiDelay: 0,
     im: 0,
     sp: sp & 0xffff,
     pc: 0,
@@ -127,15 +163,24 @@ function setSZP(f: number, n: number): number {
 
 function memRead(ram: Uint8Array, addr: number, hooks?: SoftMemHooks): number {
   addr = uAddr(addr, hooks);
+  if (hooks?.memRead) return hooks.memRead(addr) & 0xff;
   const v = (ram[addr] ?? 0) & 0xff;
-  if (hooks?.clearOnReadKeys && addr === KEY_DATA) {
-    ram[KEY_STATUS] = 0;
+  const keyData = hooks?.keyDataAddr ?? KEY_DATA;
+  const keyStatus = hooks?.keyStatusAddr ?? KEY_STATUS;
+  if (hooks?.clearOnReadKeys && addr === keyData) {
+    ram[keyStatus] = 0;
   }
   return v;
 }
 
 function memWrite(ram: Uint8Array, addr: number, v: number, hooks?: SoftMemHooks): void {
-  ram[uAddr(addr, hooks)] = v & 0xff;
+  addr = uAddr(addr, hooks);
+  if (hooks?.memWrite) {
+    hooks.memWrite(addr, v & 0xff);
+    return;
+  }
+  if (hooks?.romProtect && addr < 0x4000) return;
+  ram[addr] = v & 0xff;
 }
 
 function read16(ram: Uint8Array, addr: number, hooks?: SoftMemHooks): number {
@@ -716,7 +761,7 @@ function execOpcode(
     return true;
   }
   if (idx && op === 0x22) {
-    write16(ram, fetch16(cpu, ram, hooks), indexAddr(cpu, idx));
+    write16(ram, fetch16(cpu, ram, hooks), indexAddr(cpu, idx), hooks);
     return true;
   }
   if (idx && op === 0x2a) {
@@ -802,7 +847,7 @@ function execOpcode(
     const y = (op >> 3) & 7;
     if (idx && y === 6) {
       // LD (IX+d),n — n follows displacement already consumed
-      memWrite(ram, ea!, fetch(cpu, ram, hooks));
+      memWrite(ram, ea!, fetch(cpu, ram, hooks), hooks);
       return true;
     }
     const n = fetch(cpu, ram, hooks);
@@ -989,15 +1034,15 @@ function execOpcode(
     cpu.f2 = tf;
     return true;
   }
-  // DI / EI
+  // DI / EI — EI enables IFF only after the *next* instruction completes.
   if (op === 0xf3) {
     cpu.iff1 = false;
     cpu.iff2 = false;
+    cpu.eiDelay = 0;
     return true;
   }
   if (op === 0xfb) {
-    cpu.iff1 = true;
-    cpu.iff2 = true;
+    cpu.eiDelay = 2;
     return true;
   }
 
@@ -1025,7 +1070,7 @@ function execOpcode(
     return true;
   }
   if (op === 0x32) {
-    memWrite(ram, fetch16(cpu, ram, hooks), cpu.a);
+    memWrite(ram, fetch16(cpu, ram, hooks), cpu.a, hooks);
     return true;
   }
   // LD HL,(nn) / LD (nn),HL
@@ -1034,7 +1079,7 @@ function execOpcode(
     return true;
   }
   if (op === 0x22) {
-    write16(ram, fetch16(cpu, ram, hooks), hl(cpu));
+    write16(ram, fetch16(cpu, ram, hooks), hl(cpu), hooks);
     return true;
   }
 
@@ -1092,7 +1137,13 @@ function execOpcode(
   // IN A,(n) / OUT (n),A
   if (op === 0xdb) {
     const n = fetch(cpu, ram, hooks);
-    cpu.a = portIn((cpu.a << 8) | n, hooks);
+    const port = (cpu.a << 8) | n;
+    if (hooks?.portInBlock?.(port)) {
+      // Blocking device (z80pack CONDAT): re-execute IN until data ready.
+      cpu.pc = uAddr(cpu.pc - 2, hooks);
+      return true;
+    }
+    cpu.a = portIn(port, hooks);
     return true;
   }
   if (op === 0xd3) {
@@ -1109,27 +1160,62 @@ function execOpcode(
   throw new Error(`soft Z80: unimplemented opcode 0x${op.toString(16)} at PC`);
 }
 
+/**
+ * Accept a pending maskable IRQ.
+ * IM 1 → RST 38H; IM 2 → word at (I<<8 | busByte), Spectrum bus defaults to 0xFF.
+ * IM 0 is not implemented (returns false, leaves pending).
+ * Leaves pending uncleared when IFF1 is off, EI delay, or unsupported mode.
+ */
+export function softAcceptIrq(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): boolean {
+  if (!hooks?.irqPending?.()) return false;
+  if (!cpu.iff1 || cpu.eiDelay > 0) return false;
+  if (cpu.im !== 1 && cpu.im !== 2) return false;
+  cpu.halted = false;
+  cpu.iff1 = false;
+  cpu.iff2 = false;
+  pushReturn(cpu, ram, cpu.pc, hooks);
+  if (cpu.im === 1) {
+    cpu.pc = uAddr(0x0038, hooks);
+  } else {
+    const bus = (hooks.irqBusByte?.() ?? 0xff) & 0xff;
+    const vec = uAddr(((cpu.i & 0xff) << 8) | bus, hooks);
+    const lo = memRead(ram, vec, hooks);
+    const hi = memRead(ram, (vec + 1) & 0xffff, hooks);
+    cpu.pc = uAddr(lo | (hi << 8), hooks);
+  }
+  hooks.clearIrq?.();
+  return true;
+}
+
+/**
+ * Non-maskable interrupt: push PC, clear IFF1 (keep IFF2), jump to $0066.
+ * Used by Spectrum Multiface / soft NMI button.
+ */
+export function softNmi(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): void {
+  cpu.halted = false;
+  cpu.iff1 = false;
+  pushReturn(cpu, ram, cpu.pc, hooks);
+  cpu.pc = uAddr(0x0066, hooks);
+}
+
 /** Execute one instruction. Returns false if halted / unsupported. */
 export function softStep(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): boolean {
+  if (softAcceptIrq(cpu, ram, hooks)) return true;
   if (cpu.halted) return false;
+  if (hooks?.hostTrap?.(cpu, ram)) return true;
   const op = fetch(cpu, ram, hooks);
   bumpR(cpu);
 
+  let ok = true;
   if (op === 0xcb) {
     const cb = fetch(cpu, ram, hooks);
     bumpR(cpu);
     const z = cb & 7;
     const ea = z === 6 ? hl(cpu) : null;
     execCb(cpu, ram, cb, ea, hooks);
-    return true;
-  }
-
-  if (op === 0xed) {
+  } else if (op === 0xed) {
     execEd(cpu, ram, hooks);
-    return true;
-  }
-
-  if (op === 0xdd || op === 0xfd) {
+  } else if (op === 0xdd || op === 0xfd) {
     const idx: IndexReg = op === 0xdd ? 'ix' : 'iy';
     const nop = fetch(cpu, ram, hooks);
     bumpR(cpu);
@@ -1145,27 +1231,46 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHook
         );
       }
       execCb(cpu, ram, cb, ea, hooks);
-      return true;
-    }
-
-    if (nop === 0xdd || nop === 0xfd || nop === 0xed) {
+    } else if (nop === 0xdd || nop === 0xfd || nop === 0xed) {
       // Nested/ignored prefixes: treat as new prefix start by rewinding one and re-fetching
       // Common soft approach: ignore and continue with latest — here throw clearly
       throw new Error(
         `soft Z80: nested prefix 0x${op.toString(16)} 0x${nop.toString(16)} unsupported`,
       );
+    } else {
+      ok = execOpcode(cpu, ram, nop, hooks, idx);
     }
-
-    return execOpcode(cpu, ram, nop, hooks, idx);
+  } else {
+    ok = execOpcode(cpu, ram, op, hooks, null);
   }
 
-  return execOpcode(cpu, ram, op, hooks, null);
+  // EI delay: countdown hits 0 after the instruction that *followed* EI.
+  if (cpu.eiDelay > 0) {
+    cpu.eiDelay -= 1;
+    if (cpu.eiDelay === 0) {
+      cpu.iff1 = true;
+      cpu.iff2 = true;
+    }
+  }
+  return ok;
 }
 
-/** Run up to `max` instructions or until halted. Returns steps taken. */
-export function softRun(cpu: SoftZ80State, ram: Uint8Array, max: number, hooks?: SoftMemHooks): number {
+/**
+ * Run up to `max` instructions or until halted (wakes on pending IRQ).
+ * Optional `breakPc`: stop *before* executing that PC (returns early; caller freezes Run).
+ */
+export function softRun(
+  cpu: SoftZ80State,
+  ram: Uint8Array,
+  max: number,
+  hooks?: SoftMemHooks,
+  breakPc?: number | null,
+): number {
   let n = 0;
-  while (n < max && !cpu.halted) {
+  while (n < max) {
+    if (breakPc != null && (cpu.pc & 0xffff) === (breakPc & 0xffff)) break;
+    if (cpu.halted && !(hooks?.irqPending?.() && cpu.iff1 && cpu.eiDelay === 0)) break;
+    hooks?.onStep?.(n, max);
     softStep(cpu, ram, hooks);
     n++;
   }

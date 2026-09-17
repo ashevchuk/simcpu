@@ -4,17 +4,16 @@ import { makeZ80Harness } from './z80Harness.js';
 /**
  * `LD I,A` / `LD R,A` / `LD A,I` / `LD A,R` — see "x=01, z=7, y=0..3" in
  * ARCHITECTURE.md. Round-trip A through I and R; flags on the A← loads
- * (S/Z/X/Y from the byte, H=N=P/V=0, C held). P/V is deliberately 0 —
- * real Z80 copies IFF2, which this project does not model yet.
+ * (S/Z/X/Y from the byte, H=N=0, P/V←IFF2, C held).
  *
  * 0:  0x3E,0xA5       LD A,0xA5
  * 2:  0xED,0x47       LD I,A
  * 4:  0x3E,0x00       LD A,0x00
- * 6:  0xED,0x57       LD A,I      A←0xA5; F from 0xA5 with P/V=0
+ * 6:  0xED,0x57       LD A,I      A←0xA5; F from 0xA5 with P/V←IFF2(=0)
  * 8:  0x3E,0x5A       LD A,0x5A
  * 10: 0xED,0x4F       LD R,A
  * 12: 0x3E,0x00       LD A,0x00
- * 14: 0xED,0x5F       LD A,R      A←0x5A; F from 0x5A with P/V=0
+ * 14: 0xED,0x5F       LD A,R      A←0x5A; F from 0x5A with P/V←IFF2(=0)
  */
 describe('buildZ80Cpu — x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R', () => {
   const PROGRAM = (() => {
@@ -67,5 +66,27 @@ describe('buildZ80Cpu — x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R',
     expect(h.readReg(h.cpu.f)).toBe(F_FROM_5A);
     expect(h.readReg(h.cpu.rI)).toBe(0xa5); // I untouched by the R path
     expect(h.readReg(h.cpu.pc)).toBe(16);
+  });
+
+  it('LD A,I copies IFF2 into P/V after EI delay', () => {
+    const bytes = new Uint8Array(128);
+    bytes.set([0xed, 0x56], 0); // IM 1
+    bytes.set([0xfb], 2); // EI
+    bytes.set([0x00], 3); // NOP — commits IFF
+    bytes.set([0x3e, 0xa5], 4); // LD A,0xA5
+    bytes.set([0xed, 0x47], 6); // LD I,A
+    bytes.set([0xaf], 8); // XOR A — clear A, sets flags
+    bytes.set([0xed, 0x57], 9); // LD A,I — P/V should be 1 (IFF2)
+    const h = makeZ80Harness(bytes);
+    h.runInstruction(); // IM1
+    h.runInstruction(); // EI
+    h.runInstruction(); // NOP
+    expect(h.readReg(h.cpu.iff2)).toBe(1);
+    h.runInstruction(); // LD A,0xA5
+    h.runInstruction(); // LD I,A
+    h.runInstruction(); // XOR A
+    h.runInstruction(); // LD A,I
+    expect(h.readReg(h.cpu.a)).toBe(0xa5);
+    expect(h.readReg(h.cpu.f) & 0x04).toBe(0x04); // P/V
   });
 });

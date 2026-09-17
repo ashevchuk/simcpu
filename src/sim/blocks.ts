@@ -39,6 +39,7 @@ import {
   type TwoInputGate,
 } from './library.js';
 import { buildRegisterBit } from './sequential.js';
+import { compactCircuitLayout, replaceLongWiresWithLabels, tiePinToNet, tidyLibraryCircuit } from './labelWires.js';
 import type { Pin, Point, RamComponent } from './types.js';
 
 /** Fold buildRegisterBit() into a reusable 1-bit register chip. Ports, in order: d, we, clk, q, qn. */
@@ -303,19 +304,19 @@ function getMux2Chip(library: ChipLibrary): ChipDef {
   return def;
 }
 
-/** Fold a 1-input gate (NOT) — ports in order: in, out → p0, p1 after fold. */
+/** Fold a 1-input gate (NOT) — CMOS primitive: keep schematic wires. */
 function makeNotChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
   makeSource(scratch, 1);
   makeSource(scratch, 0);
   const g = buildNot(scratch);
   return foldExposing(scratch, 'NOT', library, [
-    { pin: g.in, isOutput: false },
-    { pin: g.out, isOutput: true },
-  ]);
+    { pin: g.in, isOutput: false, portName: 'in' },
+    { pin: g.out, isOutput: true, portName: 'out' },
+  ], { labelize: false });
 }
 
-/** Fold a 2-input gate — ports in order: a, b, out → p0, p1, p2 after fold. */
+/** Fold a 2-input gate. NAND/NOR keep wires; AND/OR/XOR labelize interconnects. */
 function makeTwoInputGateChip(
   library: ChipLibrary,
   name: string,
@@ -325,11 +326,12 @@ function makeTwoInputGateChip(
   makeSource(scratch, 1);
   makeSource(scratch, 0);
   const g = build(scratch);
+  const labelize = name !== 'NAND' && name !== 'NOR';
   return foldExposing(scratch, name, library, [
-    { pin: g.a, isOutput: false },
-    { pin: g.b, isOutput: false },
-    { pin: g.out, isOutput: true },
-  ]);
+    { pin: g.a, isOutput: false, portName: 'a' },
+    { pin: g.b, isOutput: false, portName: 'b' },
+    { pin: g.out, isOutput: true, portName: 'out' },
+  ], { labelize });
 }
 
 const notChipDefs = new WeakMap<ChipLibrary, ChipDef>();
@@ -746,23 +748,12 @@ export interface StubRom {
 }
 
 /**
- * A fixed, hand-authored "ROM": `words[i]` (one bit array per word, LSB
- * first) is what reading address `i` returns. There is no storage here at
- * all — every bit is wired straight from a constant `makeSource`, and there
- * is no write port. This is deliberately a stub, not small real memory:
- * building even a writable few words from `buildRegister` would still not
- * be the representation real RAM needs at a realistic address-space scale
- * (see ARCHITECTURE.md's "Known simplifications") — that's a separate,
- * later problem. This slice's job is proving the *bus and control-FSM
- * handshake* actually works, with a memory-shaped thing to fetch from.
+ * Fixed hand-authored "ROM": `words[i]` (LSB-first bit array) is what reading
+ * address `i` returns. No storage — each bit is a constant Source through a
+ * TRI_BUF gated by (decoded word select) AND `oe`.
  *
- * `words.length` must be a power of two (`addr` is `log2(words.length)`
- * bits wide). Every word gets its own bank of `buildTriStateBuffer`
- * instances, one per data bit, each gated by (this word's decoded address
- * line) AND `oe`; every word's bank drives the same shared `data` bus. At
- * most one word is ever selected at a time — the decoder's whole job — so
- * the bus never sees the two-driver contention `buildTriStateBuffer`'s own
- * tests deliberately provoke.
+ * Layout uses net labels for decoder/OE/data fanout (no wire spaghetti).
+ * Stdcell chips (AND/NOT via placer) keep the parent readable when diving.
  */
 export function buildStubRom(parent: Circuit, library: ChipLibrary, words: (0 | 1)[][], pos: Point = { x: 0, y: 0 }): StubRom {
   const wordCount = words.length;
@@ -771,35 +762,60 @@ export function buildStubRom(parent: Circuit, library: ChipLibrary, words: (0 | 
   const dataBits = words[0]?.length ?? 0;
   if (!words.every((w) => w.length === dataBits)) throw new Error('buildStubRom: every word must be the same width');
 
-  makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 }); // rail driver
+  makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 120 });
   makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 80 });
-  const dec = buildDecoder(parent, addrBits, { x: pos.x, y: pos.y });
 
-  const bufDef = getTriBufChip(library);
-  const bufRowStep = chipInstanceHeight(bufDef.ports.length) + 10;
+  // Place AND/NOT as library chips so Stub ROM isn't a transistor carpet.
+  setCircuitGatePlacer(parent, makeZ80GatePlacer(library));
+  let oe: Pin | undefined;
   const data: Pin[] = [];
-  let oe: Pin | undefined; // the first AND gate's `.b` becomes the shared, externally-driven oe handle
+  try {
+    const dec = buildDecoder(parent, addrBits, { x: pos.x, y: pos.y });
 
-  for (let bit = 0; bit < dataBits; bit++) {
-    let bus: Pin | undefined;
+    // Name each decoder line once — every word's select AND ties to the same label.
     for (let w = 0; w < wordCount; w++) {
-      const row = w * dataBits + bit;
-      const gate = buildAnd(parent, { x: pos.x + 800, y: pos.y + row * 100 }); // selected & oe
-      wire(parent, gate.a, dec.lines[w]!);
-      if (!oe) oe = gate.b;
-      else wire(parent, oe, gate.b);
-      const bitValue = makeSource(parent, words[w]![bit]!, { x: pos.x + 1050, y: pos.y + row * 100 - 20 }).pins.out;
-      const buf = makeChipInstance(parent, bufDef, { x: pos.x + 1150, y: pos.y + row * bufRowStep });
-      wire(parent, buf.pins[bufDef.ports[0]!]!, bitValue); // a = this word's fixed bit
-      wire(parent, buf.pins[bufDef.ports[1]!]!, gate.out); // en = selected & oe
-      const bufOut = buf.pins[bufDef.ports[2]!]!;
-      if (!bus) bus = bufOut;
-      else wire(parent, bus, bufOut);
+      tiePinToNet(parent, `STUB_DEC${w}`, dec.lines[w]!);
     }
-    data.push(bus!);
-  }
 
-  return { addr: dec.addr, oe: oe!, data };
+    const bufDef = getTriBufChip(library);
+    const bufRowStep = chipInstanceHeight(bufDef.ports.length) + 10;
+
+    for (let bit = 0; bit < dataBits; bit++) {
+      let dataAnchor: Pin | undefined;
+      for (let w = 0; w < wordCount; w++) {
+        const row = w * dataBits + bit;
+        const gate = buildAnd(parent, { x: pos.x + 800, y: pos.y + row * 100 });
+        tiePinToNet(parent, `STUB_DEC${w}`, gate.a);
+        if (!oe) {
+          oe = gate.b;
+          tiePinToNet(parent, 'STUB_OE', oe);
+        } else {
+          tiePinToNet(parent, 'STUB_OE', gate.b);
+        }
+        const bitValue = makeSource(parent, words[w]![bit]!, {
+          x: pos.x + 1050,
+          y: pos.y + row * 100 - 20,
+        }).pins.out;
+        const buf = makeChipInstance(parent, bufDef, {
+          x: pos.x + 1150,
+          y: pos.y + row * bufRowStep,
+        });
+        wire(parent, buf.pins[bufDef.ports[0]!]!, bitValue);
+        wire(parent, buf.pins[bufDef.ports[1]!]!, gate.out);
+        const bufOut = buf.pins[bufDef.ports[2]!]!;
+        tiePinToNet(parent, `STUB_DATA${bit}`, bufOut);
+        if (!dataAnchor) dataAnchor = bufOut;
+      }
+      data.push(dataAnchor!);
+    }
+
+    // Catch any leftover long legs from the decoder tree.
+    tidyLibraryCircuit(parent);
+
+    return { addr: dec.addr, oe: oe!, data };
+  } finally {
+    setCircuitGatePlacer(parent, null);
+  }
 }
 
 export interface MinimalCpu {
@@ -1134,9 +1150,11 @@ export interface Z80Cpu {
   rIXL: Register; // IX low — same contract
   rIYH: Register; // IY high — seed-path contract like rIXH; FD LD IY,nn / POP IY write internally (see "FD: IY")
   rIYL: Register; // IY low — same contract
-  iff1: Pin[]; // IFF1 (q only) — EI/DI/INT-accept/RETI write it; no external seed (same contract as rI)
-  iff2: Pin[]; // IFF2 (q only) — EI/DI/INT-accept write it; RETI copies iff2→iff1
+  iff1: Pin[]; // IFF1 (q only) — EI-commit/DI/INT-accept/RETI write it; no external seed (same contract as rI)
+  iff2: Pin[]; // IFF2 (q only) — EI-commit/DI/INT-accept write it; RETI copies iff2→iff1
   im1: Pin[]; // IM 1 latch (q only) — `ED 0x56` sets it
+  /** HALT latch (q only) — set by opcode 0x76; cleared by INT accept / CPU_RESET. */
+  halted: Pin[];
   int: Pin; // maskable-INT net (active high), driven by the internal `intDrive` Input (defaults to 0)
   intDrive: { value: 0 | 1 }; // raise/clear INT by writing `.value` (same Input contract clocks use)
   bP: Register; // B'/C'/D'/E'/H'/L' — EXX's own shadow register-pair set, identical seed-path contract (see "x=11: EXX")
@@ -1169,8 +1187,8 @@ export interface Z80Cpu {
  * Z80 opcodes, not a made-up encoding, for two opcode groups: `x=10` (the
  * ALU-operation-on-a-register group, real opcodes `0x80`-`0xBF`) and `x=01`
  * (`LD r,r'`, real opcodes `0x40`-`0x7F`, register-to-register and
- * register<->`(HL)` moves — everything this group can do except the one
- * `0x76` slot, `HALT`, this slice deliberately leaves inert). Built from
+ * register<->`(HL)` moves — including `HALT` at `0x76`, which latches
+ * `halted` rather than pretending to be `LD (HL),(HL)`). Built from
  * exactly the same pieces `buildMinimalCpu` already proved out (PC/RAM/IR,
  * a 3-phase FETCH/INCREMENT/DECODE_EXECUTE `buildRingCounter`,
  * `buildTriStateBuffer` banks sharing one bus) plus `buildZ80Decoder` for
@@ -1220,13 +1238,10 @@ export interface Z80Cpu {
  * `0x76`) is the one hole in this otherwise-complete 8x8 grid: real Z80
  * silicon special-cases that exact byte as `HALT` rather than the
  * pointless "read a byte from memory and write the same byte back" a
- * literal `LD (HL),(HL)` would be. This slice doesn't implement `HALT`
- * either, so it leaves the slot genuinely inert rather than guessing at
- * one behavior or the other: `ramWriteNow` (below) explicitly excludes
- * `z=110`, so `0x76` reads `(HL)` onto the bus for no reason and writes
- * nowhere — the same "a pattern matching no control signal does nothing,
- * by construction, not by being special-cased" discipline `buildMinimalCpu`'s
- * own reserved `111` opcode already established.
+ * literal `LD (HL),(HL)` would be. This slice matches that: `ramWriteNow`
+ * (below) explicitly excludes `z=110`, and a separate `haltNow` latch
+ * sets `halted` so the machine runner can stop the clock (INT-accept /
+ * `CPU_RESET` clear it again).
  *
  * `LD (HL),r` is this slice's first instruction that *writes* RAM —
  * `ram.pins.we` was hardwired to `gnd` ("read-only") before this group
@@ -2284,8 +2299,8 @@ function buildZ80CpuInner(
   // I/R — real Z80's interrupt-vector and refresh registers. Built here
   // alongside the other CPU state; `LD I,A`/`LD R,A`/`LD A,I`/`LD A,R`
   // (see "x=01, z=7, y=0..3" below) are the only ops that touch them.
-  // No auto-increment of R on FETCH, and no IFF2 into P/V on LD A,I/R —
-  // see Known Simplifications.
+  // No auto-increment of R on FETCH. P/V on LD A,I/R copies IFF2 (soft parity).
+  // NMI / IM0 / IM2 remain Known Simplifications.
   const regI = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 3800 });
   const regR = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 4600 });
   // IX — real Z80's first index register, as two 8-bit halves (same shape
@@ -2297,50 +2312,55 @@ function buildZ80CpuInner(
   const rIXL = buildRegister(parent, library, 8, { x: pos.x + 1400, y: pos.y + 4600 });
   const rIYH = buildRegister(parent, library, 8, { x: pos.x + 800, y: pos.y + 3800 });
   const rIYL = buildRegister(parent, library, 8, { x: pos.x + 800, y: pos.y + 4600 });
-  // Thin IM1 IRQ state — IFF1/IFF2, IM 1 latch, and a one-instruction
-  // "serving" latch that suppresses PHASE1's PC advance while RST 38h
-  // reuses the existing stack/jump path. Seed contract matches rB
-  // (external d/we); INT is a genuine external sink like ioPortDataIn.
+  // Thin IM1 IRQ state — IFF1/IFF2, IM 1 latch, HALT latch, EI delay arms,
+  // and a one-instruction "serving" latch that suppresses PHASE1's PC
+  // advance while RST 38h reuses the existing stack/jump path. Seed
+  // contract matches rB (external d/we); INT is a genuine external sink
+  // like ioPortDataIn.
   const iff1 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 3800 });
   const iff2 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4000 });
   const im1 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4200 });
   const intServing = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4400 });
+  // Soft-style one-instruction EI delay: EI arms arm1; next PHASE0 moves
+  // arm1→arm2; following PHASE0 commits IFF (arm2.q from prior cycle).
+  // HALT sticks until INT-accept / CPU_RESET.
+  const halted = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4800 });
+  const eiArm1 = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 3800 });
+  const eiArm2 = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 4000 });
   const alu = buildAlu(parent, library, 8, { x: pos.x + 3400, y: pos.y + 2400 });
   const fsm = buildRingCounter(parent, library, 10, { x: pos.x, y: pos.y + 3600 }); // FETCH/INCREMENT/EXEC1-EXEC8 — see the doc comment above ("x=11: SP, PUSH/POP, RET, RST n" for why a 4th phase exists; "x=00, z=1: LD dd,nn" for why a 5th and 6th do too; "x=11: CALL nn" for why a 7th and 8th do too; DD/FD CB SET/RES/rot (IX+d)/(IY+d) for why a 9th and 10th do too — BIT fit in 8, but read+write after op needs PHASE8 and op-advance moved to PHASE9). Widening is, again, a pure parameter change — buildRingCounter is fully generic (any N>=2), and every existing PHASE0-PHASE7 label keeps its exact ring position, the two new phases appended after EXEC6, before the wrap back to FETCH.
   const dec = buildZ80Decoder(parent, ir.q, { x: pos.x + 8600, y: pos.y });
   const muxDef = getMux2Chip(library);
   const bufDef = getTriBufChip(library);
 
-  // This composite is dense enough (100+ internal wire() calls, several
+  // This composite is dense enough (100+ internal connections, several
   // signals fanned out across the whole coordinate space — CLK to 11
   // registers, the shared bus, both decoder outputs, both EXEC phase
   // bits, SP's own value) that drawing every one of them as a literal
   // point-to-point line makes the canvas unreadable, not just cluttered.
-  // `tieToLabel` ties a pin to a net *label* instead of a wire — same
-  // net (see Circuit.computeNets()'s "same-named label" tie, same
-  // mechanism the UI's own `label` tool already exposes), no line drawn.
-  // Used below only for signals with genuinely long-distance or
-  // multi-destination fanout; adjacent gates a few hundred units apart
-  // stay plain `wire()` calls — labeling *everything* would just trade
-  // one kind of clutter for another. Safe here specifically because
-  // `buildZ80Cpu` is called once per placement, not folded into a chip
-  // def instantiated multiple times — flatten() namespaces component
-  // *ids* per instance but not a label's own `name` string (see
-  // Circuit.ts), so reusing these names *inside* a multiply-instantiated
-  // chip def would wrongly tie separate instances' nets together. Two
-  // `buildZ80Cpu`s placed in the same project and using these same
-  // names would collide the same way — a real, documented limitation,
-  // not a hidden one.
-  // One Label per net name — computeNets already joins same-named labels;
-  // reusing the first pin avoids thousands of duplicate Label stubs.
-  const labelAnchors = new Map<string, Pin>();
-  const tieToLabel = (name: string, p: Pin, labelPos: Point): void => {
-    let anchor = labelAnchors.get(name);
-    if (!anchor) {
-      anchor = makeLabel(parent, name, labelPos).pins.net;
-      labelAnchors.set(name, anchor);
-    }
-    wire(parent, p, anchor);
+  // `tieToLabel` drops a *local* net label beside the pin — same net via
+  // Circuit.computeNets()'s "same-named label" tie (same mechanism the
+  // UI's own `label` tool already exposes), short stub only. A previous
+  // optimisation reused one Label pin as an anchor and wired every far
+  // fanout to it — that quietly recreated the long-wire spaghetti this
+  // helper exists to kill. Used below for signals with genuinely
+  // long-distance or multi-destination fanout; adjacent gates a few
+  // dozen units apart stay plain `wire()` calls. A final
+  // `replaceLongWiresWithLabels` pass after the whole CPU is built
+  // catches anything that slipped through. Safe here specifically
+  // because `buildZ80Cpu` is called once per placement, not folded into
+  // a chip def instantiated multiple times — flatten() namespaces
+  // component *ids* per instance but not a label's own `name` string
+  // (see Circuit.ts), so reusing these names *inside* a
+  // multiply-instantiated chip def would wrongly tie separate
+  // instances' nets together. Two `buildZ80Cpu`s placed in the same
+  // project and using these same names would collide the same way — a
+  // real, documented limitation, not a hidden one.
+  const tieToLabel = (name: string, p: Pin, _labelPos?: Point): void => {
+    // Always beside `p` — callers used to pass a shared cluster coordinate
+    // that left a long stub from a far pin to that one spot.
+    const lbl = makeLabel(parent, name, { x: p.pos.x + 8, y: p.pos.y });
+    wire(parent, p, lbl.pins.net);
   };
   tieToLabel('CPU_RESET', pc.reset, { x: pos.x - 50, y: pos.y - 80 }); // anchor — IFF/IM1 power-on clear (far)
 
@@ -4799,8 +4819,7 @@ function buildZ80CpuInner(
   // x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R (real 0xED
   // 0x47/0x4F/0x57/0x5F). Collides with unprefixed `LD y,A`
   // (`z=7`) the same way RRD/RLD (y=4/5) does. Single PHASE4 after the
-  // ED prefix: copy A→I/R, or I/R→A with S/Z/H=0/N=0/P/V=0 (IFF2 exists
-  // for thin IM1 IRQ but is not copied into P/V here — Known Simplifications)
+  // ED prefix: copy A→I/R, or I/R→A with S/Z/H=0/N=0/P/V←IFF2 (soft parity)
   // / X/Y from the transferred byte; C held.
   const isLdIA = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5680 });
   const isLdIAStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5680 });
@@ -6857,7 +6876,7 @@ function buildZ80CpuInner(
   const eiNow = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 3010 });
   wire(parent, isEi.out, eiNow.a);
   tieToLabel('PHASE2', eiNow.b, { x: pos.x + 9200, y: pos.y - 2990 });
-  tieToLabel('EI_NOW', eiNow.out, { x: pos.x + 9400, y: pos.y - 3010 }); // anchor — IFF1/IFF2 set
+  tieToLabel('EI_NOW', eiNow.out, { x: pos.x + 9400, y: pos.y - 3010 }); // anchor — eiArm1 set (IFF via EI_COMMIT)
   const isJpNn = buildAnd(parent, { x: pos.x + 9300, y: pos.y - 2900 });
   wire(parent, isX11Z3.out, isJpNn.a);
   wire(parent, dec.y[0]!, isJpNn.b);
@@ -7438,9 +7457,8 @@ function buildZ80CpuInner(
   wire(parent, groupActive.out, hlNow.a);
   wire(parent, dec.z[6]!, hlNow.b);
 
-  // LD (HL),r: destination is (HL) (y=6) — excluding z=6 leaves the 0x76
-  // HALT slot inert rather than treating it as LD (HL),(HL); see the doc
-  // comment above.
+  // LD (HL),r: destination is (HL) (y=6) — excluding z=6 keeps HALT from
+  // becoming LD (HL),(HL); haltNow below latches halted instead.
   const notZ6 = buildNot(parent, { x: pos.x + 9350, y: pos.y + 350 });
   wire(parent, dec.z[6]!, notZ6.in);
   const ldWritesHl = buildAnd(parent, { x: pos.x + 9450, y: pos.y + 250 });
@@ -7449,6 +7467,11 @@ function buildZ80CpuInner(
   const ramWriteNow = buildAnd(parent, { x: pos.x + 9550, y: pos.y + 250 });
   wire(parent, ldWritesHl.out, ramWriteNow.a);
   wire(parent, notZ6.out, ramWriteNow.b);
+  // HALT (0x76 = x=01,y=6,z=6): latch halted — soft parity stop-clock.
+  const haltNow = buildAnd(parent, { x: pos.x + 9550, y: pos.y + 280 });
+  wire(parent, ldWritesHl.out, haltNow.a);
+  wire(parent, dec.z[6]!, haltNow.b);
+  tieToLabel('HALT_NOW', haltNow.out, { x: pos.x + 9650, y: pos.y + 280 });
   // Side-folds for RAM WE — stay outside RAM_WE_OR and feed as single
   // inputs (same discipline as RAM_OE_OR). INC/DEC/SET/RES/CB-rot (HL),
   // EX (SP),HL/IX/IY, ED LD (nn),dd, and DD/FD mem writes are reduced
@@ -9198,8 +9221,44 @@ function buildZ80CpuInner(
   fP.q.forEach((q, i) => tieToLabel(`FPOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 300 + i * 20 })); // anchor — F's own write mux (far) reads this
 
   // Thin IRQ: IFF1/IFF2/IM1 write-back — seed path on the exposed Register,
-  // internal commits via DI/EI/INT-accept/RETI/IM1_NOW. Mux priority for
-  // IFF1: clear (DI|accept) > EI=1 > RETI←IFF2 > seed. IFF2 omits RETI.
+  // internal commits via DI/EI-commit/INT-accept/RETI/IM1_NOW. Mux priority for
+  // IFF1: clear (DI|accept) > EI_COMMIT=1 > RETI←IFF2 > seed. IFF2 omits RETI.
+  // Soft-parity EI delay: eiArm1 is the pending latch. Every PHASE2 writes
+  // d←EI_NOW (1 only on the EI instruction); EI_COMMIT = PHASE2 ∧ pending ∧ ¬EI_NOW
+  // so IFF sets on the following instruction's PHASE2 (same edge that clears pending).
+  const notEi = buildNot(parent, { x: pos.x + 12000, y: pos.y - 1000 });
+  tieToLabel('EI_NOW', notEi.in, { x: pos.x + 11900, y: pos.y - 1000 });
+  const eiCommitGate = buildAnd(parent, { x: pos.x + 12050, y: pos.y - 980 });
+  tieToLabel('PHASE2', eiCommitGate.a, { x: pos.x + 11950, y: pos.y - 980 });
+  wire(parent, eiArm1.q[0]!, eiCommitGate.b);
+  const eiCommit = buildAnd(parent, { x: pos.x + 12100, y: pos.y - 980 });
+  wire(parent, eiCommitGate.out, eiCommit.a);
+  wire(parent, notEi.out, eiCommit.b);
+  tieToLabel('EI_COMMIT', eiCommit.out, { x: pos.x + 12200, y: pos.y - 980 });
+
+  const eiPendingWe = buildOr(parent, { x: pos.x + 12050, y: pos.y - 940 });
+  tieToLabel('PHASE2', eiPendingWe.a, { x: pos.x + 11950, y: pos.y - 940 });
+  tieToLabel('DI_NOW', eiPendingWe.b, { x: pos.x + 11950, y: pos.y - 920 });
+  const eiPendingWe2 = buildOr(parent, { x: pos.x + 12100, y: pos.y - 940 });
+  wire(parent, eiPendingWe.out, eiPendingWe2.a);
+  tieToLabel('INT_ACCEPT_NOW', eiPendingWe2.b, { x: pos.x + 12000, y: pos.y - 920 });
+  wire(parent, eiPendingWe2.out, eiArm1.we);
+  tieToLabel('EI_NOW', eiArm1.d[0]!, { x: pos.x + 11950, y: pos.y - 900 });
+
+  // eiArm2 unused in this simplified delay — tie quiescent.
+  tiePowerRail(parent, 'GND', eiArm2.we);
+  tiePowerRail(parent, 'GND', eiArm2.d[0]!);
+
+  // HALT latch — set on HALT_NOW; clear on INT accept / reset.
+  const haltClear = buildOr(parent, { x: pos.x + 11950, y: pos.y - 860 });
+  tieToLabel('INT_ACCEPT_NOW', haltClear.a, { x: pos.x + 11850, y: pos.y - 860 });
+  tieToLabel('CPU_RESET', haltClear.b, { x: pos.x + 11850, y: pos.y - 840 });
+  const haltWe = buildOr(parent, { x: pos.x + 12050, y: pos.y - 860 });
+  tieToLabel('HALT_NOW', haltWe.a, { x: pos.x + 11950, y: pos.y - 860 });
+  wire(parent, haltClear.out, haltWe.b);
+  wire(parent, haltWe.out, halted.we);
+  tieToLabel('HALT_NOW', halted.d[0]!, { x: pos.x + 11950, y: pos.y - 820 });
+
   const iff1Clear = buildOr(parent, { x: pos.x + 12100, y: pos.y - 900 });
   tieToLabel('DI_NOW', iff1Clear.a, { x: pos.x + 12000, y: pos.y - 900 });
   tieToLabel('INT_ACCEPT_NOW', iff1Clear.b, { x: pos.x + 12000, y: pos.y - 880 });
@@ -9208,7 +9267,7 @@ function buildZ80CpuInner(
   const iff1SeedD = iff1RetiMux.pins[muxDef.ports[1]!]!; // in0: seed (or fall-through)
   wire(parent, iff2.q[0]!, iff1RetiMux.pins[muxDef.ports[2]!]!); // in1: IFF2
   const iff1EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12300, y: pos.y - 900 });
-  tieToLabel('EI_NOW', iff1EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12200, y: pos.y - 900 });
+  tieToLabel('EI_COMMIT', iff1EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12200, y: pos.y - 900 });
   wire(parent, iff1RetiMux.pins[muxDef.ports[3]!]!, iff1EiMux.pins[muxDef.ports[1]!]!);
   tiePowerRail(parent, 'VCC', iff1EiMux.pins[muxDef.ports[2]!]!);
   const iff1ClearMux = makeChipInstance(parent, muxDef, { x: pos.x + 12400, y: pos.y - 900 });
@@ -9218,7 +9277,7 @@ function buildZ80CpuInner(
   wire(parent, iff1ClearMux.pins[muxDef.ports[3]!]!, iff1.d[0]!);
   const iff1We1 = buildOr(parent, { x: pos.x + 12100, y: pos.y - 820 });
   tieToLabel('DI_NOW', iff1We1.a, { x: pos.x + 12000, y: pos.y - 820 });
-  tieToLabel('EI_NOW', iff1We1.b, { x: pos.x + 12000, y: pos.y - 800 });
+  tieToLabel('EI_COMMIT', iff1We1.b, { x: pos.x + 12000, y: pos.y - 800 });
   const iff1We2 = buildOr(parent, { x: pos.x + 12200, y: pos.y - 820 });
   wire(parent, iff1We1.out, iff1We2.a);
   tieToLabel('INT_ACCEPT_NOW', iff1We2.b, { x: pos.x + 12100, y: pos.y - 800 });
@@ -9235,7 +9294,7 @@ function buildZ80CpuInner(
   tieToLabel('DI_NOW', iff2Clear.a, { x: pos.x + 12000, y: pos.y - 700 });
   tieToLabel('INT_ACCEPT_NOW', iff2Clear.b, { x: pos.x + 12000, y: pos.y - 680 });
   const iff2EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 700 });
-  tieToLabel('EI_NOW', iff2EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 700 });
+  tieToLabel('EI_COMMIT', iff2EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 700 });
   const iff2SeedD = iff2EiMux.pins[muxDef.ports[1]!]!;
   tiePowerRail(parent, 'VCC', iff2EiMux.pins[muxDef.ports[2]!]!);
   const iff2ClearMux = makeChipInstance(parent, muxDef, { x: pos.x + 12300, y: pos.y - 700 });
@@ -9245,7 +9304,7 @@ function buildZ80CpuInner(
   wire(parent, iff2ClearMux.pins[muxDef.ports[3]!]!, iff2.d[0]!);
   const iff2We1 = buildOr(parent, { x: pos.x + 12100, y: pos.y - 620 });
   tieToLabel('DI_NOW', iff2We1.a, { x: pos.x + 12000, y: pos.y - 620 });
-  tieToLabel('EI_NOW', iff2We1.b, { x: pos.x + 12000, y: pos.y - 600 });
+  tieToLabel('EI_COMMIT', iff2We1.b, { x: pos.x + 12000, y: pos.y - 600 });
   const iff2We2 = buildOr(parent, { x: pos.x + 12200, y: pos.y - 620 });
   wire(parent, iff2We1.out, iff2We2.a);
   tieToLabel('INT_ACCEPT_NOW', iff2We2.b, { x: pos.x + 12100, y: pos.y - 600 });
@@ -10142,8 +10201,7 @@ function buildZ80CpuInner(
   wire(parent, inRcPChain, inRcPBit.in);
 
   // LD A,I / LD A,R flags (see "x=01, z=7, y=0..3") — off the source
-  // register (mux I vs R by LDAR_NOW). P/V is forced 0: real Z80 copies
-  // IFF2 here, and this project has no interrupt flip-flops yet.
+  // register (mux I vs R by LDAR_NOW). P/V copies IFF2 (soft parity).
   const ldAIrByte: Pin[] = [];
   for (let i = 0; i < 8; i++) {
     const mux = makeChipInstance(parent, muxDef, { x: pos.x - 1200, y: pos.y - 5720 + i * 20 });
@@ -10374,15 +10432,14 @@ function buildZ80CpuInner(
       wire(parent, inRcFreshBit[i]!, inRcFMux.pins[muxDef.ports[2]!]!);
       cLayerIn = inRcFMux.pins[muxDef.ports[3]!]!;
     }
-    // LD A,I / LD A,R (see "x=01, z=7, y=0..3") — every bit but C; P/V=0
-    // (IFF2 absent).
+    // LD A,I / LD A,R (see "x=01, z=7, y=0..3") — every bit but C; P/V←IFF2.
     if (i !== 0) {
       const ldAIrFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8383, y: pos.y + 2227 + i * 100 });
       tieToLabel('LDAIR_NOW', ldAIrFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8283, y: pos.y + 2227 + i * 100 });
       wire(parent, cLayerIn, ldAIrFMux.pins[muxDef.ports[1]!]!);
       const ldAIrFreshBit: Record<number, Pin> = {
         1: gnd4,
-        2: gnd4, // P/V ← IFF2, inert without IRQ
+        2: iff2.q[0]!, // P/V ← IFF2 (soft parity)
         3: ldAIrByte[3]!,
         4: gnd4,
         5: ldAIrByte[5]!,
@@ -10697,6 +10754,9 @@ function buildZ80CpuInner(
   tieToLabel('CLK', iff2.clk, { x: pos.x + 2000, y: pos.y + 3940 });
   tieToLabel('CLK', im1.clk, { x: pos.x + 2000, y: pos.y + 4140 });
   tieToLabel('CLK', intServing.clk, { x: pos.x + 2000, y: pos.y + 4340 });
+  tieToLabel('CLK', halted.clk, { x: pos.x + 2000, y: pos.y + 4740 });
+  tieToLabel('CLK', eiArm1.clk, { x: pos.x + 2200, y: pos.y + 3740 });
+  tieToLabel('CLK', eiArm2.clk, { x: pos.x + 2200, y: pos.y + 3940 });
   tieToLabel('CLK', bP.clk, { x: pos.x + 5000, y: pos.y + 3740 }); // same checklist item, every time, no exceptions — see "x=11: EXX" below
   tieToLabel('CLK', cP.clk, { x: pos.x + 5000, y: pos.y + 4540 });
   tieToLabel('CLK', dP.clk, { x: pos.x + 6200, y: pos.y + 3740 });
@@ -10888,6 +10948,20 @@ function buildZ80CpuInner(
   wire(parent, ioWriteFinal.out, ioWriteFinal2.a);
   tieToLabel('OUTRC_NOW', ioWriteFinal2.b, { x: pos.x + 13450, y: pos.y - 2100 });
 
+  // Kill remaining long-distance point-to-point wires (gate→gate, leftover
+  // single-anchor label stubs, etc.). Stdcell ChipDefs (NOT/NAND/…) keep
+  // their own short transistor wires — this only touches the parent
+  // circuit where gates are already chip instances. Compact first so
+  // pin/label geometry is final, then convert anything still long (a
+  // pre-compact pass left a few dozen chip↔label stubs that only
+  // exceeded the threshold after other pins on tall chips settled).
+  compactCircuitLayout(parent, 0.55);
+  // Threshold 24: keep only pin→label stubs; convert the ~40–80 unit
+  // chip↔chip bundles (RAM_ADDR_BIT / RAM_OE_OR fans, AND chains) that
+  // still read as "noodles" when zoomed out.
+  replaceLongWiresWithLabels(parent, 24);
+  replaceLongWiresWithLabels(parent, 24);
+
   return {
     clk: pc.clk,
     phaseClk: fsm.clk,
@@ -10916,6 +10990,7 @@ function buildZ80CpuInner(
     iff1: iff1.q,
     iff2: iff2.q,
     im1: im1.q,
+    halted: halted.q,
     int: intPin,
     intDrive,
     bP: bPExt,

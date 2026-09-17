@@ -31,7 +31,7 @@ function ensureStyles(): void {
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 1000;
+      z-index: 10000;
       font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     }
     .z80-dialog {
@@ -85,6 +85,60 @@ function ensureStyles(): void {
       font-weight: 600;
     }
     .z80-dialog button.z80-dialog-primary:hover { filter: brightness(1.08); }
+    .z80-dialog .z80-dialog-choices {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 16px;
+      max-height: min(50vh, 320px);
+      overflow: auto;
+    }
+    .z80-dialog .z80-dialog-choice-row {
+      display: flex;
+      gap: 6px;
+      align-items: stretch;
+    }
+    .z80-dialog .z80-dialog-choice {
+      flex: 1;
+      text-align: left;
+      padding: 8px 12px;
+      background: var(--panel-2, #191c25);
+      color: var(--text, #e7e9ef);
+      border: 1px solid var(--border, #262b36);
+      border-radius: 6px;
+      cursor: pointer;
+      font: 13px ui-monospace, 'SF Mono', monospace;
+    }
+    .z80-dialog .z80-dialog-choice:hover { background: #20242f; border-color: #333a48; }
+    .z80-dialog .z80-dialog-choice:focus {
+      outline: none;
+      border-color: var(--accent, #f5c518);
+    }
+    .z80-dialog .z80-dialog-choice.is-current {
+      border-color: var(--accent, #f5c518);
+      box-shadow: inset 3px 0 0 var(--accent, #f5c518);
+    }
+    .z80-dialog .z80-dialog-choice-meta {
+      display: block;
+      margin-top: 2px;
+      font-size: 11px;
+      color: var(--text-dim, #9aa1b3);
+    }
+    .z80-dialog .z80-dialog-choice-delete {
+      flex-shrink: 0;
+      width: 36px;
+      background: var(--panel-2, #191c25);
+      color: var(--text-dim, #9aa1b3);
+      border: 1px solid var(--border, #262b36);
+      border-radius: 6px;
+      cursor: pointer;
+      font: 14px ui-monospace, 'SF Mono', monospace;
+    }
+    .z80-dialog .z80-dialog-choice-delete:hover {
+      color: #ff6b6b;
+      border-color: #ff6b6b;
+      background: #2a1c22;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -201,5 +255,139 @@ export function showPrompt(message: string, defaultValue = ''): Promise<string |
       { label: 'OK', primary: true, value: (v) => v },
     ],
     cancelValue: null,
+  });
+}
+
+export interface ChoiceOption<T extends string = string> {
+  value: T;
+  label: string;
+  /** Secondary line under the label (e.g. "current"). */
+  detail?: string;
+  /** Visually mark as the active/current item. */
+  current?: boolean;
+  /** Show a Delete control on this row (e.g. session picker). */
+  deletable?: boolean;
+}
+
+export type ChoiceResult<T extends string = string> =
+  | { action: 'choose'; value: T }
+  | { action: 'delete'; value: T }
+  | null;
+
+/**
+ * Pick one option from a clickable list. ↑/↓ move focus, Enter chooses,
+ * Escape cancels. Optional per-row Delete when `deletable` is set.
+ */
+export function showChoice<T extends string>(
+  message: string,
+  options: ChoiceOption<T>[],
+): Promise<ChoiceResult<T>> {
+  ensureStyles();
+  return new Promise<ChoiceResult<T>>((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'z80-dialog-overlay';
+    const dialog = document.createElement('div');
+    dialog.className = 'z80-dialog';
+    overlay.appendChild(dialog);
+
+    const p = document.createElement('p');
+    p.textContent = message;
+    dialog.appendChild(p);
+
+    const list = document.createElement('div');
+    list.className = 'z80-dialog-choices';
+    dialog.appendChild(list);
+
+    const rowButtons: HTMLButtonElement[] = [];
+    let focusIdx = Math.max(
+      0,
+      options.findIndex((o) => o.current),
+    );
+
+    function close(value: ChoiceResult<T>): void {
+      document.removeEventListener('keydown', onKeydown);
+      overlay.remove();
+      resolve(value);
+    }
+
+    function focusRow(i: number): void {
+      if (rowButtons.length === 0) return;
+      focusIdx = ((i % rowButtons.length) + rowButtons.length) % rowButtons.length;
+      rowButtons[focusIdx]!.focus();
+    }
+
+    function onKeydown(ev: KeyboardEvent): void {
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        close(null);
+        return;
+      }
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        focusRow(focusIdx + 1);
+        return;
+      }
+      if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        focusRow(focusIdx - 1);
+        return;
+      }
+      if (ev.key === 'Enter') {
+        const opt = options[focusIdx];
+        if (opt) {
+          ev.preventDefault();
+          close({ action: 'choose', value: opt.value });
+        }
+      }
+    }
+
+    for (const opt of options) {
+      const row = document.createElement('div');
+      row.className = 'z80-dialog-choice-row';
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'z80-dialog-choice' + (opt.current ? ' is-current' : '');
+      btn.appendChild(document.createTextNode(opt.label));
+      if (opt.detail) {
+        const meta = document.createElement('span');
+        meta.className = 'z80-dialog-choice-meta';
+        meta.textContent = opt.detail;
+        btn.appendChild(meta);
+      }
+      btn.addEventListener('click', () => close({ action: 'choose', value: opt.value }));
+      btn.addEventListener('focus', () => {
+        focusIdx = rowButtons.indexOf(btn);
+      });
+      row.appendChild(btn);
+      rowButtons.push(btn);
+
+      if (opt.deletable) {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'z80-dialog-choice-delete';
+        del.title = 'Delete session';
+        del.textContent = '✕';
+        del.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          close({ action: 'delete', value: opt.value });
+        });
+        row.appendChild(del);
+      }
+
+      list.appendChild(row);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'z80-dialog-actions';
+    dialog.appendChild(actions);
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => close(null));
+    actions.appendChild(cancel);
+
+    document.addEventListener('keydown', onKeydown);
+    document.body.appendChild(overlay);
+    focusRow(focusIdx);
   });
 }

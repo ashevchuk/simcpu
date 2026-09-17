@@ -1,0 +1,171 @@
+{
+  "format": "z80-sim-project",
+  "version": 1,
+  "topCircuit": {
+    "components": [
+      {
+        "id": "btn141346",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 100,
+          "y": 60
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn141346:out",
+            "componentId": "btn141346",
+            "name": "out",
+            "pos": {
+              "x": 116,
+              "y": 60
+            }
+          }
+        }
+      },
+      {
+        "id": "btn141347",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 100,
+          "y": 140
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn141347:out",
+            "componentId": "btn141347",
+            "name": "out",
+            "pos": {
+              "x": 116,
+              "y": 140
+            }
+          }
+        }
+      },
+      {
+        "id": "clk141348",
+        "kind": "clock",
+        "mode": "continuous",
+        "value": 0,
+        "running": true,
+        "periodFrames": 16,
+        "dutyFrames": 8,
+        "phase": 0,
+        "holdFrames": 0,
+        "lastTrig": 0,
+        "pos": {
+          "x": 100,
+          "y": 220
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "clk141348:out",
+            "componentId": "clk141348",
+            "name": "out",
+            "pos": {
+              "x": 118,
+              "y": 220
+            }
+          },
+          "trig": {
+            "id": "clk141348:trig",
+            "componentId": "clk141348",
+            "name": "trig",
+            "pos": {
+              "x": 82,
+              "y": 220
+            }
+          }
+        }
+      },
+      {
+        "id": "la141349",
+        "kind": "analyzer",
+        "channelCount": 3,
+        "armed": true,
+        "channelLabels": [
+          "A",
+          "B",
+          "CLK"
+        ],
+        "triggerChannel": 2,
+        "triggerEdge": "rise",
+        "pos": {
+          "x": 320,
+          "y": 140
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pinOrder": [
+          "ch0",
+          "ch1",
+          "ch2"
+        ],
+        "pins": {
+          "ch0": {
+            "id": "la141349:ch0",
+            "componentId": "la141349",
+            "name": "ch0",
+            "pos": {
+              "x": 292,
+              "y": 120
+            }
+          },
+          "ch1": {
+            "id": "la141349:ch1",
+            "componentId": "la141349",
+            "name": "ch1",
+            "pos": {
+              "x": 292,
+              "y": 140
+            }
+          },
+          "ch2": {
+            "id": "la141349:ch2",
+            "componentId": "la141349",
+            "name": "ch2",
+            "pos": {
+              "x": 292,
+              "y": 160
+            }
+          }
+        }
+      }
+    ],
+    "wires": [
+      {
+        "id": "w141350",
+        "a": "btn141346:out",
+        "b": "la141349:ch0"
+      },
+      {
+        "id": "w141351",
+        "a": "btn141347:out",
+        "b": "la141349:ch1"
+      },
+      {
+        "id": "w141352",
+        "a": "clk141348:out",
+        "b": "la141349:ch2"
+      }
+    ]
+  },
+  "chipDefs": []
+}

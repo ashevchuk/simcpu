@@ -1,0 +1,96 @@
+ParaZXland
+==========  
+A ZX Spectrum game by Massimiliano Arca (Cagliari, Italy), entirely coded in Boriel ZX
+Basic for the ByteManiacos Concurso Basic 2023.
+For further information e-mail: massimiliano dot arca at Tiscali dot it
+
+ 
+What ParaZXland is and what it is not
+-------------------------------------
+ParaZXland is a computer game for the ZX Spectrum 48k and its clones. The distribution
+Includes the following files:
+
+pZXl.tap 		(the game in TAP format, with loader and intro screen)
+pZXl.z80		(the game in Z80 format, with intro screen)
+pZXl.tzx		(the game in TZX format, with loader and intro screen)
+pZXl.txt		(this text as plain unformatted TXT file)
+
+To put the game on an SD card, to run it on ZX Spectrum Next and
+clones, ZX-UNO and derivatives, or directly on a ZX Spectrum equipped
+with an SD card reader, only the TAP and TXT files are needed.
+
+
+The Story
+---------
+In an unlikely mission, a volunteer parachutist has been chosen to
+save the world by dropping from an unstable helicopter onto a tiny
+island where the ultra-secret codes to save the world from
+destruction have been hidden. The island is protected by flying
+anti-grav bombs, which would kill our hero on contact. Strong oceanic
+winds also make the descent difficult. Our hero will have to take off
+from the helicopter, avoid explosions, contrast the wind, and finally
+land on the tiny island.
+In the unlikely event of success, the mission will be repeated, but with
+increased difficulty, more scaring types of bombs and – of course – more
+points! 
+Thankfully, extra points are also distributed in the sky under the form 
+of red hearts and additional lives are available on increasing the score:
+
+Score		Event			Points
+-----------------------------------------------
+0–10000		Descent increase	+10
+		Heart collision		+15
+		Landing			+1000
+10000–29999	Descent increase	+30
+		Heart collision		+50
+		Landing			+2000
+>30000		Descent increase	+50
+		Heart collision		+50
+		Landing			+3000
+•	Extra life at 20000 and 50000 points.
+•	After a successful landing the number of mines increases
+	by 4.
+•	Bomb types change at 10000 and 30000 points.
+
+
+The game
+--------
+The opening screen allows to start a new game (option 0), re-
+define the keys (option 1; by default: "O" for left, "P" for 
+right, "Q" for pause), enter a previous high score (option 2), 
+view the instructions (option 3), turn the sound on and off 
+(option 4), and enable a Kempston joystick (option 5; the combination
+of up and the fire button serves as a pause key).
+
+
+Distribution
+------------
+This game is completely free and can be unreservedly distributed, 
+provided that it is not modified in any way and that the relevant
+files are accompanied by this text.
+ 
+
+Acknowledgements
+----------------
+José Rodriguez, aka Boriel, for the immense gift of ZX Basic to the 
+community of ZX Spectrum enthusiasts; David Saphier aka em00k for setting 
+up NextBuild; DuefectuCorp for the ZX Graphic Editor; Damien Guard aka 
+damieng for the exterminate collection of fonts available on his 
+web site.
+
+
+Final notes
+-----------
+The short tunes in the game are copyright-free and royalty-free. 
+They are freely inspired by Beethoven symphony no. 5 and the 
+Cucaracha motif. 
+Finally, the author guarantees that no parachutist has been harmed
+during the development of this game. 
+
+
+
+
+
+
+
+

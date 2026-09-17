@@ -1,0 +1,47 @@
+{
+  "name": "ribbon-4",
+  "description": "Four parallel facing pins — sequential fanout must take distinct channels.",
+  "grid": 10,
+  "obstacles": [
+    { "minX": 0, "minY": 0, "maxX": 70, "maxY": 160 },
+    { "minX": 230, "minY": 0, "maxX": 300, "maxY": 160 }
+  ],
+  "nets": [
+    {
+      "id": "a",
+      "from": { "x": 70, "y": 30 },
+      "to": { "x": 230, "y": 30 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2,
+      "maxLength": 220
+    },
+    {
+      "id": "b",
+      "from": { "x": 70, "y": 50 },
+      "to": { "x": 230, "y": 50 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2,
+      "maxLength": 220
+    },
+    {
+      "id": "c",
+      "from": { "x": 70, "y": 70 },
+      "to": { "x": 230, "y": 70 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2,
+      "maxLength": 220
+    },
+    {
+      "id": "d",
+      "from": { "x": 70, "y": 90 },
+      "to": { "x": 230, "y": 90 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2,
+      "maxLength": 220
+    }
+  ]
+}

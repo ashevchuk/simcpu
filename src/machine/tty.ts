@@ -1,4 +1,4 @@
-import { FB_COLS, FB_ROWS, KEY_DATA, KEY_STATUS, fbIndex } from './memoryMap.js';
+import { FB_COLS, FB_ROWS, fbIndex, softIoLayoutForRam } from './memoryMap.js';
 
 /**
  * Soft keyboard helpers over KEY_STATUS / KEY_DATA.
@@ -6,11 +6,13 @@ import { FB_COLS, FB_ROWS, KEY_DATA, KEY_STATUS, fbIndex } from './memoryMap.js'
  * Clear-on-read: soft path via softZ80 SoftMemHooks (clearOnReadKeys); gate
  * path via solver applyRamKeyClearOnRead after a settled OE read of KEY_DATA.
  * injectKey is unchanged — it only posts a key (KEY_DATA + KEY_STATUS=1).
+ * Addresses follow softIoLayoutForRam (12-bit @ F00 or 64-bit CP/M @ F100).
  */
 
 /** Write one ASCII cell into a RAM image (row-major framebuffer). */
 export function paintCell(bytes: Uint8Array, col: number, row: number, ch: number): void {
-  const addr = fbIndex(col, row);
+  const L = softIoLayoutForRam(bytes);
+  const addr = fbIndex(col, row, L.fbBase);
   if (addr >= bytes.length) {
     throw new RangeError(`framebuffer address 0x${addr.toString(16)} past RAM (${bytes.length} bytes)`);
   }
@@ -18,7 +20,8 @@ export function paintCell(bytes: Uint8Array, col: number, row: number, ch: numbe
 }
 
 export function readFbChar(bytes: Uint8Array, col: number, row: number): number {
-  const addr = fbIndex(col, row);
+  const L = softIoLayoutForRam(bytes);
+  const addr = fbIndex(col, row, L.fbBase);
   if (addr >= bytes.length) {
     throw new RangeError(`framebuffer address 0x${addr.toString(16)} past RAM (${bytes.length} bytes)`);
   }
@@ -27,15 +30,17 @@ export function readFbChar(bytes: Uint8Array, col: number, row: number): number 
 
 /** UI / test helper: post a key into the soft keyboard registers. Overwrites if unread. */
 export function injectKey(bytes: Uint8Array, code: number): void {
-  if (KEY_DATA >= bytes.length || KEY_STATUS >= bytes.length) {
+  const L = softIoLayoutForRam(bytes);
+  if (L.keyData >= bytes.length || L.keyStatus >= bytes.length) {
     throw new RangeError('keyboard MMIO past RAM end — need addrBits >= 12');
   }
-  bytes[KEY_DATA] = code & 0xff;
-  bytes[KEY_STATUS] = 1;
+  bytes[L.keyData] = code & 0xff;
+  bytes[L.keyStatus] = 1;
 }
 
 export function clearKeyStatus(bytes: Uint8Array): void {
-  if (KEY_STATUS < bytes.length) bytes[KEY_STATUS] = 0;
+  const L = softIoLayoutForRam(bytes);
+  if (L.keyStatus < bytes.length) bytes[L.keyStatus] = 0;
 }
 
 /** Fill the whole framebuffer with spaces (or another fill byte). */

@@ -1,0 +1,287 @@
+{
+  "format": "z80-sim-project",
+  "version": 1,
+  "topCircuit": {
+    "components": [
+      {
+        "id": "src12831",
+        "kind": "source",
+        "value": 1,
+        "pos": {
+          "x": 60,
+          "y": 40
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "src12831:out",
+            "componentId": "src12831",
+            "name": "out",
+            "pos": {
+              "x": 60,
+              "y": 55
+            }
+          }
+        }
+      },
+      {
+        "id": "src12832",
+        "kind": "source",
+        "value": 0,
+        "pos": {
+          "x": 60,
+          "y": 160
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "src12832:out",
+            "componentId": "src12832",
+            "name": "out",
+            "pos": {
+              "x": 60,
+              "y": 145
+            }
+          }
+        }
+      },
+      {
+        "id": "btn12833",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 140,
+          "y": 100
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn12833:out",
+            "componentId": "btn12833",
+            "name": "out",
+            "pos": {
+              "x": 156,
+              "y": 100
+            }
+          }
+        }
+      },
+      {
+        "id": "t12834",
+        "kind": "transistor",
+        "type": "P",
+        "pos": {
+          "x": 260,
+          "y": 70
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t12834:gate",
+            "componentId": "t12834",
+            "name": "gate",
+            "pos": {
+              "x": 232,
+              "y": 70
+            }
+          },
+          "drain": {
+            "id": "t12834:drain",
+            "componentId": "t12834",
+            "name": "drain",
+            "pos": {
+              "x": 260,
+              "y": 98
+            }
+          },
+          "source": {
+            "id": "t12834:source",
+            "componentId": "t12834",
+            "name": "source",
+            "pos": {
+              "x": 260,
+              "y": 42
+            }
+          }
+        }
+      },
+      {
+        "id": "t12835",
+        "kind": "transistor",
+        "type": "N",
+        "pos": {
+          "x": 260,
+          "y": 134
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t12835:gate",
+            "componentId": "t12835",
+            "name": "gate",
+            "pos": {
+              "x": 232,
+              "y": 134
+            }
+          },
+          "drain": {
+            "id": "t12835:drain",
+            "componentId": "t12835",
+            "name": "drain",
+            "pos": {
+              "x": 260,
+              "y": 106
+            }
+          },
+          "source": {
+            "id": "t12835:source",
+            "componentId": "t12835",
+            "name": "source",
+            "pos": {
+              "x": 260,
+              "y": 162
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl12836",
+        "kind": "label",
+        "name": "VCC",
+        "pos": {
+          "x": 260,
+          "y": 24
+        },
+        "pins": {
+          "net": {
+            "id": "lbl12836:net",
+            "componentId": "lbl12836",
+            "name": "net",
+            "pos": {
+              "x": 260,
+              "y": 24
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl12838",
+        "kind": "label",
+        "name": "GND",
+        "pos": {
+          "x": 260,
+          "y": 180
+        },
+        "pins": {
+          "net": {
+            "id": "lbl12838:net",
+            "componentId": "lbl12838",
+            "name": "net",
+            "pos": {
+              "x": 260,
+              "y": 180
+            }
+          }
+        }
+      },
+      {
+        "id": "led12842",
+        "kind": "led",
+        "label": "out",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 420,
+          "y": 100
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led12842:in",
+            "componentId": "led12842",
+            "name": "in",
+            "pos": {
+              "x": 406,
+              "y": 100
+            }
+          }
+        }
+      },
+      {
+        "id": "probe12843",
+        "kind": "probe",
+        "label": "out",
+        "pos": {
+          "x": 420,
+          "y": 160
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "probe12843:in",
+            "componentId": "probe12843",
+            "name": "in",
+            "pos": {
+              "x": 405,
+              "y": 160
+            }
+          }
+        }
+      }
+    ],
+    "wires": [
+      {
+        "id": "w12837",
+        "a": "t12834:source",
+        "b": "lbl12836:net"
+      },
+      {
+        "id": "w12839",
+        "a": "t12835:source",
+        "b": "lbl12838:net"
+      },
+      {
+        "id": "w12840",
+        "a": "t12834:drain",
+        "b": "t12835:drain"
+      },
+      {
+        "id": "w12841",
+        "a": "t12834:gate",
+        "b": "t12835:gate"
+      },
+      {
+        "id": "w12844",
+        "a": "btn12833:out",
+        "b": "t12834:gate"
+      },
+      {
+        "id": "w12845",
+        "a": "t12834:drain",
+        "b": "led12842:in"
+      },
+      {
+        "id": "w12846",
+        "a": "t12834:drain",
+        "b": "probe12843:in"
+      }
+    ]
+  },
+  "chipDefs": []
+}

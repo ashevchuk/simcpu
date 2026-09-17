@@ -1,0 +1,1391 @@
+{
+  "format": "z80-sim-project",
+  "version": 1,
+  "topCircuit": {
+    "components": [
+      {
+        "id": "src77057",
+        "kind": "source",
+        "value": 1,
+        "pos": {
+          "x": 40,
+          "y": 40
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "src77057:out",
+            "componentId": "src77057",
+            "name": "out",
+            "pos": {
+              "x": 40,
+              "y": 55
+            }
+          }
+        }
+      },
+      {
+        "id": "src77058",
+        "kind": "source",
+        "value": 0,
+        "pos": {
+          "x": 40,
+          "y": 220
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "src77058:out",
+            "componentId": "src77058",
+            "name": "out",
+            "pos": {
+              "x": 40,
+              "y": 205
+            }
+          }
+        }
+      },
+      {
+        "id": "btn77059",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 140,
+          "y": 60
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn77059:out",
+            "componentId": "btn77059",
+            "name": "out",
+            "pos": {
+              "x": 156,
+              "y": 60
+            }
+          }
+        }
+      },
+      {
+        "id": "clk77060",
+        "kind": "clock",
+        "mode": "continuous",
+        "value": 0,
+        "running": true,
+        "periodFrames": 30,
+        "dutyFrames": 15,
+        "phase": 0,
+        "holdFrames": 0,
+        "lastTrig": 0,
+        "pos": {
+          "x": 140,
+          "y": 160
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "clk77060:out",
+            "componentId": "clk77060",
+            "name": "out",
+            "pos": {
+              "x": 158,
+              "y": 160
+            }
+          },
+          "trig": {
+            "id": "clk77060:trig",
+            "componentId": "clk77060",
+            "name": "trig",
+            "pos": {
+              "x": 122,
+              "y": 160
+            }
+          }
+        }
+      },
+      {
+        "id": "t77061",
+        "kind": "transistor",
+        "type": "P",
+        "pos": {
+          "x": 300,
+          "y": 80
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77061:gate",
+            "componentId": "t77061",
+            "name": "gate",
+            "pos": {
+              "x": 272,
+              "y": 80
+            }
+          },
+          "drain": {
+            "id": "t77061:drain",
+            "componentId": "t77061",
+            "name": "drain",
+            "pos": {
+              "x": 300,
+              "y": 108
+            }
+          },
+          "source": {
+            "id": "t77061:source",
+            "componentId": "t77061",
+            "name": "source",
+            "pos": {
+              "x": 300,
+              "y": 52
+            }
+          }
+        }
+      },
+      {
+        "id": "t77062",
+        "kind": "transistor",
+        "type": "P",
+        "pos": {
+          "x": 380,
+          "y": 80
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77062:gate",
+            "componentId": "t77062",
+            "name": "gate",
+            "pos": {
+              "x": 352,
+              "y": 80
+            }
+          },
+          "drain": {
+            "id": "t77062:drain",
+            "componentId": "t77062",
+            "name": "drain",
+            "pos": {
+              "x": 380,
+              "y": 108
+            }
+          },
+          "source": {
+            "id": "t77062:source",
+            "componentId": "t77062",
+            "name": "source",
+            "pos": {
+              "x": 380,
+              "y": 52
+            }
+          }
+        }
+      },
+      {
+        "id": "t77063",
+        "kind": "transistor",
+        "type": "N",
+        "pos": {
+          "x": 340,
+          "y": 144
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77063:gate",
+            "componentId": "t77063",
+            "name": "gate",
+            "pos": {
+              "x": 312,
+              "y": 144
+            }
+          },
+          "drain": {
+            "id": "t77063:drain",
+            "componentId": "t77063",
+            "name": "drain",
+            "pos": {
+              "x": 340,
+              "y": 116
+            }
+          },
+          "source": {
+            "id": "t77063:source",
+            "componentId": "t77063",
+            "name": "source",
+            "pos": {
+              "x": 340,
+              "y": 172
+            }
+          }
+        }
+      },
+      {
+        "id": "t77064",
+        "kind": "transistor",
+        "type": "N",
+        "pos": {
+          "x": 340,
+          "y": 208
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77064:gate",
+            "componentId": "t77064",
+            "name": "gate",
+            "pos": {
+              "x": 312,
+              "y": 208
+            }
+          },
+          "drain": {
+            "id": "t77064:drain",
+            "componentId": "t77064",
+            "name": "drain",
+            "pos": {
+              "x": 340,
+              "y": 180
+            }
+          },
+          "source": {
+            "id": "t77064:source",
+            "componentId": "t77064",
+            "name": "source",
+            "pos": {
+              "x": 340,
+              "y": 236
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77065",
+        "kind": "label",
+        "name": "VCC",
+        "pos": {
+          "x": 300,
+          "y": 34
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77065:net",
+            "componentId": "lbl77065",
+            "name": "net",
+            "pos": {
+              "x": 300,
+              "y": 34
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77067",
+        "kind": "label",
+        "name": "VCC",
+        "pos": {
+          "x": 380,
+          "y": 34
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77067:net",
+            "componentId": "lbl77067",
+            "name": "net",
+            "pos": {
+              "x": 380,
+              "y": 34
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77072",
+        "kind": "label",
+        "name": "GND",
+        "pos": {
+          "x": 340,
+          "y": 254
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77072:net",
+            "componentId": "lbl77072",
+            "name": "net",
+            "pos": {
+              "x": 340,
+              "y": 254
+            }
+          }
+        }
+      },
+      {
+        "id": "t77076",
+        "kind": "transistor",
+        "type": "P",
+        "pos": {
+          "x": 300,
+          "y": 230
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77076:gate",
+            "componentId": "t77076",
+            "name": "gate",
+            "pos": {
+              "x": 272,
+              "y": 230
+            }
+          },
+          "drain": {
+            "id": "t77076:drain",
+            "componentId": "t77076",
+            "name": "drain",
+            "pos": {
+              "x": 300,
+              "y": 258
+            }
+          },
+          "source": {
+            "id": "t77076:source",
+            "componentId": "t77076",
+            "name": "source",
+            "pos": {
+              "x": 300,
+              "y": 202
+            }
+          }
+        }
+      },
+      {
+        "id": "t77077",
+        "kind": "transistor",
+        "type": "P",
+        "pos": {
+          "x": 380,
+          "y": 230
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77077:gate",
+            "componentId": "t77077",
+            "name": "gate",
+            "pos": {
+              "x": 352,
+              "y": 230
+            }
+          },
+          "drain": {
+            "id": "t77077:drain",
+            "componentId": "t77077",
+            "name": "drain",
+            "pos": {
+              "x": 380,
+              "y": 258
+            }
+          },
+          "source": {
+            "id": "t77077:source",
+            "componentId": "t77077",
+            "name": "source",
+            "pos": {
+              "x": 380,
+              "y": 202
+            }
+          }
+        }
+      },
+      {
+        "id": "t77078",
+        "kind": "transistor",
+        "type": "N",
+        "pos": {
+          "x": 340,
+          "y": 294
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77078:gate",
+            "componentId": "t77078",
+            "name": "gate",
+            "pos": {
+              "x": 312,
+              "y": 294
+            }
+          },
+          "drain": {
+            "id": "t77078:drain",
+            "componentId": "t77078",
+            "name": "drain",
+            "pos": {
+              "x": 340,
+              "y": 266
+            }
+          },
+          "source": {
+            "id": "t77078:source",
+            "componentId": "t77078",
+            "name": "source",
+            "pos": {
+              "x": 340,
+              "y": 322
+            }
+          }
+        }
+      },
+      {
+        "id": "t77079",
+        "kind": "transistor",
+        "type": "N",
+        "pos": {
+          "x": 340,
+          "y": 358
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77079:gate",
+            "componentId": "t77079",
+            "name": "gate",
+            "pos": {
+              "x": 312,
+              "y": 358
+            }
+          },
+          "drain": {
+            "id": "t77079:drain",
+            "componentId": "t77079",
+            "name": "drain",
+            "pos": {
+              "x": 340,
+              "y": 330
+            }
+          },
+          "source": {
+            "id": "t77079:source",
+            "componentId": "t77079",
+            "name": "source",
+            "pos": {
+              "x": 340,
+              "y": 386
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77080",
+        "kind": "label",
+        "name": "VCC",
+        "pos": {
+          "x": 300,
+          "y": 184
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77080:net",
+            "componentId": "lbl77080",
+            "name": "net",
+            "pos": {
+              "x": 300,
+              "y": 184
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77082",
+        "kind": "label",
+        "name": "VCC",
+        "pos": {
+          "x": 380,
+          "y": 184
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77082:net",
+            "componentId": "lbl77082",
+            "name": "net",
+            "pos": {
+              "x": 380,
+              "y": 184
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77087",
+        "kind": "label",
+        "name": "GND",
+        "pos": {
+          "x": 340,
+          "y": 404
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77087:net",
+            "componentId": "lbl77087",
+            "name": "net",
+            "pos": {
+              "x": 340,
+              "y": 404
+            }
+          }
+        }
+      },
+      {
+        "id": "t77091",
+        "kind": "transistor",
+        "type": "P",
+        "pos": {
+          "x": 450,
+          "y": 230
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77091:gate",
+            "componentId": "t77091",
+            "name": "gate",
+            "pos": {
+              "x": 422,
+              "y": 230
+            }
+          },
+          "drain": {
+            "id": "t77091:drain",
+            "componentId": "t77091",
+            "name": "drain",
+            "pos": {
+              "x": 450,
+              "y": 258
+            }
+          },
+          "source": {
+            "id": "t77091:source",
+            "componentId": "t77091",
+            "name": "source",
+            "pos": {
+              "x": 450,
+              "y": 202
+            }
+          }
+        }
+      },
+      {
+        "id": "t77092",
+        "kind": "transistor",
+        "type": "P",
+        "pos": {
+          "x": 530,
+          "y": 230
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77092:gate",
+            "componentId": "t77092",
+            "name": "gate",
+            "pos": {
+              "x": 502,
+              "y": 230
+            }
+          },
+          "drain": {
+            "id": "t77092:drain",
+            "componentId": "t77092",
+            "name": "drain",
+            "pos": {
+              "x": 530,
+              "y": 258
+            }
+          },
+          "source": {
+            "id": "t77092:source",
+            "componentId": "t77092",
+            "name": "source",
+            "pos": {
+              "x": 530,
+              "y": 202
+            }
+          }
+        }
+      },
+      {
+        "id": "t77093",
+        "kind": "transistor",
+        "type": "N",
+        "pos": {
+          "x": 490,
+          "y": 294
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77093:gate",
+            "componentId": "t77093",
+            "name": "gate",
+            "pos": {
+              "x": 462,
+              "y": 294
+            }
+          },
+          "drain": {
+            "id": "t77093:drain",
+            "componentId": "t77093",
+            "name": "drain",
+            "pos": {
+              "x": 490,
+              "y": 266
+            }
+          },
+          "source": {
+            "id": "t77093:source",
+            "componentId": "t77093",
+            "name": "source",
+            "pos": {
+              "x": 490,
+              "y": 322
+            }
+          }
+        }
+      },
+      {
+        "id": "t77094",
+        "kind": "transistor",
+        "type": "N",
+        "pos": {
+          "x": 490,
+          "y": 358
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77094:gate",
+            "componentId": "t77094",
+            "name": "gate",
+            "pos": {
+              "x": 462,
+              "y": 358
+            }
+          },
+          "drain": {
+            "id": "t77094:drain",
+            "componentId": "t77094",
+            "name": "drain",
+            "pos": {
+              "x": 490,
+              "y": 330
+            }
+          },
+          "source": {
+            "id": "t77094:source",
+            "componentId": "t77094",
+            "name": "source",
+            "pos": {
+              "x": 490,
+              "y": 386
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77095",
+        "kind": "label",
+        "name": "VCC",
+        "pos": {
+          "x": 450,
+          "y": 184
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77095:net",
+            "componentId": "lbl77095",
+            "name": "net",
+            "pos": {
+              "x": 450,
+              "y": 184
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77097",
+        "kind": "label",
+        "name": "VCC",
+        "pos": {
+          "x": 530,
+          "y": 184
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77097:net",
+            "componentId": "lbl77097",
+            "name": "net",
+            "pos": {
+              "x": 530,
+              "y": 184
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77102",
+        "kind": "label",
+        "name": "GND",
+        "pos": {
+          "x": 490,
+          "y": 404
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77102:net",
+            "componentId": "lbl77102",
+            "name": "net",
+            "pos": {
+              "x": 490,
+              "y": 404
+            }
+          }
+        }
+      },
+      {
+        "id": "t77106",
+        "kind": "transistor",
+        "type": "P",
+        "pos": {
+          "x": 450,
+          "y": 380
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77106:gate",
+            "componentId": "t77106",
+            "name": "gate",
+            "pos": {
+              "x": 422,
+              "y": 380
+            }
+          },
+          "drain": {
+            "id": "t77106:drain",
+            "componentId": "t77106",
+            "name": "drain",
+            "pos": {
+              "x": 450,
+              "y": 408
+            }
+          },
+          "source": {
+            "id": "t77106:source",
+            "componentId": "t77106",
+            "name": "source",
+            "pos": {
+              "x": 450,
+              "y": 352
+            }
+          }
+        }
+      },
+      {
+        "id": "t77107",
+        "kind": "transistor",
+        "type": "P",
+        "pos": {
+          "x": 530,
+          "y": 380
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77107:gate",
+            "componentId": "t77107",
+            "name": "gate",
+            "pos": {
+              "x": 502,
+              "y": 380
+            }
+          },
+          "drain": {
+            "id": "t77107:drain",
+            "componentId": "t77107",
+            "name": "drain",
+            "pos": {
+              "x": 530,
+              "y": 408
+            }
+          },
+          "source": {
+            "id": "t77107:source",
+            "componentId": "t77107",
+            "name": "source",
+            "pos": {
+              "x": 530,
+              "y": 352
+            }
+          }
+        }
+      },
+      {
+        "id": "t77108",
+        "kind": "transistor",
+        "type": "N",
+        "pos": {
+          "x": 490,
+          "y": 444
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77108:gate",
+            "componentId": "t77108",
+            "name": "gate",
+            "pos": {
+              "x": 462,
+              "y": 444
+            }
+          },
+          "drain": {
+            "id": "t77108:drain",
+            "componentId": "t77108",
+            "name": "drain",
+            "pos": {
+              "x": 490,
+              "y": 416
+            }
+          },
+          "source": {
+            "id": "t77108:source",
+            "componentId": "t77108",
+            "name": "source",
+            "pos": {
+              "x": 490,
+              "y": 472
+            }
+          }
+        }
+      },
+      {
+        "id": "t77109",
+        "kind": "transistor",
+        "type": "N",
+        "pos": {
+          "x": 490,
+          "y": 508
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "gate": {
+            "id": "t77109:gate",
+            "componentId": "t77109",
+            "name": "gate",
+            "pos": {
+              "x": 462,
+              "y": 508
+            }
+          },
+          "drain": {
+            "id": "t77109:drain",
+            "componentId": "t77109",
+            "name": "drain",
+            "pos": {
+              "x": 490,
+              "y": 480
+            }
+          },
+          "source": {
+            "id": "t77109:source",
+            "componentId": "t77109",
+            "name": "source",
+            "pos": {
+              "x": 490,
+              "y": 536
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77110",
+        "kind": "label",
+        "name": "VCC",
+        "pos": {
+          "x": 450,
+          "y": 334
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77110:net",
+            "componentId": "lbl77110",
+            "name": "net",
+            "pos": {
+              "x": 450,
+              "y": 334
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77112",
+        "kind": "label",
+        "name": "VCC",
+        "pos": {
+          "x": 530,
+          "y": 334
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77112:net",
+            "componentId": "lbl77112",
+            "name": "net",
+            "pos": {
+              "x": 530,
+              "y": 334
+            }
+          }
+        }
+      },
+      {
+        "id": "lbl77117",
+        "kind": "label",
+        "name": "GND",
+        "pos": {
+          "x": 490,
+          "y": 554
+        },
+        "pins": {
+          "net": {
+            "id": "lbl77117:net",
+            "componentId": "lbl77117",
+            "name": "net",
+            "pos": {
+              "x": 490,
+              "y": 554
+            }
+          }
+        }
+      },
+      {
+        "id": "led77127",
+        "kind": "led",
+        "label": "xor",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 520,
+          "y": 120
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led77127:in",
+            "componentId": "led77127",
+            "name": "in",
+            "pos": {
+              "x": 506,
+              "y": 120
+            }
+          }
+        }
+      }
+    ],
+    "wires": [
+      {
+        "id": "w77066",
+        "a": "t77061:source",
+        "b": "lbl77065:net"
+      },
+      {
+        "id": "w77068",
+        "a": "t77062:source",
+        "b": "lbl77067:net"
+      },
+      {
+        "id": "w77069",
+        "a": "t77061:drain",
+        "b": "t77062:drain",
+        "waypoints": [
+          {
+            "x": 340,
+            "y": 108
+          }
+        ]
+      },
+      {
+        "id": "w77070",
+        "a": "t77061:drain",
+        "b": "t77063:drain",
+        "waypoints": [
+          {
+            "x": 340,
+            "y": 108
+          },
+          {
+            "x": 340,
+            "y": 116
+          }
+        ]
+      },
+      {
+        "id": "w77071",
+        "a": "t77063:source",
+        "b": "t77064:drain"
+      },
+      {
+        "id": "w77073",
+        "a": "t77064:source",
+        "b": "lbl77072:net"
+      },
+      {
+        "id": "w77074",
+        "a": "t77061:gate",
+        "b": "t77063:gate",
+        "waypoints": [
+          {
+            "x": 256,
+            "y": 80
+          },
+          {
+            "x": 256,
+            "y": 144
+          }
+        ]
+      },
+      {
+        "id": "w77075",
+        "a": "t77062:gate",
+        "b": "t77064:gate",
+        "waypoints": [
+          {
+            "x": 424,
+            "y": 80
+          },
+          {
+            "x": 424,
+            "y": 208
+          }
+        ]
+      },
+      {
+        "id": "w77081",
+        "a": "t77076:source",
+        "b": "lbl77080:net"
+      },
+      {
+        "id": "w77083",
+        "a": "t77077:source",
+        "b": "lbl77082:net"
+      },
+      {
+        "id": "w77084",
+        "a": "t77076:drain",
+        "b": "t77077:drain",
+        "waypoints": [
+          {
+            "x": 340,
+            "y": 258
+          }
+        ]
+      },
+      {
+        "id": "w77085",
+        "a": "t77076:drain",
+        "b": "t77078:drain",
+        "waypoints": [
+          {
+            "x": 340,
+            "y": 258
+          },
+          {
+            "x": 340,
+            "y": 266
+          }
+        ]
+      },
+      {
+        "id": "w77086",
+        "a": "t77078:source",
+        "b": "t77079:drain"
+      },
+      {
+        "id": "w77088",
+        "a": "t77079:source",
+        "b": "lbl77087:net"
+      },
+      {
+        "id": "w77089",
+        "a": "t77076:gate",
+        "b": "t77078:gate",
+        "waypoints": [
+          {
+            "x": 256,
+            "y": 230
+          },
+          {
+            "x": 256,
+            "y": 294
+          }
+        ]
+      },
+      {
+        "id": "w77090",
+        "a": "t77077:gate",
+        "b": "t77079:gate",
+        "waypoints": [
+          {
+            "x": 424,
+            "y": 230
+          },
+          {
+            "x": 424,
+            "y": 358
+          }
+        ]
+      },
+      {
+        "id": "w77096",
+        "a": "t77091:source",
+        "b": "lbl77095:net"
+      },
+      {
+        "id": "w77098",
+        "a": "t77092:source",
+        "b": "lbl77097:net"
+      },
+      {
+        "id": "w77099",
+        "a": "t77091:drain",
+        "b": "t77092:drain",
+        "waypoints": [
+          {
+            "x": 490,
+            "y": 258
+          }
+        ]
+      },
+      {
+        "id": "w77100",
+        "a": "t77091:drain",
+        "b": "t77093:drain",
+        "waypoints": [
+          {
+            "x": 490,
+            "y": 258
+          },
+          {
+            "x": 490,
+            "y": 266
+          }
+        ]
+      },
+      {
+        "id": "w77101",
+        "a": "t77093:source",
+        "b": "t77094:drain"
+      },
+      {
+        "id": "w77103",
+        "a": "t77094:source",
+        "b": "lbl77102:net"
+      },
+      {
+        "id": "w77104",
+        "a": "t77091:gate",
+        "b": "t77093:gate",
+        "waypoints": [
+          {
+            "x": 406,
+            "y": 230
+          },
+          {
+            "x": 406,
+            "y": 294
+          }
+        ]
+      },
+      {
+        "id": "w77105",
+        "a": "t77092:gate",
+        "b": "t77094:gate",
+        "waypoints": [
+          {
+            "x": 574,
+            "y": 230
+          },
+          {
+            "x": 574,
+            "y": 358
+          }
+        ]
+      },
+      {
+        "id": "w77111",
+        "a": "t77106:source",
+        "b": "lbl77110:net"
+      },
+      {
+        "id": "w77113",
+        "a": "t77107:source",
+        "b": "lbl77112:net"
+      },
+      {
+        "id": "w77114",
+        "a": "t77106:drain",
+        "b": "t77107:drain",
+        "waypoints": [
+          {
+            "x": 490,
+            "y": 408
+          }
+        ]
+      },
+      {
+        "id": "w77115",
+        "a": "t77106:drain",
+        "b": "t77108:drain",
+        "waypoints": [
+          {
+            "x": 490,
+            "y": 408
+          },
+          {
+            "x": 490,
+            "y": 416
+          }
+        ]
+      },
+      {
+        "id": "w77116",
+        "a": "t77108:source",
+        "b": "t77109:drain"
+      },
+      {
+        "id": "w77118",
+        "a": "t77109:source",
+        "b": "lbl77117:net"
+      },
+      {
+        "id": "w77119",
+        "a": "t77106:gate",
+        "b": "t77108:gate",
+        "waypoints": [
+          {
+            "x": 406,
+            "y": 380
+          },
+          {
+            "x": 406,
+            "y": 444
+          }
+        ]
+      },
+      {
+        "id": "w77120",
+        "a": "t77107:gate",
+        "b": "t77109:gate",
+        "waypoints": [
+          {
+            "x": 574,
+            "y": 380
+          },
+          {
+            "x": 574,
+            "y": 508
+          }
+        ]
+      },
+      {
+        "id": "w77121",
+        "a": "t77061:gate",
+        "b": "t77076:gate"
+      },
+      {
+        "id": "w77122",
+        "a": "t77062:gate",
+        "b": "t77091:gate"
+      },
+      {
+        "id": "w77123",
+        "a": "t77061:drain",
+        "b": "t77077:gate"
+      },
+      {
+        "id": "w77124",
+        "a": "t77061:drain",
+        "b": "t77092:gate"
+      },
+      {
+        "id": "w77125",
+        "a": "t77076:drain",
+        "b": "t77106:gate"
+      },
+      {
+        "id": "w77126",
+        "a": "t77091:drain",
+        "b": "t77107:gate"
+      },
+      {
+        "id": "w77128",
+        "a": "btn77059:out",
+        "b": "t77061:gate"
+      },
+      {
+        "id": "w77129",
+        "a": "clk77060:out",
+        "b": "t77062:gate"
+      },
+      {
+        "id": "w77130",
+        "a": "t77106:drain",
+        "b": "led77127:in"
+      }
+    ]
+  },
+  "chipDefs": []
+}

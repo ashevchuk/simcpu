@@ -1,6 +1,19 @@
 import { Circuit, currentStructureVersion } from './Circuit.js';
 import { KEY_DATA, KEY_STATUS } from '../machine/memoryMap.js';
-import type { Level, NetMap, RamComponent, SimState } from './types.js';
+import {
+  ensureSoftState,
+  softLabCommitEdges,
+  softLabDriveOutputs,
+} from './softLab.js';
+import type { SoftLabState } from './softLab.js';
+import type {
+  ChipInstanceComponent,
+  Level,
+  NetMap,
+  RamComponent,
+  RomComponent,
+  SimState,
+} from './types.js';
 
 /**
  * Switch-level relaxation solver.
@@ -40,7 +53,11 @@ import type { Level, NetMap, RamComponent, SimState } from './types.js';
  *
  * RamComponent (see types.ts) is the one deliberate exception to "every
  * active device is a transistor" — see "Real RAM" in ARCHITECTURE.md for
- * why. Its read side plugs into this same per-iteration force-resolution as
+ * why. Soft Lab chips (softLab.ts) are a second: when Soft Lab is on,
+ * flatten keeps opaque labcell instances and this solver drives their
+ * ports from behavioral models.
+ *
+ * Its read side plugs into this same per-iteration force-resolution as
  * an *additional conditional driver*, exactly like a transistor's
  * conduction: recomputed every pass from the current levels, because
  * whether it's actually driving (its `oe`) may itself still be settling.
@@ -72,10 +89,18 @@ import type { Level, NetMap, RamComponent, SimState } from './types.js';
 type TransistorIdx = { isN: boolean; gate: number; drain: number; source: number };
 type RamIdx = {
   oe: number;
+  /** -1 for ROM (no write enable — reads whenever OE=1). */
   we: number;
   addr: number[];
   data: number[];
-  ram: RamComponent;
+  mem: RamComponent | RomComponent;
+};
+type SoftChipIdx = {
+  chip: ChipInstanceComponent;
+  model: string;
+  state: SoftLabState;
+  pinNet: Record<string, number | undefined>;
+  pinNames: string[];
 };
 
 type StepStructureCache = {
@@ -86,12 +111,14 @@ type StepStructureCache = {
   transistors: TransistorIdx[];
   ramIdx: RamIdx[];
   rams: RamComponent[];
+  softChips: SoftChipIdx[];
   driverPins: { netIdx: number; comp: { value: 0 | 1 } }[];
   parent: Int32Array;
   rootOf: Int32Array;
   head: Int32Array;
   link: Int32Array;
   ramMask: Uint8Array;
+  softMask: Uint8Array;
   driverMask: Uint8Array;
   hist: Level[];
   histLen: Uint8Array;
@@ -123,21 +150,56 @@ function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache 
   const transistors: TransistorIdx[] = [];
   const rams: RamComponent[] = [];
   const ramIdx: RamIdx[] = [];
+  const softChips: SoftChipIdx[] = [];
   const driverPins: { netIdx: number; comp: { value: 0 | 1 } }[] = [];
 
   for (const c of circuit.components.values()) {
-    if (c.kind === 'source' || c.kind === 'input') {
+    if (c.kind === 'source' || c.kind === 'input' || c.kind === 'button' || c.kind === 'clock') {
       const net = netMap.netOf.get(c.pins.out.id);
       if (!net) continue;
       const i = indexOf.get(net);
       if (i === undefined) continue;
       driverPins.push({ netIdx: i, comp: c });
+    } else if (c.kind === 'busswitch') {
+      for (let bit = 0; bit < c.bitWidth; bit++) {
+        const p = c.pins[`b${bit}`];
+        if (!p) continue;
+        const net = netMap.netOf.get(p.id);
+        if (!net) continue;
+        const i = indexOf.get(net);
+        if (i === undefined) continue;
+        const bitIdx = bit;
+        const switchComp = c;
+        driverPins.push({
+          netIdx: i,
+          comp: {
+            get value(): 0 | 1 {
+              return ((switchComp.value >> bitIdx) & 1) as 0 | 1;
+            },
+          },
+        });
+      }
     } else if (c.kind === 'transistor') {
       const gate = indexOf.get(netMap.netOf.get(c.pins.gate.id)!);
       const drain = indexOf.get(netMap.netOf.get(c.pins.drain.id)!);
       const source = indexOf.get(netMap.netOf.get(c.pins.source.id)!);
       if (gate === undefined || drain === undefined || source === undefined) continue;
       transistors.push({ isN: c.type === 'N', gate, drain, source });
+    } else if (c.kind === 'chip' && c.softModel && c.softState) {
+      const pinNet: Record<string, number | undefined> = {};
+      const pinNames: string[] = [];
+      for (const [name, pin] of Object.entries(c.pins)) {
+        pinNames.push(name);
+        const net = netMap.netOf.get(pin.id);
+        pinNet[name] = net !== undefined ? indexOf.get(net) : undefined;
+      }
+      softChips.push({
+        chip: c,
+        model: c.softModel,
+        state: ensureSoftState(c, c.softModel),
+        pinNet,
+        pinNames,
+      });
     } else if (c.kind === 'ram') {
       rams.push(c);
       const oeNet = netMap.netOf.get(c.pins.oe!.id);
@@ -166,7 +228,33 @@ function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache 
         }
         data.push(idx);
       }
-      if (ok) ramIdx.push({ oe, we, addr, data, ram: c });
+      if (ok) ramIdx.push({ oe, we, addr, data, mem: c });
+    } else if (c.kind === 'rom') {
+      const oeNet = netMap.netOf.get(c.pins.oe!.id);
+      const oe = oeNet !== undefined ? indexOf.get(oeNet) : undefined;
+      if (oe === undefined) continue;
+      const addr: number[] = [];
+      const data: number[] = [];
+      let ok = true;
+      for (let i = 0; i < c.addrBits; i++) {
+        const net = netMap.netOf.get(c.pins[`addr${i}`]!.id);
+        const idx = net !== undefined ? indexOf.get(net) : undefined;
+        if (idx === undefined) {
+          ok = false;
+          break;
+        }
+        addr.push(idx);
+      }
+      for (let i = 0; i < c.dataBits; i++) {
+        const net = netMap.netOf.get(c.pins[`data${i}`]!.id);
+        const idx = net !== undefined ? indexOf.get(net) : undefined;
+        if (idx === undefined) {
+          ok = false;
+          break;
+        }
+        data.push(idx);
+      }
+      if (ok) ramIdx.push({ oe, we: -1, addr, data, mem: c });
     }
   }
 
@@ -178,12 +266,14 @@ function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache 
     transistors,
     ramIdx,
     rams,
+    softChips,
     driverPins,
     parent: new Int32Array(n),
     rootOf: new Int32Array(n),
     head: new Int32Array(n),
     link: new Int32Array(n),
     ramMask: new Uint8Array(n),
+    softMask: new Uint8Array(n),
     driverMask: new Uint8Array(n),
     hist: new Array<Level>(n * HISTORY_WINDOW),
     histLen: new Uint8Array(n),
@@ -211,12 +301,14 @@ export function step(
     transistors,
     ramIdx,
     rams,
+    softChips,
     driverPins,
     parent,
     rootOf,
     head,
     link,
     ramMask,
+    softMask,
     driverMask,
     hist,
     histLen,
@@ -244,6 +336,13 @@ export function step(
   // per pass below.
   driverMask.fill(0);
   for (const d of driverPins) driverMask[d.netIdx]! |= d.comp.value === 1 ? 2 : 1;
+  // Implicit global rails: a net named VCC/GND is driven even with no Source
+  // on the sheet (labels alone are enough to join and power that rail).
+  for (let i = 0; i < n; i++) {
+    const id = netIds[i]!;
+    if (id === 'VCC') driverMask[i]! |= 2;
+    else if (id === 'GND') driverMask[i]! |= 1;
+  }
 
   // Oscillation bookkeeping is per-step (same semantics as a fresh buffer).
   histLen.fill(0);
@@ -285,7 +384,8 @@ export function step(
     ramMask.fill(0);
     for (const r of ramIdx) {
       if (cur[r.oe] !== 1) continue;
-      if (cur[r.we] === 1) continue;
+      // RAM suppresses OE drive while WE is asserted; ROM has we === -1.
+      if (r.we >= 0 && cur[r.we] === 1) continue;
       let addr = 0;
       let resolved = true;
       for (let i = 0; i < r.addr.length; i++) {
@@ -297,11 +397,24 @@ export function step(
         if (lvl === 1) addr |= 1 << i;
       }
       if (!resolved) continue;
-      const byte = r.ram.bytes[addr] ?? 0;
+      const byte = r.mem.bytes[addr] ?? 0;
       for (let i = 0; i < r.data.length; i++) {
         const bit = ((byte >> i) & 1) as 0 | 1;
         ramMask[r.data[i]!]! |= bit === 1 ? 2 : 1;
       }
+    }
+
+    // Soft Lab behavioral drives for this pass.
+    softMask.fill(0);
+    for (const sc of softChips) {
+      const pinLevels: Record<string, Level> = {};
+      for (const name of sc.pinNames) {
+        const idx = sc.pinNet[name];
+        pinLevels[name] = idx !== undefined ? (cur[idx] ?? 'Z') : 'Z';
+      }
+      softLabDriveOutputs(sc.model, sc.pinNet, pinLevels, sc.state, (netIdx, bit) => {
+        softMask[netIdx]! |= bit === 1 ? 2 : 1;
+      });
     }
 
     for (let i = 0; i < n; i++) rootOf[i] = find(i);
@@ -317,10 +430,10 @@ export function step(
       let m = head[r]!;
       if (m < 0) continue;
 
-      // Collect forced mask across the group (drivers ∪ RAM).
+      // Collect forced mask across the group (drivers ∪ RAM ∪ Soft Lab).
       let forced = 0;
       for (let x = m; x >= 0; x = link[x]!) {
-        forced |= driverMask[x]! | ramMask[x]!;
+        forced |= driverMask[x]! | ramMask[x]! | softMask[x]!;
       }
 
       let value: Level;
@@ -431,8 +544,20 @@ export function step(
 
   applyRamWrites(rams, netMap, prev.levelOf, levelOf);
   applyRamKeyClearOnRead(rams, netMap, levelOf);
+  applySoftLabEdges(softChips, cur);
 
   return { levelOf, contended, settled: !changed, iterations };
+}
+
+function applySoftLabEdges(softChips: SoftChipIdx[], cur: Level[]): void {
+  for (const sc of softChips) {
+    const pinLevels: Record<string, Level> = {};
+    for (const name of sc.pinNames) {
+      const idx = sc.pinNet[name];
+      pinLevels[name] = idx !== undefined ? (cur[idx] ?? 'Z') : 'Z';
+    }
+    softLabCommitEdges(sc.model, pinLevels, sc.state);
+  }
 }
 
 function netLevel(netMap: NetMap, levelOf: Map<string, Level>, pinId: string): Level | undefined {

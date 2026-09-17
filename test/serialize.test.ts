@@ -12,6 +12,7 @@ import {
   type SerializedProject,
 } from '../src/sim/serialize.js';
 import { initialState, step } from '../src/sim/solver.js';
+import { seedStandardCells } from '../src/sim/stdcells.js';
 import type { Level } from '../src/sim/types.js';
 
 function levelAt(circuit: Circuit, library: ChipLibrary, pinId: string): Level {
@@ -32,7 +33,7 @@ function makeNandChip(library: ChipLibrary) {
     { pin: nand.a, isOutput: false },
     { pin: nand.b, isOutput: false },
     { pin: nand.out, isOutput: true },
-  ]);
+  ], { labelize: false });
 }
 
 function makeNotChip(library: ChipLibrary) {
@@ -43,7 +44,7 @@ function makeNotChip(library: ChipLibrary) {
   return foldExposing(scratch, 'NOT', library, [
     { pin: notGate.in, isOutput: false },
     { pin: notGate.out, isOutput: true },
-  ]);
+  ], { labelize: false });
 }
 
 describe('project serialize/deserialize round-trip', () => {
@@ -91,7 +92,16 @@ describe('project serialize/deserialize round-trip', () => {
     const topCircuit = new Circuit();
     // Simulate a project saved by a session whose counter had run way ahead.
     const highId = 'src999999';
-    topCircuit.components.set(highId, { id: highId, kind: 'source', value: 1, pos: { x: 0, y: 0 }, pins: { out: { id: `${highId}:out`, componentId: highId, name: 'out', pos: { x: 0, y: 0 } } } });
+    topCircuit.components.set(highId, {
+      id: highId,
+      kind: 'source',
+      value: 1,
+      pos: { x: 0, y: 0 },
+      rotation: 0,
+      mirrorX: false,
+      mirrorY: false,
+      pins: { out: { id: `${highId}:out`, componentId: highId, name: 'out', pos: { x: 0, y: 0 } } },
+    });
     const project: SerializedProject = {
       format: 'z80-sim-project',
       version: 1,
@@ -151,5 +161,54 @@ describe('single chip def export/import', () => {
     const imported = importChipDef(bundle, new ChipLibrary());
 
     for (const id of imported.circuit.components.keys()) expect(originalIds.has(id)).toBe(false);
+  });
+});
+
+describe('deserializeProject isolates bundled example JSON', () => {
+  it('does not mutate EXAMPLE_PROJECTS when the live circuit is edited', async () => {
+    const { EXAMPLE_PROJECTS } = await import('../src/examples/catalog.js');
+    const latch = EXAMPLE_PROJECTS.find((e) => e.id === 'd-latch');
+    expect(latch).toBeTruthy();
+    const origX = latch!.project.topCircuit.components[0]!.pos.x;
+
+    const loaded = deserializeProject(latch!.project);
+    for (const c of loaded.topCircuit.components.values()) c.pos.x += 500;
+
+    expect(latch!.project.topCircuit.components[0]!.pos.x).toBe(origX);
+
+    const again = deserializeProject(latch!.project);
+    const first = [...again.topCircuit.components.values()][0]!;
+    expect(first.pos.x).toBe(origX);
+  });
+
+  it('switches between examples without aliasing component maps', async () => {
+    const { EXAMPLE_PROJECTS } = await import('../src/examples/catalog.js');
+    const latch = EXAMPLE_PROJECTS.find((e) => e.id === 'd-latch')!;
+    const counter = EXAMPLE_PROJECTS.find((e) => e.id === 'lab-counter-7seg')!;
+    const a = deserializeProject(latch.project);
+    const b = deserializeProject(counter.project);
+    expect(a.topCircuit.components.size).not.toBe(b.topCircuit.components.size);
+    expect([...a.topCircuit.components.keys()][0]).not.toBe([...b.topCircuit.components.keys()][0]);
+  });
+});
+
+describe('softState.q JSON round-trip', () => {
+  it('restores Uint8Array q after JSON.stringify (autosave path)', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const def = library.findByName('COUNTER4');
+    expect(def).toBeTruthy();
+    const circuit = new Circuit();
+    const chip = makeChipInstance(circuit, def!, { x: 0, y: 0 });
+    chip.softState = { model: 'COUNTER4', lastClk: 0, q: new Uint8Array([1, 0, 1, 1]) };
+    const json = JSON.parse(JSON.stringify(serializeProject(circuit, library))) as SerializedProject;
+    // Corrupted shape before the fix: softState.q became {"0":1,"1":0,...}.
+    const loaded = deserializeProject(json);
+    const again = [...loaded.topCircuit.components.values()].find((c) => c.kind === 'chip');
+    expect(again?.kind).toBe('chip');
+    if (again?.kind !== 'chip') return;
+    expect(again.softState?.q).toBeInstanceOf(Uint8Array);
+    expect(Array.from(again.softState!.q)).toEqual([1, 0, 1, 1]);
+    expect([...again.softState!.q].join('')).toBe('1011');
   });
 });

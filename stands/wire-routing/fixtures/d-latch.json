@@ -1,0 +1,123 @@
+{
+  "name": "d-latch",
+  "description": "Extracted from ./examples/d-latch.json (per-net obstacles exclude endpoint hosts).",
+  "grid": 10,
+  "obstacles": [
+    {
+      "minX": 105,
+      "minY": 47,
+      "maxX": 135,
+      "maxY": 73
+    },
+    {
+      "minX": 105,
+      "minY": 127,
+      "maxX": 135,
+      "maxY": 153
+    },
+    {
+      "minX": 234,
+      "minY": 97,
+      "maxX": 326,
+      "maxY": 143
+    }
+  ],
+  "nets": [
+    {
+      "id": "w51358",
+      "from": {
+        "x": 136,
+        "y": 60
+      },
+      "to": {
+        "x": 240,
+        "y": 110
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 105,
+          "minY": 127,
+          "maxX": 135,
+          "maxY": 153
+        }
+      ]
+    },
+    {
+      "id": "w51359",
+      "from": {
+        "x": 136,
+        "y": 140
+      },
+      "to": {
+        "x": 240,
+        "y": 130
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 105,
+          "minY": 47,
+          "maxX": 135,
+          "maxY": 73
+        }
+      ]
+    },
+    {
+      "id": "w51360",
+      "from": {
+        "x": 320,
+        "y": 110
+      },
+      "to": {
+        "x": 446,
+        "y": 60
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 105,
+          "minY": 47,
+          "maxX": 135,
+          "maxY": 73
+        },
+        {
+          "minX": 105,
+          "minY": 127,
+          "maxX": 135,
+          "maxY": 153
+        }
+      ]
+    },
+    {
+      "id": "w51361",
+      "from": {
+        "x": 320,
+        "y": 130
+      },
+      "to": {
+        "x": 446,
+        "y": 160
+      },
+      "startDir": "E",
+      "endDir": "W",
+      "obstacles": [
+        {
+          "minX": 105,
+          "minY": 47,
+          "maxX": 135,
+          "maxY": 73
+        },
+        {
+          "minX": 105,
+          "minY": 127,
+          "maxX": 135,
+          "maxY": 153
+        }
+      ]
+    }
+  ]
+}

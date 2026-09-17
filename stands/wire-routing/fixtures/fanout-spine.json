@@ -1,0 +1,29 @@
+{
+  "name": "fanout-spine",
+  "description": "One E pin fanning out to two W pins on the same net — the branch should run along the first wire's spine and split near its destination, not jog mid-gap.",
+  "grid": 10,
+  "obstacles": [
+    { "minX": 0, "minY": 40, "maxX": 80, "maxY": 160 },
+    { "minX": 300, "minY": 40, "maxX": 380, "maxY": 360 }
+  ],
+  "nets": [
+    {
+      "id": "trunk",
+      "net": "D0",
+      "from": { "x": 80, "y": 100 },
+      "to": { "x": 300, "y": 100 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 0
+    },
+    {
+      "id": "branch",
+      "net": "D0",
+      "from": { "x": 80, "y": 100 },
+      "to": { "x": 300, "y": 300 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2
+    }
+  ]
+}

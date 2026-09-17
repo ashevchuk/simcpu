@@ -25,14 +25,85 @@
 export const MACHINE_ADDR_BITS = 12;
 export const MACHINE_RAM_SIZE = 1 << MACHINE_ADDR_BITS; // 4096
 
+/** Soft CP/M path uses a full 64K address space (soft interpreter). */
+export const CPM_ADDR_BITS = 16;
+export const CPM_RAM_SIZE = 1 << CPM_ADDR_BITS; // 65536
+
 export const FB_BASE = 0xe00;
 export const FB_COLS = 32;
 export const FB_ROWS = 8;
 export const FB_SIZE = FB_COLS * FB_ROWS; // 256
 export const FB_END = FB_BASE + FB_SIZE; // 0xF00 exclusive
 
+/**
+ * Host-side soft console (SoftDevices.consoleFb) — not mapped into Z80 RAM.
+ * Classic CP/M size; RAM FB stays 32×8 for the 4K machine map / BASIC poke demos.
+ */
+export const CONSOLE_COLS = 80;
+export const CONSOLE_ROWS = 25;
+export const CONSOLE_SIZE = CONSOLE_COLS * CONSOLE_ROWS;
+
 export const KEY_STATUS = 0xf00;
 export const KEY_DATA = 0xf01;
+
+/**
+ * 64K soft layout: keep TPA (0x0100…) free; park FB/keys just below BIOS.
+ *   0xF000–0xF0FF  text FB
+ *   0xF100/0xF101  KEY_STATUS / KEY_DATA
+ *   0xFE00+        BIOS jump table
+ */
+export const CPM_FB_BASE = 0xf000;
+export const CPM_FB_END = CPM_FB_BASE + FB_SIZE;
+export const CPM_KEY_STATUS = 0xf100;
+export const CPM_KEY_DATA = 0xf101;
+export const CPM_BIOS_BASE = 0xfe00;
+export const CPM_BDOS_BASE = 0xec00;
+export const CPM_CCP_BASE = 0xe400;
+export const CPM_STACK = 0xe3ff;
+export const CPM_TPA = 0x0100;
+
+/** Soft I/O window derived from address width (or RAM byte length). */
+export interface SoftIoLayout {
+  addrBits: number;
+  ramSize: number;
+  fbBase: number;
+  fbEnd: number;
+  keyStatus: number;
+  keyData: number;
+  stackTop: number;
+  /** Soft reserved region start (loadHex refuses past this unless allowIo). */
+  ioGuard: number;
+}
+
+export function softIoLayoutForAddrBits(addrBits: number): SoftIoLayout {
+  if (addrBits >= CPM_ADDR_BITS) {
+    return {
+      addrBits: CPM_ADDR_BITS,
+      ramSize: CPM_RAM_SIZE,
+      fbBase: CPM_FB_BASE,
+      fbEnd: CPM_FB_END,
+      keyStatus: CPM_KEY_STATUS,
+      keyData: CPM_KEY_DATA,
+      stackTop: CPM_STACK,
+      ioGuard: CPM_FB_BASE,
+    };
+  }
+  return {
+    addrBits: MACHINE_ADDR_BITS,
+    ramSize: MACHINE_RAM_SIZE,
+    fbBase: FB_BASE,
+    fbEnd: FB_END,
+    keyStatus: KEY_STATUS,
+    keyData: KEY_DATA,
+    stackTop: 0xdff,
+    ioGuard: KEY_STATUS,
+  };
+}
+
+export function softIoLayoutForRam(ram: Uint8Array): SoftIoLayout {
+  if (ram.length >= CPM_RAM_SIZE) return softIoLayoutForAddrBits(CPM_ADDR_BITS);
+  return softIoLayoutForAddrBits(MACHINE_ADDR_BITS);
+}
 
 /** Soft bitmap size (hosted by SoftDevices, not in RAM). */
 export const BMP_WIDTH = 128;
@@ -46,16 +117,19 @@ export const PORT_KEY_DATA = 0x03;
 export const PORT_BMP_ADDR_LO = 0x20;
 export const PORT_BMP_ADDR_HI = 0x21;
 export const PORT_BMP_DATA = 0x22;
+/** Soft CP/M disk: OUT 0=read/1=write using BIOS workspace; IN = status (0=OK). */
+export const PORT_DISK_OP = 0x30;
 
-export function fbIndex(col: number, row: number): number {
+export function fbIndex(col: number, row: number, fbBase = FB_BASE): number {
   if (col < 0 || col >= FB_COLS || row < 0 || row >= FB_ROWS) {
     throw new RangeError(`fb cell (${col},${row}) out of range ${FB_COLS}x${FB_ROWS}`);
   }
-  return FB_BASE + row * FB_COLS + col;
+  return fbBase + row * FB_COLS + col;
 }
 
-export function isFbAddr(addr: number): boolean {
-  return addr >= FB_BASE && addr < FB_END;
+export function isFbAddr(addr: number, layout?: SoftIoLayout): boolean {
+  const L = layout ?? softIoLayoutForAddrBits(MACHINE_ADDR_BITS);
+  return addr >= L.fbBase && addr < L.fbEnd;
 }
 
 export function requiresMachineMap(addrBits: number): boolean {

@@ -7,17 +7,28 @@
 import type { ChipDef } from './ChipLibrary.js';
 import { Circuit, nextId } from './Circuit.js';
 import type {
+  AnalyzerComponent,
+  BusProbeComponent,
+  BusSwitchComponent,
+  ButtonComponent,
   ChipInstanceComponent,
+  ClockComponent,
   InputComponent,
   LabelComponent,
+  JunctionComponent,
+  LedComponent,
   Pin,
   Point,
   PortComponent,
+  PortDir,
   ProbeComponent,
   RamComponent,
+  RomComponent,
+  SevenSegComponent,
   SourceComponent,
   TransistorComponent,
   TransistorType,
+  TtyComponent,
 } from './types.js';
 
 function pin(componentId: string, name: string, pos: Point, dx: number, dy: number): Pin {
@@ -31,7 +42,19 @@ function pin(componentId: string, name: string, pos: Point, dx: number, dy: numb
 
 /** Precomputed pin dy offsets for makeChipInstance — keyed by port count. */
 const chipPinDyByCount: number[][] = [];
-function chipPinDys(portCount: number): number[] {
+/** Horizontal offset of chip/RAM/ROM pins from body center (left edge). */
+export const CHIP_PIN_DX = -40;
+/** Right-edge pin offset (mirror of CHIP_PIN_DX). */
+export const CHIP_PIN_DX_RIGHT = -CHIP_PIN_DX;
+/** Analyzer channel stack uses a tighter pitch. */
+export const ANALYZER_PIN_DX = -28;
+export const ANALYZER_PIN_PITCH = 20;
+/** Bus-switch package width (must match Renderer drawing). */
+export const BUS_SWITCH_BODY_W = 100;
+/** Output pin bank just outside the right edge of the package. */
+export const BUS_SWITCH_PIN_DX = BUS_SWITCH_BODY_W / 2 + 4;
+
+export function chipPinDys(portCount: number): number[] {
   let dys = chipPinDyByCount[portCount];
   if (dys) return dys;
   dys = new Array(portCount);
@@ -39,6 +62,11 @@ function chipPinDys(portCount: number): number[] {
   for (let i = 0; i < portCount; i++) dys[i] = (i - mid) * 20;
   chipPinDyByCount[portCount] = dys;
   return dys;
+}
+
+export function analyzerPinDys(channelCount: number): number[] {
+  const mid = (channelCount - 1) / 2;
+  return Array.from({ length: channelCount }, (_, i) => (i - mid) * ANALYZER_PIN_PITCH);
 }
 
 /**
@@ -70,14 +98,38 @@ function getCircuitRailPin(circuit: Circuit, rail: 'VCC' | 'GND', at: Point): Pi
 
 // Fixed pin offsets from a component's center, shared by the factories below
 // and by the UI (rendering + pin hit-testing use the exact same geometry).
-// v1 has no drag-to-move: a component's pins are fixed at creation time.
+// MOSFET pin placement is CMOS-schematic oriented: N has drain on top /
+// source on bottom; P has source on top / drain on bottom so a stacked
+// inverter's shared drain node lands on one point.
 export const LAYOUT = {
-  transistor: { gate: [-20, 0], drain: [0, -20], source: [0, 20] },
-  source: { out: [0, 15] },
+  /** @deprecated Prefer transistorPins() — kept for call sites that only need gate-left. */
+  transistor: { gate: [-28, 0], drain: [0, -28], source: [0, 28] },
+  source: { out: [0, 15], gndOut: [0, -15] },
   input: { out: [15, 0] },
+  button: { out: [16, 0] },
+  led: { in: [-14, 0] },
+  /** Left-stack pin X for sevenseg (dys from chipPinDys). */
+  sevenseg: { pinDx: -36 },
+  clock: { out: [18, 0], trig: [-18, 0] },
   probe: { in: [-15, 0] },
   label: { net: [0, 0] },
 } as const;
+
+/** Vertical pitch between stacked CMOS complementary pair centers (drains coincide). */
+export const CMOS_STACK_PITCH = 64;
+/** Horizontal pitch between parallel CMOS columns (NAND/NOR). */
+export const CMOS_COL_PITCH = 80;
+
+export function transistorPinOffsets(type: TransistorType): {
+  gate: [number, number];
+  drain: [number, number];
+  source: [number, number];
+} {
+  if (type === 'P') {
+    return { gate: [-28, 0], source: [0, -28], drain: [0, 28] };
+  }
+  return { gate: [-28, 0], drain: [0, -28], source: [0, 28] };
+}
 
 export function makeTransistor(
   circuit: Circuit,
@@ -87,17 +139,19 @@ export function makeTransistor(
   const id = nextId('t');
   const x = pos.x;
   const y = pos.y;
-  // Inline fixed LAYOUT.transistor offsets — hot path for every gate builder.
+  const off = transistorPinOffsets(type);
   const c: TransistorComponent = {
     id,
     kind: 'transistor',
     type,
     pos,
     rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
     pins: {
-      gate: { id: id + ':gate', componentId: id, name: 'gate', pos: { x: x - 20, y } },
-      drain: { id: id + ':drain', componentId: id, name: 'drain', pos: { x, y: y - 20 } },
-      source: { id: id + ':source', componentId: id, name: 'source', pos: { x, y: y + 20 } },
+      gate: { id: id + ':gate', componentId: id, name: 'gate', pos: { x: x + off.gate[0], y: y + off.gate[1] } },
+      drain: { id: id + ':drain', componentId: id, name: 'drain', pos: { x: x + off.drain[0], y: y + off.drain[1] } },
+      source: { id: id + ':source', componentId: id, name: 'source', pos: { x: x + off.source[0], y: y + off.source[1] } },
     },
   };
   circuit.addComponent(c);
@@ -110,12 +164,16 @@ export function makeSource(
   pos: Point = { x: 0, y: 0 },
 ): SourceComponent {
   const id = nextId('src');
+  const off = value === 1 ? LAYOUT.source.out : LAYOUT.source.gndOut;
   const c: SourceComponent = {
     id,
     kind: 'source',
     value,
     pos,
-    pins: { out: pin(id, 'out', pos, ...LAYOUT.source.out) },
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pins: { out: pin(id, 'out', pos, off[0], off[1]) },
   };
   circuit.addComponent(c);
   return c;
@@ -132,7 +190,313 @@ export function makeInput(
     kind: 'input',
     value,
     pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
     pins: { out: pin(id, 'out', pos, ...LAYOUT.input.out) },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function makeButton(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  mode: 'momentary' | 'toggle' = 'momentary',
+): ButtonComponent {
+  const id = nextId('btn');
+  const c: ButtonComponent = {
+    id,
+    kind: 'button',
+    mode,
+    value: 0,
+    holdFrames: 0,
+    pulseFrames: 8,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pins: { out: pin(id, 'out', pos, ...LAYOUT.button.out) },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function makeLed(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  label?: string,
+  color = '#ff4d4d',
+): LedComponent {
+  const id = nextId('led');
+  const c: LedComponent = {
+    id,
+    kind: 'led',
+    ...(label !== undefined ? { label } : {}),
+    color,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pins: { in: pin(id, 'in', pos, ...LAYOUT.led.in) },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+/** Common-cathode 7-segment display — sense pins a..g (+ optional dp). */
+export function makeSevenSeg(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  hasDp = false,
+  color = '#ff5533',
+): SevenSegComponent {
+  const id = nextId('7seg');
+  const names = hasDp ? ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'] : ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  const dys = chipPinDys(names.length);
+  const pins: Record<string, Pin> = {};
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i]!;
+    pins[name] = {
+      id: `${id}:${name}`,
+      componentId: id,
+      name,
+      pos: { x: pos.x + LAYOUT.sevenseg.pinDx, y: pos.y + dys[i]! },
+    };
+  }
+  const c: SevenSegComponent = {
+    id,
+    kind: 'sevenseg',
+    hasDp,
+    color,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder: names,
+    pins,
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function makeClock(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  periodFrames = 30,
+  mode: ClockComponent['mode'] = 'continuous',
+): ClockComponent {
+  const id = nextId('clk');
+  const period = Math.max(2, periodFrames | 0);
+  const duty = Math.max(1, Math.floor(period / 2));
+  const c: ClockComponent = {
+    id,
+    kind: 'clock',
+    mode,
+    value: 0,
+    running: false,
+    periodFrames: period,
+    dutyFrames: duty,
+    phase: 0,
+    holdFrames: 0,
+    lastTrig: 0,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pins: {
+      out: pin(id, 'out', pos, ...LAYOUT.clock.out),
+      trig: pin(id, 'trig', pos, ...LAYOUT.clock.trig),
+    },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+/** Multi-channel analyzer — `channelCount` sense inputs ch0..chN-1 stacked on the left. */
+export function makeAnalyzer(
+  circuit: Circuit,
+  channelCount = 4,
+  pos: Point = { x: 0, y: 0 },
+): AnalyzerComponent {
+  const n = Math.max(1, Math.min(64, channelCount | 0));
+  const id = nextId('la');
+  const pins: Record<string, Pin> = {};
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const name = `ch${i}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, ANALYZER_PIN_DX, (i - mid) * ANALYZER_PIN_PITCH);
+  }
+  const c: AnalyzerComponent = {
+    id,
+    kind: 'analyzer',
+    channelCount: n,
+    armed: false,
+    channelLabels: Array.from({ length: n }, (_, i) => `ch${i}`),
+    triggerChannel: null,
+    triggerEdge: 'rise',
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder,
+    pins,
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function analyzerPortCount(c: AnalyzerComponent): number {
+  return c.channelCount;
+}
+
+/** Multi-bit bus probe — `bitWidth` sense inputs b0 (LSB) … bN-1 stacked on the left. */
+export function makeBusProbe(
+  circuit: Circuit,
+  bitWidth = 8,
+  pos: Point = { x: 0, y: 0 },
+  radix: BusProbeComponent['radix'] = 'hex',
+): BusProbeComponent {
+  const n = Math.max(1, Math.min(32, bitWidth | 0));
+  const id = nextId('bus');
+  const pins: Record<string, Pin> = {};
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const name = `b${i}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, ANALYZER_PIN_DX, (i - mid) * ANALYZER_PIN_PITCH);
+  }
+  const c: BusProbeComponent = {
+    id,
+    kind: 'busprobe',
+    bitWidth: n,
+    radix,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder,
+    pins,
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function busProbePortCount(c: BusProbeComponent): number {
+  return c.bitWidth;
+}
+
+/** Relayout bus-probe pins after bitWidth change (keeps existing wires on surviving pins). */
+export function relayoutBusProbePins(c: BusProbeComponent): void {
+  const n = c.bitWidth;
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const name = `b${i}`;
+    pinOrder.push(name);
+    const existing = c.pins[name];
+    if (existing) {
+      existing.pos = {
+        x: c.pos.x + ANALYZER_PIN_DX,
+        y: c.pos.y + (i - mid) * ANALYZER_PIN_PITCH,
+      };
+    } else {
+      c.pins[name] = pin(c.id, name, c.pos, ANALYZER_PIN_DX, (i - mid) * ANALYZER_PIN_PITCH);
+    }
+  }
+  for (const name of Object.keys(c.pins)) {
+    if (!pinOrder.includes(name)) delete c.pins[name];
+  }
+  c.pinOrder = pinOrder;
+}
+
+/**
+ * Writable multi-bit bus switch — drives `b0`…`bN-1` from `value` (LSB = b0).
+ * Pins stack on the right (outputs), mirroring Input bank geometry.
+ */
+export function makeBusSwitch(
+  circuit: Circuit,
+  bitWidth = 8,
+  pos: Point = { x: 0, y: 0 },
+  radix: BusSwitchComponent['radix'] = 'hex',
+  value = 0,
+): BusSwitchComponent {
+  const n = Math.max(1, Math.min(32, bitWidth | 0));
+  const id = nextId('bsw');
+  const pins: Record<string, Pin> = {};
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  const pinDx = BUS_SWITCH_PIN_DX; // right side (outputs), outside package edge
+  for (let i = 0; i < n; i++) {
+    const name = `b${i}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, pinDx, (i - mid) * ANALYZER_PIN_PITCH);
+  }
+  const mask = n >= 31 ? 0x7fffffff : (1 << n) - 1;
+  const c: BusSwitchComponent = {
+    id,
+    kind: 'busswitch',
+    bitWidth: n,
+    value: (value | 0) & mask,
+    radix,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder,
+    pins,
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function busSwitchPortCount(c: BusSwitchComponent): number {
+  return c.bitWidth;
+}
+
+/** Relayout bus-switch pins after bitWidth change. */
+export function relayoutBusSwitchPins(c: BusSwitchComponent): void {
+  const n = c.bitWidth;
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  const pinDx = BUS_SWITCH_PIN_DX;
+  for (let i = 0; i < n; i++) {
+    const name = `b${i}`;
+    pinOrder.push(name);
+    const existing = c.pins[name];
+    if (existing) {
+      existing.pos = {
+        x: c.pos.x + pinDx,
+        y: c.pos.y + (i - mid) * ANALYZER_PIN_PITCH,
+      };
+    } else {
+      c.pins[name] = pin(c.id, name, c.pos, pinDx, (i - mid) * ANALYZER_PIN_PITCH);
+    }
+  }
+  for (const name of Object.keys(c.pins)) {
+    if (!pinOrder.includes(name)) delete c.pins[name];
+  }
+  c.pinOrder = pinOrder;
+  const mask = n >= 31 ? 0x7fffffff : (1 << n) - 1;
+  c.value = (c.value | 0) & mask;
+}
+
+/** TTY / machine console instrument (no electrical pins). */
+export function makeTty(
+  circuit: Circuit,
+  pos: Point = { x: 0, y: 0 },
+  ramId: string | null = null,
+): TtyComponent {
+  const id = nextId('tty');
+  const c: TtyComponent = {
+    id,
+    kind: 'tty',
+    ramId,
+    pos,
+    pins: {},
   };
   circuit.addComponent(c);
   return c;
@@ -144,6 +508,21 @@ export function makeLabel(circuit: Circuit, name: string, pos: Point = { x: 0, y
     id,
     kind: 'label',
     name,
+    pos,
+    pins: {
+      net: { id: id + ':net', componentId: id, name: 'net', pos: { x: pos.x, y: pos.y } },
+    },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+/** Passive solder-dot for T-junctions / wire nodes (single `net` pin). */
+export function makeJunction(circuit: Circuit, pos: Point = { x: 0, y: 0 }): JunctionComponent {
+  const id = nextId('junc');
+  const c: JunctionComponent = {
+    id,
+    kind: 'junction',
     pos,
     pins: {
       net: { id: id + ':net', componentId: id, name: 'net', pos: { x: pos.x, y: pos.y } },
@@ -177,26 +556,112 @@ export function makeProbe(circuit: Circuit, pos: Point = { x: 0, y: 0 }, label?:
     kind: 'probe',
     label,
     pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
     pins: { in: pin(id, 'in', pos, ...LAYOUT.probe.in) },
   };
   circuit.addComponent(c);
   return c;
 }
 
-export function wire(circuit: Circuit, a: Pin, b: Pin): void {
-  circuit.addWire(a.id, b.id);
+export function wire(circuit: Circuit, a: Pin, b: Pin, waypoints?: Point[]): void {
+  circuit.addWire(a.id, b.id, waypoints);
 }
 
 /** Boundary marker inside a ChipDef's internal circuit — see fold() in hierarchy.ts. */
-export function makePort(circuit: Circuit, name: string, pos: Point = { x: 0, y: 0 }): PortComponent {
+export function makePort(
+  circuit: Circuit,
+  name: string,
+  pos: Point = { x: 0, y: 0 },
+  dir: PortDir = 'inout',
+): PortComponent {
   const id = nextId('port');
-  const c: PortComponent = { id, kind: 'port', name, pos, pins: { io: pin(id, 'io', pos, 0, 0) } };
+  const c: PortComponent = { id, kind: 'port', name, dir, pos, pins: { io: pin(id, 'io', pos, 0, 0) } };
   circuit.addComponent(c);
   return c;
 }
 
-/** Fixed visual width of every chip instance box. Height depends on port count — see chipInstanceHeight(). */
-export const CHIP_INSTANCE_WIDTH = 60;
+/** Next free `pN` name among existing ports on `circuit`. */
+export function nextAutoPortName(circuit: Circuit): string {
+  const used = new Set<string>();
+  for (const c of circuit.components.values()) {
+    if (c.kind === 'port') used.add(c.name);
+  }
+  let i = 0;
+  while (used.has(`p${i}`)) i++;
+  return `p${i}`;
+}
+
+/**
+ * Parse a bus port spec: `D[7:0]` → D7…D0, or `D[8]` → D0…D7.
+ * Returns null if `spec` is a plain single port name.
+ */
+export function parseBusPortSpec(spec: string): { names: string[] } | null {
+  const s = spec.trim();
+  const range = /^([A-Za-z_][\w]*)\[(\d+):(\d+)\]$/.exec(s);
+  if (range) {
+    const base = range[1]!;
+    const a = Number(range[2]);
+    const b = Number(range[3]);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+    const names: string[] = [];
+    if (a >= b) {
+      for (let i = a; i >= b; i--) names.push(`${base}${i}`);
+    } else {
+      for (let i = a; i <= b; i++) names.push(`${base}${i}`);
+    }
+    if (names.length < 1 || names.length > 64) return null;
+    return { names };
+  }
+  const width = /^([A-Za-z_][\w]*)\[(\d+)\]$/.exec(s);
+  if (width) {
+    const base = width[1]!;
+    const n = Number(width[2]);
+    if (!Number.isFinite(n) || n < 1 || n > 64) return null;
+    return { names: Array.from({ length: n }, (_, i) => `${base}${i}`) };
+  }
+  return null;
+}
+
+/** Build left/right pinSide map from PortComponents inside a ChipDef. */
+export function pinSidesFromDef(def: ChipDef): Record<string, -1 | 1> {
+  const dirs = new Map<string, PortDir>();
+  for (const c of def.circuit.components.values()) {
+    if (c.kind === 'port') dirs.set(c.name, c.dir ?? 'inout');
+  }
+  const sides: Record<string, -1 | 1> = {};
+  for (const name of def.ports) {
+    const d = dirs.get(name) ?? 'inout';
+    sides[name] = d === 'out' ? 1 : -1;
+  }
+  return sides;
+}
+
+/** Visual height from the taller of the left/right stacks. */
+export function chipBoxHeight(c: ChipInstanceComponent): number {
+  if (!c.pinSide) return chipInstanceHeight(Math.max(Object.keys(c.pins).length, 1));
+  let left = 0;
+  let right = 0;
+  for (const name of c.pinOrder) {
+    if (c.pinSide[name] === 1) right++;
+    else left++;
+  }
+  return chipInstanceHeight(Math.max(left, right, 1));
+}
+
+/** Fixed visual width of every chip / RAM / ROM instance box. Tall enough for pin labels inside. */
+export const CHIP_INSTANCE_WIDTH = 96;
+
+export function chipBodyWidth(c: { boxWidth?: number }): number {
+  return c.boxWidth ?? CHIP_INSTANCE_WIDTH;
+}
+
+/** Local X offsets for left/right pin stacks given body width. */
+export function chipPinDxPair(width: number): { left: number; right: number } {
+  const half = width / 2;
+  return { left: -(half - 8), right: half - 8 };
+}
 
 /**
  * Visual height of a chip instance box with `portCount` pins, stacked at
@@ -210,27 +675,53 @@ export function chipInstanceHeight(portCount: number): number {
 }
 
 /**
- * Place one instance of a chip definition. Pins are stacked vertically
- * along the instance's left edge, in `def.ports` order, centered on `pos`.
+ * Place one instance of a chip definition. IN/inout pins on the left, OUT on
+ * the right (from PortComponent.dir inside the def).
  */
 export function makeChipInstance(circuit: Circuit, def: ChipDef, pos: Point = { x: 0, y: 0 }): ChipInstanceComponent {
   const id = nextId('chip');
   const ports = def.ports;
-  const n = ports.length;
-  const dys = chipPinDys(n);
+  const pinSide = pinSidesFromDef(def);
+  const left: string[] = [];
+  const right: string[] = [];
+  for (const name of ports) {
+    if (pinSide[name] === 1) right.push(name);
+    else left.push(name);
+  }
+  const leftDys = chipPinDys(left.length);
+  const rightDys = chipPinDys(right.length);
   const pins: Record<string, Pin> = {};
-  const px = pos.x - 40;
-  const py = pos.y;
-  for (let i = 0; i < n; i++) {
-    const name = ports[i]!;
+  for (let i = 0; i < left.length; i++) {
+    const name = left[i]!;
     pins[name] = {
       id: id + ':' + name,
       componentId: id,
       name,
-      pos: { x: px, y: py + dys[i]! },
+      pos: { x: pos.x + CHIP_PIN_DX, y: pos.y + leftDys[i]! },
     };
   }
-  const c: ChipInstanceComponent = { id, kind: 'chip', defId: def.id, pos, pins };
+  for (let i = 0; i < right.length; i++) {
+    const name = right[i]!;
+    pins[name] = {
+      id: id + ':' + name,
+      componentId: id,
+      name,
+      pos: { x: pos.x + CHIP_PIN_DX_RIGHT, y: pos.y + rightDys[i]! },
+    };
+  }
+  const c: ChipInstanceComponent = {
+    id,
+    kind: 'chip',
+    defId: def.id,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder: [...ports],
+    pinSide,
+    defRevision: def.revision ?? 0,
+    pins,
+  };
   circuit.addComponent(c);
   return c;
 }
@@ -272,30 +763,110 @@ export function makeRam(
   const nextDy = () => (i++ - (n - 1) / 2) * 20;
 
   const pins: Record<string, Pin> = {};
-  for (let k = 0; k < addrBits; k++) pins[`addr${k}`] = pin(id, `addr${k}`, pos, -40, nextDy());
-  for (let k = 0; k < dataBits; k++) pins[`data${k}`] = pin(id, `data${k}`, pos, -40, nextDy());
-  pins.we = pin(id, 'we', pos, -40, nextDy());
-  pins.oe = pin(id, 'oe', pos, -40, nextDy());
-  pins.clk = pin(id, 'clk', pos, -40, nextDy());
+  const pinOrder: string[] = [];
+  for (let k = 0; k < addrBits; k++) {
+    const name = `addr${k}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, CHIP_PIN_DX, nextDy());
+  }
+  for (let k = 0; k < dataBits; k++) {
+    const name = `data${k}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, CHIP_PIN_DX, nextDy());
+  }
+  pins.we = pin(id, 'we', pos, CHIP_PIN_DX, nextDy());
+  pins.oe = pin(id, 'oe', pos, CHIP_PIN_DX, nextDy());
+  pins.clk = pin(id, 'clk', pos, CHIP_PIN_DX, nextDy());
+  pinOrder.push('we', 'oe', 'clk');
 
-  const c: RamComponent = { id, kind: 'ram', addrBits, dataBits, bytes, pos, pins };
+  const c: RamComponent = {
+    id,
+    kind: 'ram',
+    addrBits,
+    dataBits,
+    bytes,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder,
+    pins,
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+/**
+ * Behavioral ROM — OE-gated read, no write port. Same visual pin stack as
+ * RAM minus we/clk. Cannot be folded (shared bytes by reference).
+ */
+export function makeRom(
+  circuit: Circuit,
+  addrBits: number,
+  dataBits = 8,
+  initial?: Uint8Array,
+  pos: Point = { x: 0, y: 0 },
+): RomComponent {
+  if (addrBits < 1) throw new Error('makeRom needs at least one address bit');
+  const id = nextId('rom');
+  const size = 1 << addrBits;
+  const bytes = new Uint8Array(size);
+  if (initial) bytes.set(initial.subarray(0, Math.min(initial.length, size)));
+
+  const portCount = addrBits + dataBits + 1; // + oe
+  const n = portCount;
+  let i = 0;
+  const nextDy = () => (i++ - (n - 1) / 2) * 20;
+
+  const pins: Record<string, Pin> = {};
+  const pinOrder: string[] = [];
+  for (let k = 0; k < addrBits; k++) {
+    const name = `addr${k}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, CHIP_PIN_DX, nextDy());
+  }
+  for (let k = 0; k < dataBits; k++) {
+    const name = `data${k}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, CHIP_PIN_DX, nextDy());
+  }
+  pins.oe = pin(id, 'oe', pos, CHIP_PIN_DX, nextDy());
+  pinOrder.push('oe');
+
+  const c: RomComponent = {
+    id,
+    kind: 'rom',
+    addrBits,
+    dataBits,
+    bytes,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder,
+    pins,
+  };
   circuit.addComponent(c);
   return c;
 }
 
 /** `addr0..addr{N-1}` as an ordered array, LSB first — see RamComponent's doc comment for why `pins` itself stays a flat, unordered Record. */
-export function ramAddrPins(c: RamComponent): Pin[] {
+export function ramAddrPins(c: RamComponent | RomComponent): Pin[] {
   return Array.from({ length: c.addrBits }, (_, i) => c.pins[`addr${i}`]!);
 }
 
 /** `data0..data{M-1}` as an ordered array, LSB first. */
-export function ramDataPins(c: RamComponent): Pin[] {
+export function ramDataPins(c: RamComponent | RomComponent): Pin[] {
   return Array.from({ length: c.dataBits }, (_, i) => c.pins[`data${i}`]!);
 }
 
 /** Total pin count of a RamComponent, for sizing its box the same way chipInstanceHeight() sizes a chip instance's. */
 export function ramPortCount(c: RamComponent): number {
   return c.addrBits + c.dataBits + 3; // + we, oe, clk
+}
+
+export function romPortCount(c: RomComponent): number {
+  return c.addrBits + c.dataBits + 1; // + oe
 }
 
 /** A single input pin exposed as the gate of a CMOS inverter. */
@@ -334,6 +905,12 @@ export function setCircuitGatePlacer(circuit: Circuit, placer: CircuitGatePlacer
   else circuitGatePlacers.delete(circuit);
 }
 
+/** Short local VCC/GND stub via a rail label (joins Source drivers by name). */
+function stubLocalRail(circuit: Circuit, rail: 'VCC' | 'GND', pin: Pin, dy: number): void {
+  const lbl = makeLabel(circuit, rail, { x: pin.pos.x, y: pin.pos.y + dy });
+  wire(circuit, pin, lbl.pins.net);
+}
+
 /** Standard 2-transistor CMOS inverter: PMOS pulls up, NMOS pulls down. */
 export function buildNot(
   circuit: Circuit,
@@ -342,17 +919,28 @@ export function buildNot(
   const placer = circuitGatePlacers.get(circuit);
   if (placer) return placer.not(circuit, pos);
 
+  const stack = CMOS_STACK_PITCH;
   const pmos = makeTransistor(circuit, 'P', pos);
-  const nmos = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
-  // Power via rail labels — see tiePowerRail. Circuit still needs Source(1)/Source(0) rail drivers.
-  tiePowerRail(circuit, 'VCC', pmos.pins.source);
-  tiePowerRail(circuit, 'GND', nmos.pins.source);
+  const nmos = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + stack });
+  stubLocalRail(circuit, 'VCC', pmos.pins.source, -18);
+  stubLocalRail(circuit, 'GND', nmos.pins.source, 18);
   wire(circuit, pmos.pins.drain, nmos.pins.drain);
   wire(circuit, pmos.pins.gate, nmos.pins.gate);
   return { in: pmos.pins.gate, out: pmos.pins.drain };
 }
 
-/** Standard CMOS NAND: two PMOS in parallel (pull-up), two NMOS in series (pull-down). */
+/**
+ * Standard CMOS NAND schematic layout:
+ *   VCC--+--P_a--+     VCC--+--P_b--+
+ *        |       |          |       |
+ *        +-------+----+-----+-------+---- out
+ *                     |
+ *                    N_a
+ *                     |
+ *                    N_b
+ *                     |
+ *                    GND
+ */
 export function buildNand(
   circuit: Circuit,
   pos: Point = { x: 0, y: 0 },
@@ -360,20 +948,37 @@ export function buildNand(
   const placer = circuitGatePlacers.get(circuit);
   if (placer) return placer.nand(circuit, pos);
 
+  const col = CMOS_COL_PITCH;
+  const stack = CMOS_STACK_PITCH;
+  const midX = pos.x + col / 2;
+
   const p1 = makeTransistor(circuit, 'P', pos);
-  const p2 = makeTransistor(circuit, 'P', { x: pos.x + 50, y: pos.y });
-  const n1 = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 60 });
-  const n2 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y + 60 });
+  const p2 = makeTransistor(circuit, 'P', { x: pos.x + col, y: pos.y });
+  // Series pull-down stacked on the centerline (classic textbook NAND).
+  const n1 = makeTransistor(circuit, 'N', { x: midX, y: pos.y + stack });
+  const n2 = makeTransistor(circuit, 'N', { x: midX, y: pos.y + 2 * stack });
 
-  tiePowerRail(circuit, 'VCC', p1.pins.source);
-  tiePowerRail(circuit, 'VCC', p2.pins.source);
-  wire(circuit, p1.pins.drain, p2.pins.drain);
-  wire(circuit, p1.pins.drain, n1.pins.drain);
+  stubLocalRail(circuit, 'VCC', p1.pins.source, -18);
+  stubLocalRail(circuit, 'VCC', p2.pins.source, -18);
+  // Parallel P drains meet on a horizontal bus; drop to series N stack.
+  wire(circuit, p1.pins.drain, p2.pins.drain, [{ x: midX, y: p1.pins.drain.pos.y }]);
+  wire(circuit, p1.pins.drain, n1.pins.drain, [
+    { x: midX, y: p1.pins.drain.pos.y },
+    { x: midX, y: n1.pins.drain.pos.y },
+  ]);
   wire(circuit, n1.pins.source, n2.pins.drain);
-  tiePowerRail(circuit, 'GND', n2.pins.source);
+  stubLocalRail(circuit, 'GND', n2.pins.source, 18);
 
-  wire(circuit, p1.pins.gate, n1.pins.gate); // input A
-  wire(circuit, p2.pins.gate, n2.pins.gate); // input B
+  // Gate A: left column P to stacked N (HVH via left rail).
+  wire(circuit, p1.pins.gate, n1.pins.gate, [
+    { x: pos.x - 44, y: p1.pins.gate.pos.y },
+    { x: pos.x - 44, y: n1.pins.gate.pos.y },
+  ]);
+  // Gate B: right column P down then in to lower N.
+  wire(circuit, p2.pins.gate, n2.pins.gate, [
+    { x: pos.x + col + 44, y: p2.pins.gate.pos.y },
+    { x: pos.x + col + 44, y: n2.pins.gate.pos.y },
+  ]);
 
   return { a: p1.pins.gate, b: p2.pins.gate, out: p1.pins.drain };
 }
@@ -389,7 +994,16 @@ export function buildAnd(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInpu
   return { a: nand.a, b: nand.b, out: inv.out };
 }
 
-/** Standard CMOS NOR: two PMOS in series (pull-up), two NMOS in parallel (pull-down) — the dual of NAND. */
+/**
+ * Standard CMOS NOR schematic layout (dual of NAND):
+ *   VCC--P_a--P_b--+--out
+ *                  |
+ *            +-----+-----+
+ *            |           |
+ *           N_a         N_b
+ *            |           |
+ *           GND         GND
+ */
 export function buildNor(
   circuit: Circuit,
   pos: Point = { x: 0, y: 0 },
@@ -397,20 +1011,39 @@ export function buildNor(
   const placer = circuitGatePlacers.get(circuit);
   if (placer) return placer.nor(circuit, pos);
 
-  const p1 = makeTransistor(circuit, 'P', pos);
-  const p2 = makeTransistor(circuit, 'P', { x: pos.x, y: pos.y + 60 });
-  const n1 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y });
-  const n2 = makeTransistor(circuit, 'N', { x: pos.x + 50, y: pos.y + 60 });
+  const col = CMOS_COL_PITCH;
+  const stack = CMOS_STACK_PITCH;
+  const midX = pos.x + col / 2;
 
-  tiePowerRail(circuit, 'VCC', p1.pins.source);
+  // Series P stack on the centerline.
+  const p1 = makeTransistor(circuit, 'P', { x: midX, y: pos.y });
+  const p2 = makeTransistor(circuit, 'P', { x: midX, y: pos.y + stack });
+  // Parallel N pull-downs at the output row.
+  const n1 = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 2 * stack });
+  const n2 = makeTransistor(circuit, 'N', { x: pos.x + col, y: pos.y + 2 * stack });
+
+  stubLocalRail(circuit, 'VCC', p1.pins.source, -18);
   wire(circuit, p1.pins.drain, p2.pins.source);
-  wire(circuit, p2.pins.drain, n1.pins.drain);
-  wire(circuit, n1.pins.drain, n2.pins.drain);
-  tiePowerRail(circuit, 'GND', n1.pins.source);
-  tiePowerRail(circuit, 'GND', n2.pins.source);
+  // Out bus: P series drain fans to both N drains.
+  wire(circuit, p2.pins.drain, n1.pins.drain, [
+    { x: midX, y: p2.pins.drain.pos.y },
+    { x: n1.pins.drain.pos.x, y: p2.pins.drain.pos.y },
+  ]);
+  wire(circuit, p2.pins.drain, n2.pins.drain, [
+    { x: midX, y: p2.pins.drain.pos.y },
+    { x: n2.pins.drain.pos.x, y: p2.pins.drain.pos.y },
+  ]);
+  stubLocalRail(circuit, 'GND', n1.pins.source, 18);
+  stubLocalRail(circuit, 'GND', n2.pins.source, 18);
 
-  wire(circuit, p1.pins.gate, n1.pins.gate); // input A
-  wire(circuit, p2.pins.gate, n2.pins.gate); // input B
+  wire(circuit, p1.pins.gate, n1.pins.gate, [
+    { x: pos.x - 44, y: p1.pins.gate.pos.y },
+    { x: pos.x - 44, y: n1.pins.gate.pos.y },
+  ]);
+  wire(circuit, p2.pins.gate, n2.pins.gate, [
+    { x: pos.x + col + 44, y: p2.pins.gate.pos.y },
+    { x: pos.x + col + 44, y: n2.pins.gate.pos.y },
+  ]);
 
   return { a: p1.pins.gate, b: p2.pins.gate, out: p2.pins.drain };
 }

@@ -36,6 +36,7 @@ interface Snapshot {
   de: number;
   hl: number;
   ix: number;
+  iy: number;
   sp: number;
   pc: number;
   ram: number[];
@@ -49,6 +50,7 @@ function softSnap(cpu: SoftZ80State, ram: Uint8Array, addrs: number[]): Snapshot
     de: (cpu.d << 8) | cpu.e,
     hl: (cpu.h << 8) | cpu.l,
     ix: cpu.ix & 0xffff,
+    iy: cpu.iy & 0xffff,
     sp: cpu.sp & ADDR_MASK,
     pc: cpu.pc & ADDR_MASK,
     ram: addrs.map((a) => ram[a] ?? 0),
@@ -64,6 +66,7 @@ function gateSnap(h: Z80Harness, addrs: number[]): Snapshot {
     de: (readReg(cpu.rD.q) << 8) | readReg(cpu.rE.q),
     hl: (readReg(cpu.rH.q) << 8) | readReg(cpu.rL.q),
     ix: (readReg(cpu.rIXH.q) << 8) | readReg(cpu.rIXL.q),
+    iy: (readReg(cpu.rIYH.q) << 8) | readReg(cpu.rIYL.q),
     sp: readReg(cpu.sp.q),
     pc: readReg(cpu.pc),
     ram: addrs.map((a) => cpu.ram.bytes[a] ?? 0),
@@ -71,7 +74,7 @@ function gateSnap(h: Z80Harness, addrs: number[]): Snapshot {
 }
 
 function expectParity(label: string, soft: Snapshot, gate: Snapshot): void {
-  const fields: (keyof Snapshot)[] = ['a', 'f', 'bc', 'de', 'hl', 'ix', 'sp', 'pc'];
+  const fields: (keyof Snapshot)[] = ['a', 'f', 'bc', 'de', 'hl', 'ix', 'iy', 'sp', 'pc'];
   for (const k of fields) {
     expect(gate[k], `${label}: gate.${k}=${gate[k]} soft.${k}=${soft[k]}`).toBe(soft[k]);
   }
@@ -123,7 +126,8 @@ function seedDefaultRegs(cpu: Z80Cpu, seedReg: SeedReg, sp: number): void {
 /**
  * Run the same program bytes on softZ80 and on buildZ80Cpu (via makeZ80Harness).
  * Soft runs until HALT (or maxSteps); gate catch-up follows each soft step.
- * Gate HALT (0x76) is inert but still advances PC like a 1-byte NOP — matching
+ * Gate HALT (0x76) latches `halted` (MachineRunner stop-clock); PC still
+ * sits past the HALT byte after fetch/increment, matching soft.
  * soft's fetch-then-halt PC.
  */
 function runBoth(program: Uint8Array, ramAddrs: number[], maxSteps = 16, sp = SP0) {
@@ -396,5 +400,29 @@ describe('softZ80 vs buildZ80Cpu parity', () => {
     expect(soft.ram[0]).toBe(0xaa);
     expect(soft.ram[1]).toBe(0xbb);
     expect(soft.sp).toBe(SP0);
+  });
+});
+
+describe('softZ80 FD/ED corners (soft-only)', () => {
+  it('FD LD IY,nn / ADD IY,BC', () => {
+    const ram = new Uint8Array(256);
+    ram.set([0xfd, 0x21, 0x00, 0x10, 0x01, 0x11, 0x00, 0xfd, 0x09, 0x76], 0);
+    const cpu = createSoftZ80();
+    cpu.sp = SP0;
+    let guard = 0;
+    while (!cpu.halted && guard++ < 64) softStep(cpu, ram, PARITY_HOOKS);
+    expect(cpu.iy & 0xffff).toBe(0x1011);
+    expect(cpu.halted).toBe(true);
+  });
+
+  it('ED SBC HL,BC with carry', () => {
+    const ram = new Uint8Array(256);
+    ram.set([0x21, 0x00, 0x01, 0x01, 0x01, 0x00, 0x37, 0xed, 0x42, 0x76], 0);
+    const cpu = createSoftZ80();
+    cpu.sp = SP0;
+    let guard = 0;
+    while (!cpu.halted && guard++ < 64) softStep(cpu, ram, PARITY_HOOKS);
+    expect(((cpu.h << 8) | cpu.l) & 0xffff).toBe(0x00fe);
+    expect(cpu.halted).toBe(true);
   });
 });

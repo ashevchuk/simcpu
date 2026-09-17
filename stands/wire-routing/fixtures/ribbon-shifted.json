@@ -1,0 +1,44 @@
+{
+  "name": "ribbon-shifted",
+  "description": "Four facing pins whose destination rows sit 3 grid lower — rails must nest (top wire nearest the destination) so no two wires braid.",
+  "grid": 10,
+  "ribbonRails": true,
+  "obstacles": [
+    { "minX": 0, "minY": 0, "maxX": 70, "maxY": 160 },
+    { "minX": 230, "minY": 30, "maxX": 300, "maxY": 190 }
+  ],
+  "nets": [
+    {
+      "id": "a",
+      "from": { "x": 70, "y": 30 },
+      "to": { "x": 230, "y": 60 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2
+    },
+    {
+      "id": "b",
+      "from": { "x": 70, "y": 50 },
+      "to": { "x": 230, "y": 80 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2
+    },
+    {
+      "id": "c",
+      "from": { "x": 70, "y": 70 },
+      "to": { "x": 230, "y": 100 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2
+    },
+    {
+      "id": "d",
+      "from": { "x": 70, "y": 90 },
+      "to": { "x": 230, "y": 120 },
+      "startDir": "E",
+      "endDir": "W",
+      "maxBends": 2
+    }
+  ]
+}

@@ -1,0 +1,1052 @@
+{
+  "format": "z80-sim-project",
+  "version": 1,
+  "topCircuit": {
+    "components": [
+      {
+        "id": "chip308450",
+        "kind": "chip",
+        "defId": "chipdef306340",
+        "pos": {
+          "x": 420,
+          "y": 280
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pinOrder": [
+          "a0",
+          "a1",
+          "a2",
+          "a3",
+          "a4",
+          "a5",
+          "a6",
+          "a7",
+          "b0",
+          "b1",
+          "b2",
+          "b3",
+          "b4",
+          "b5",
+          "b6",
+          "b7",
+          "op0",
+          "op1",
+          "s0",
+          "s1",
+          "s2",
+          "s3",
+          "s4",
+          "s5",
+          "s6",
+          "s7",
+          "cout"
+        ],
+        "pinSide": {
+          "a0": -1,
+          "a1": -1,
+          "a2": -1,
+          "a3": -1,
+          "a4": -1,
+          "a5": -1,
+          "a6": -1,
+          "a7": -1,
+          "b0": -1,
+          "b1": -1,
+          "b2": -1,
+          "b3": -1,
+          "b4": -1,
+          "b5": -1,
+          "b6": -1,
+          "b7": -1,
+          "op0": -1,
+          "op1": -1,
+          "s0": 1,
+          "s1": 1,
+          "s2": 1,
+          "s3": 1,
+          "s4": 1,
+          "s5": 1,
+          "s6": 1,
+          "s7": 1,
+          "cout": 1
+        },
+        "defRevision": 0,
+        "pins": {
+          "a0": {
+            "id": "chip308450:a0",
+            "componentId": "chip308450",
+            "name": "a0",
+            "pos": {
+              "x": 380,
+              "y": 110
+            }
+          },
+          "a1": {
+            "id": "chip308450:a1",
+            "componentId": "chip308450",
+            "name": "a1",
+            "pos": {
+              "x": 380,
+              "y": 130
+            }
+          },
+          "a2": {
+            "id": "chip308450:a2",
+            "componentId": "chip308450",
+            "name": "a2",
+            "pos": {
+              "x": 380,
+              "y": 150
+            }
+          },
+          "a3": {
+            "id": "chip308450:a3",
+            "componentId": "chip308450",
+            "name": "a3",
+            "pos": {
+              "x": 380,
+              "y": 170
+            }
+          },
+          "a4": {
+            "id": "chip308450:a4",
+            "componentId": "chip308450",
+            "name": "a4",
+            "pos": {
+              "x": 380,
+              "y": 190
+            }
+          },
+          "a5": {
+            "id": "chip308450:a5",
+            "componentId": "chip308450",
+            "name": "a5",
+            "pos": {
+              "x": 380,
+              "y": 210
+            }
+          },
+          "a6": {
+            "id": "chip308450:a6",
+            "componentId": "chip308450",
+            "name": "a6",
+            "pos": {
+              "x": 380,
+              "y": 230
+            }
+          },
+          "a7": {
+            "id": "chip308450:a7",
+            "componentId": "chip308450",
+            "name": "a7",
+            "pos": {
+              "x": 380,
+              "y": 250
+            }
+          },
+          "b0": {
+            "id": "chip308450:b0",
+            "componentId": "chip308450",
+            "name": "b0",
+            "pos": {
+              "x": 380,
+              "y": 270
+            }
+          },
+          "b1": {
+            "id": "chip308450:b1",
+            "componentId": "chip308450",
+            "name": "b1",
+            "pos": {
+              "x": 380,
+              "y": 290
+            }
+          },
+          "b2": {
+            "id": "chip308450:b2",
+            "componentId": "chip308450",
+            "name": "b2",
+            "pos": {
+              "x": 380,
+              "y": 310
+            }
+          },
+          "b3": {
+            "id": "chip308450:b3",
+            "componentId": "chip308450",
+            "name": "b3",
+            "pos": {
+              "x": 380,
+              "y": 330
+            }
+          },
+          "b4": {
+            "id": "chip308450:b4",
+            "componentId": "chip308450",
+            "name": "b4",
+            "pos": {
+              "x": 380,
+              "y": 350
+            }
+          },
+          "b5": {
+            "id": "chip308450:b5",
+            "componentId": "chip308450",
+            "name": "b5",
+            "pos": {
+              "x": 380,
+              "y": 370
+            }
+          },
+          "b6": {
+            "id": "chip308450:b6",
+            "componentId": "chip308450",
+            "name": "b6",
+            "pos": {
+              "x": 380,
+              "y": 390
+            }
+          },
+          "b7": {
+            "id": "chip308450:b7",
+            "componentId": "chip308450",
+            "name": "b7",
+            "pos": {
+              "x": 380,
+              "y": 410
+            }
+          },
+          "op0": {
+            "id": "chip308450:op0",
+            "componentId": "chip308450",
+            "name": "op0",
+            "pos": {
+              "x": 380,
+              "y": 430
+            }
+          },
+          "op1": {
+            "id": "chip308450:op1",
+            "componentId": "chip308450",
+            "name": "op1",
+            "pos": {
+              "x": 380,
+              "y": 450
+            }
+          },
+          "s0": {
+            "id": "chip308450:s0",
+            "componentId": "chip308450",
+            "name": "s0",
+            "pos": {
+              "x": 460,
+              "y": 200
+            }
+          },
+          "s1": {
+            "id": "chip308450:s1",
+            "componentId": "chip308450",
+            "name": "s1",
+            "pos": {
+              "x": 460,
+              "y": 220
+            }
+          },
+          "s2": {
+            "id": "chip308450:s2",
+            "componentId": "chip308450",
+            "name": "s2",
+            "pos": {
+              "x": 460,
+              "y": 240
+            }
+          },
+          "s3": {
+            "id": "chip308450:s3",
+            "componentId": "chip308450",
+            "name": "s3",
+            "pos": {
+              "x": 460,
+              "y": 260
+            }
+          },
+          "s4": {
+            "id": "chip308450:s4",
+            "componentId": "chip308450",
+            "name": "s4",
+            "pos": {
+              "x": 460,
+              "y": 280
+            }
+          },
+          "s5": {
+            "id": "chip308450:s5",
+            "componentId": "chip308450",
+            "name": "s5",
+            "pos": {
+              "x": 460,
+              "y": 300
+            }
+          },
+          "s6": {
+            "id": "chip308450:s6",
+            "componentId": "chip308450",
+            "name": "s6",
+            "pos": {
+              "x": 460,
+              "y": 320
+            }
+          },
+          "s7": {
+            "id": "chip308450:s7",
+            "componentId": "chip308450",
+            "name": "s7",
+            "pos": {
+              "x": 460,
+              "y": 340
+            }
+          },
+          "cout": {
+            "id": "chip308450:cout",
+            "componentId": "chip308450",
+            "name": "cout",
+            "pos": {
+              "x": 460,
+              "y": 360
+            }
+          }
+        },
+        "defName": "ALU8"
+      },
+      {
+        "id": "btn308451",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 1,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 20
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308451:out",
+            "componentId": "btn308451",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 20
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308453",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 1,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 56
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308453:out",
+            "componentId": "btn308453",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 56
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308455",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 1,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 92
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308455:out",
+            "componentId": "btn308455",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 92
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308457",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 1,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 128
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308457:out",
+            "componentId": "btn308457",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 128
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308459",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 164
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308459:out",
+            "componentId": "btn308459",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 164
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308461",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 200
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308461:out",
+            "componentId": "btn308461",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 200
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308463",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 236
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308463:out",
+            "componentId": "btn308463",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 236
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308465",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 272
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308465:out",
+            "componentId": "btn308465",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 272
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308467",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 1,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 340
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308467:out",
+            "componentId": "btn308467",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 340
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308469",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 1,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 376
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308469:out",
+            "componentId": "btn308469",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 376
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308471",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 412
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308471:out",
+            "componentId": "btn308471",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 412
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308473",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 448
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308473:out",
+            "componentId": "btn308473",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 448
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308475",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 484
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308475:out",
+            "componentId": "btn308475",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 484
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308477",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 520
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308477:out",
+            "componentId": "btn308477",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 520
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308479",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 556
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308479:out",
+            "componentId": "btn308479",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 556
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308481",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 592
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308481:out",
+            "componentId": "btn308481",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 592
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308483",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 660
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308483:out",
+            "componentId": "btn308483",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 660
+            }
+          }
+        }
+      },
+      {
+        "id": "btn308484",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 60,
+          "y": 710
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn308484:out",
+            "componentId": "btn308484",
+            "name": "out",
+            "pos": {
+              "x": 76,
+              "y": 710
+            }
+          }
+        }
+      },
+      {
+        "id": "bus308487",
+        "kind": "busprobe",
+        "bitWidth": 8,
+        "radix": "hex",
+        "pos": {
+          "x": 700,
+          "y": 200
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pinOrder": [
+          "b0",
+          "b1",
+          "b2",
+          "b3",
+          "b4",
+          "b5",
+          "b6",
+          "b7"
+        ],
+        "pins": {
+          "b0": {
+            "id": "bus308487:b0",
+            "componentId": "bus308487",
+            "name": "b0",
+            "pos": {
+              "x": 672,
+              "y": 130
+            }
+          },
+          "b1": {
+            "id": "bus308487:b1",
+            "componentId": "bus308487",
+            "name": "b1",
+            "pos": {
+              "x": 672,
+              "y": 150
+            }
+          },
+          "b2": {
+            "id": "bus308487:b2",
+            "componentId": "bus308487",
+            "name": "b2",
+            "pos": {
+              "x": 672,
+              "y": 170
+            }
+          },
+          "b3": {
+            "id": "bus308487:b3",
+            "componentId": "bus308487",
+            "name": "b3",
+            "pos": {
+              "x": 672,
+              "y": 190
+            }
+          },
+          "b4": {
+            "id": "bus308487:b4",
+            "componentId": "bus308487",
+            "name": "b4",
+            "pos": {
+              "x": 672,
+              "y": 210
+            }
+          },
+          "b5": {
+            "id": "bus308487:b5",
+            "componentId": "bus308487",
+            "name": "b5",
+            "pos": {
+              "x": 672,
+              "y": 230
+            }
+          },
+          "b6": {
+            "id": "bus308487:b6",
+            "componentId": "bus308487",
+            "name": "b6",
+            "pos": {
+              "x": 672,
+              "y": 250
+            }
+          },
+          "b7": {
+            "id": "bus308487:b7",
+            "componentId": "bus308487",
+            "name": "b7",
+            "pos": {
+              "x": 672,
+              "y": 270
+            }
+          }
+        }
+      },
+      {
+        "id": "led308496",
+        "kind": "led",
+        "label": "cout",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 700,
+          "y": 400
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led308496:in",
+            "componentId": "led308496",
+            "name": "in",
+            "pos": {
+              "x": 686,
+              "y": 400
+            }
+          }
+        }
+      }
+    ],
+    "wires": [
+      {
+        "id": "w308452",
+        "a": "btn308451:out",
+        "b": "chip308450:a0"
+      },
+      {
+        "id": "w308454",
+        "a": "btn308453:out",
+        "b": "chip308450:a1"
+      },
+      {
+        "id": "w308456",
+        "a": "btn308455:out",
+        "b": "chip308450:a2"
+      },
+      {
+        "id": "w308458",
+        "a": "btn308457:out",
+        "b": "chip308450:a3"
+      },
+      {
+        "id": "w308460",
+        "a": "btn308459:out",
+        "b": "chip308450:a4"
+      },
+      {
+        "id": "w308462",
+        "a": "btn308461:out",
+        "b": "chip308450:a5"
+      },
+      {
+        "id": "w308464",
+        "a": "btn308463:out",
+        "b": "chip308450:a6"
+      },
+      {
+        "id": "w308466",
+        "a": "btn308465:out",
+        "b": "chip308450:a7"
+      },
+      {
+        "id": "w308468",
+        "a": "btn308467:out",
+        "b": "chip308450:b0"
+      },
+      {
+        "id": "w308470",
+        "a": "btn308469:out",
+        "b": "chip308450:b1"
+      },
+      {
+        "id": "w308472",
+        "a": "btn308471:out",
+        "b": "chip308450:b2"
+      },
+      {
+        "id": "w308474",
+        "a": "btn308473:out",
+        "b": "chip308450:b3"
+      },
+      {
+        "id": "w308476",
+        "a": "btn308475:out",
+        "b": "chip308450:b4"
+      },
+      {
+        "id": "w308478",
+        "a": "btn308477:out",
+        "b": "chip308450:b5"
+      },
+      {
+        "id": "w308480",
+        "a": "btn308479:out",
+        "b": "chip308450:b6"
+      },
+      {
+        "id": "w308482",
+        "a": "btn308481:out",
+        "b": "chip308450:b7"
+      },
+      {
+        "id": "w308485",
+        "a": "btn308483:out",
+        "b": "chip308450:op0"
+      },
+      {
+        "id": "w308486",
+        "a": "btn308484:out",
+        "b": "chip308450:op1"
+      },
+      {
+        "id": "w308488",
+        "a": "chip308450:s0",
+        "b": "bus308487:b0"
+      },
+      {
+        "id": "w308489",
+        "a": "chip308450:s1",
+        "b": "bus308487:b1"
+      },
+      {
+        "id": "w308490",
+        "a": "chip308450:s2",
+        "b": "bus308487:b2"
+      },
+      {
+        "id": "w308491",
+        "a": "chip308450:s3",
+        "b": "bus308487:b3"
+      },
+      {
+        "id": "w308492",
+        "a": "chip308450:s4",
+        "b": "bus308487:b4"
+      },
+      {
+        "id": "w308493",
+        "a": "chip308450:s5",
+        "b": "bus308487:b5"
+      },
+      {
+        "id": "w308494",
+        "a": "chip308450:s6",
+        "b": "bus308487:b6"
+      },
+      {
+        "id": "w308495",
+        "a": "chip308450:s7",
+        "b": "bus308487:b7"
+      },
+      {
+        "id": "w308497",
+        "a": "chip308450:cout",
+        "b": "led308496:in"
+      }
+    ]
+  },
+  "chipDefs": []
+}

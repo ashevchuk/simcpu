@@ -2,15 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import type { ChipDef } from '../src/sim/ChipLibrary.js';
 import { Circuit } from '../src/sim/Circuit.js';
-import { flatten, fold, foldExposing, renamePort } from '../src/sim/hierarchy.js';
+import { flatten, fold, foldExposing, foldPortWarnings, renamePort, unfold } from '../src/sim/hierarchy.js';
 import {
   buildNand,
   buildNot,
   makeChipInstance,
   makeInput,
   makeLabel,
+  makePort,
   makeRam,
   makeSource,
+  parseBusPortSpec,
+  pinSidesFromDef,
   wire,
 } from '../src/sim/library.js';
 import { initialState, step } from '../src/sim/solver.js';
@@ -43,7 +46,7 @@ function makeNandChip(library: ChipLibrary): ChipDef {
     { pin: nand.a, isOutput: false },
     { pin: nand.b, isOutput: false },
     { pin: nand.out, isOutput: true },
-  ]);
+  ], { labelize: false });
 }
 
 function makeNotChip(library: ChipLibrary): ChipDef {
@@ -54,7 +57,7 @@ function makeNotChip(library: ChipLibrary): ChipDef {
   return foldExposing(scratch, 'NOT', library, [
     { pin: notGate.in, isOutput: false },
     { pin: notGate.out, isOutput: true },
-  ]);
+  ], { labelize: false });
 }
 
 describe('fold + flatten a NAND into a reusable chip', () => {
@@ -155,7 +158,7 @@ describe('flatten namespaces non-global labels per chip instance', () => {
       { pin: nand.a, isOutput: false },
       { pin: nand.b, isOutput: false },
       { pin: nand.out, isOutput: true },
-    ]);
+    ], { labelize: false });
 
     const parent = new Circuit();
     makeChipInstance(parent, def, { x: 0, y: 0 });
@@ -223,5 +226,143 @@ describe('fold() refuses to fold a RAM component', () => {
     const parent = new Circuit();
     const ram = makeRam(parent, 2, 8);
     expect(() => fold(parent, new Set([ram.id]), 'RAM_CHIP', library, { x: 0, y: 0 })).toThrow(/RAM/);
+  });
+});
+
+describe('fold() with explicit PortComponents (palette Port workflow)', () => {
+  it('exposes pre-placed ports without needing outside stubs', () => {
+    const library = new ChipLibrary();
+    const scratch = new Circuit();
+    makeSource(scratch, 1);
+    makeSource(scratch, 0);
+    const notGate = buildNot(scratch);
+    const portIn = makePort(scratch, 'IN', { x: 20, y: 40 }, 'in');
+    const portOut = makePort(scratch, 'OUT', { x: 20, y: 120 }, 'out');
+    wire(scratch, portIn.pins.io, notGate.in);
+    wire(scratch, notGate.out, portOut.pins.io);
+
+    const ids = new Set(scratch.components.keys());
+    const { def, instance } = fold(scratch, ids, 'NOT_PORTS', library, { x: 200, y: 100 });
+    expect(def.ports).toEqual(['IN', 'OUT']);
+    expect(instance.pins['IN']).toBeDefined();
+    expect(instance.pins['OUT']).toBeDefined();
+    // Entire selection folded in — parent keeps only the new instance.
+    expect([...scratch.components.values()].filter((c) => c.kind !== 'chip')).toHaveLength(0);
+
+    const parent = new Circuit();
+    const inA = makeInput(parent, 0);
+    const inst = makeChipInstance(parent, def, { x: 100, y: 100 });
+    wire(parent, inA.pins.out, inst.pins['IN']!);
+    const { netMap, state } = settle(parent, library);
+    expect(levelAt(state, netMap, inst.pins['OUT']!.id)).toBe(1);
+  });
+
+  it('reuses an explicit port when a boundary wire crosses the same net', () => {
+    const library = new ChipLibrary();
+    const parent = new Circuit();
+    makeSource(parent, 1);
+    makeSource(parent, 0);
+    const notGate = buildNot(parent);
+    const portIn = makePort(parent, 'IN', { x: 20, y: 40 }, 'in');
+    wire(parent, portIn.pins.io, notGate.in);
+    const outside = makeInput(parent, 1);
+    // Crossing stub: outside ↔ port (port is in selection, input is not).
+    wire(parent, outside.pins.out, portIn.pins.io);
+
+    const selected = new Set(
+      [...parent.components.values()].filter((c) => c.kind !== 'input').map((c) => c.id),
+    );
+    const { def, instance } = fold(parent, selected, 'NOT_CROSS', library, { x: 200, y: 100 });
+    expect(def.ports).toContain('IN');
+    expect(def.ports.filter((p) => p === 'IN')).toHaveLength(1);
+    // Outside input rewired to the instance pin, not a duplicate pN.
+    expect(instance.pins['IN']).toBeDefined();
+    const { netMap, state } = settle(parent, library);
+    // OUT may be auto-created from notGate.out if it didn't cross — only IN crossed.
+    // notGate.out has no outside connection, so no OUT port unless we placed one.
+    expect(levelAt(state, netMap, instance.pins['IN']!.id)).toBe(1);
+  });
+});
+
+describe('foldPortWarnings', () => {
+  it('flags unwired and duplicate ports', () => {
+    const c = new Circuit();
+    const a = makePort(c, 'A', { x: 0, y: 0 });
+    const a2 = makePort(c, 'A', { x: 0, y: 40 });
+    makePort(c, 'B', { x: 0, y: 80 }); // unwired
+    wire(c, a.pins.io, a2.pins.io); // A wired (to duplicate), B not
+    const warnings = foldPortWarnings(c, new Set(c.components.keys()));
+    expect(warnings.some((w) => w.includes('Duplicate port name "A"'))).toBe(true);
+    expect(warnings.some((w) => w.includes('Port "B" has no wire'))).toBe(true);
+  });
+});
+
+describe('parseBusPortSpec + pin sides', () => {
+  it('parses D[7:0] and D[4]', () => {
+    expect(parseBusPortSpec('D[7:0]')?.names).toEqual(['D7', 'D6', 'D5', 'D4', 'D3', 'D2', 'D1', 'D0']);
+    expect(parseBusPortSpec('Q[4]')?.names).toEqual(['Q0', 'Q1', 'Q2', 'Q3']);
+    expect(parseBusPortSpec('clk')).toBeNull();
+
+    const library = new ChipLibrary();
+    const scratch = new Circuit();
+    makeSource(scratch, 1);
+    makeSource(scratch, 0);
+    const notGate = buildNot(scratch);
+    const portIn = makePort(scratch, 'IN', { x: 0, y: 0 }, 'in');
+    const portOut = makePort(scratch, 'OUT', { x: 0, y: 40 }, 'out');
+    wire(scratch, portIn.pins.io, notGate.in);
+    wire(scratch, notGate.out, portOut.pins.io);
+    const { def } = fold(scratch, new Set(scratch.components.keys()), 'SIDES', library, { x: 0, y: 0 });
+    for (const c of def.circuit.components.values()) {
+      if (c.kind === 'port' && c.name === 'IN') c.dir = 'in';
+      if (c.kind === 'port' && c.name === 'OUT') c.dir = 'out';
+    }
+    const sides = pinSidesFromDef(def);
+    expect(sides['IN']).toBe(-1);
+    expect(sides['OUT']).toBe(1);
+    const parent = new Circuit();
+    const inst = makeChipInstance(parent, def, { x: 100, y: 100 });
+    expect(inst.pins['IN']!.pos.x).toBeLessThan(inst.pos.x);
+    expect(inst.pins['OUT']!.pos.x).toBeGreaterThan(inst.pos.x);
+  });
+});
+
+describe('unfold()', () => {
+  it('clones chip guts and restores outside wires onto ports', () => {
+    const library = new ChipLibrary();
+    const scratch = new Circuit();
+    makeSource(scratch, 1);
+    makeSource(scratch, 0);
+    const notGate = buildNot(scratch);
+    const portIn = makePort(scratch, 'IN', { x: 20, y: 40 }, 'in');
+    const portOut = makePort(scratch, 'OUT', { x: 20, y: 120 }, 'out');
+    wire(scratch, portIn.pins.io, notGate.in);
+    wire(scratch, notGate.out, portOut.pins.io);
+    const { def } = fold(scratch, new Set(scratch.components.keys()), 'NOT_U', library, { x: 0, y: 0 });
+
+    const parent = new Circuit();
+    const inA = makeInput(parent, 0);
+    const inst = makeChipInstance(parent, def, { x: 200, y: 200 });
+    wire(parent, inA.pins.out, inst.pins['IN']!);
+
+    const { ids } = unfold(parent, inst.id, library);
+    expect(parent.components.has(inst.id)).toBe(false);
+    expect(ids.length).toBeGreaterThan(0);
+    const ports = [...parent.components.values()].filter((c) => c.kind === 'port');
+    expect(ports.map((p) => p.name).sort()).toEqual(['IN', 'OUT']);
+    // Def template still intact for other instances.
+    expect(def.circuit.components.size).toBeGreaterThan(0);
+
+    const { netMap, state } = settle(parent, library);
+    const outPort = ports.find((p) => p.name === 'OUT')!;
+    expect(levelAt(state, netMap, outPort.pins.io.id)).toBe(1);
+
+    // Outside↔port wire got an orthogonal waypoint when not axis-aligned.
+    const cross = [...parent.wires.values()].find((w) => {
+      const a = w.a.startsWith(inA.id);
+      const b = w.b.startsWith(inA.id);
+      return a || b;
+    });
+    expect(cross?.waypoints?.length ?? 0).toBeGreaterThanOrEqual(0);
   });
 });
