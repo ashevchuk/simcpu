@@ -49,8 +49,9 @@ export class SpectrumWorkerHost {
       const url = new URL('spectrum-worker.js', location.href);
       this.worker = new Worker(url.href);
       this.worker.onmessage = (ev: MessageEvent<WorkerOutMsg>) => this.onWorkerMsg(ev.data);
-      this.worker.onerror = (e) => {
-        this.onError?.(e.message || 'Spectrum worker error');
+      this.worker.onerror = () => {
+        // Worker may fail to parse/load (vite URL, file://). Fall back to main
+        // thread without stamping a sticky softError on the machine panel.
         this.fallbackToMain();
       };
       this.useWorker = true;

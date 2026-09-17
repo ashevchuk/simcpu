@@ -22,9 +22,11 @@ export type ComponentKind =
   | 'clock' // configurable pulse generator (continuous or one-shot)
   | 'analyzer' // multi-channel logic analyzer instrument (sense pins)
   | 'busprobe' // multi-bit sense bus with hex/dec/bin decode on canvas
+  | 'busswitch' // writable multi-bit DIP/hex bus driver (b0.. outputs)
   | 'tty' // machine TTY / soft console instrument (opens dialog)
   | 'probe' // read-only display of a net's value, no electrical effect
   | 'label' // named net tie point (same name => same net, see Circuit)
+  | 'junction' // solder-dot / T-junction node (single pin; wires meet here)
   | 'port' // a chip's internal boundary marker, see hierarchy.ts fold()
   | 'chip' // an instance of a reusable ChipDef, see ChipLibrary.ts
   | 'ram' // behavioral read/write memory — see solver.ts's "RAM" section
@@ -158,6 +160,13 @@ export interface AnalyzerComponent {
   kind: 'analyzer';
   channelCount: number;
   armed: boolean;
+  /** Optional display names per channel (default `chN`). */
+  channelLabels?: string[];
+  /** Channel index that gates capture, or null for free-run. */
+  triggerChannel: number | null;
+  triggerEdge: 'rise' | 'fall' | 'either';
+  /** Last sampled levels (for edge detect); length === channelCount. */
+  lastSample?: (0 | 1 | 'Z')[];
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;
@@ -181,6 +190,28 @@ export interface BusProbeComponent {
   mirrorY: boolean;
   pinOrder: string[];
   /** b0 .. b{bitWidth-1} */
+  pins: Record<string, Pin>;
+}
+
+/**
+ * Writable multi-bit DIP bus switch — drives `b0` (LSB) … `b{n-1}` from
+ * `value` like a bank of Inputs. Click a paddle to toggle that bit; click the
+ * readout to step the whole value. Inspector edits hex/bin/dec.
+ */
+export interface BusSwitchComponent {
+  id: string;
+  kind: 'busswitch';
+  bitWidth: number;
+  /** Unsigned value; only the low `bitWidth` bits are driven. */
+  value: number;
+  radix: 'hex' | 'dec' | 'bin';
+  label?: string;
+  pos: Point;
+  rotation: 0 | 90 | 180 | 270;
+  mirrorX: boolean;
+  mirrorY: boolean;
+  pinOrder: string[];
+  /** b0 .. b{bitWidth-1} — output drivers */
   pins: Record<string, Pin>;
 }
 
@@ -209,6 +240,17 @@ export interface LabelComponent {
   id: string;
   kind: 'label';
   name: string; // nets sharing the same label name are electrically joined
+  pos: Point;
+  pins: { net: Pin };
+}
+
+/**
+ * Solder-dot / T-junction — a single pin where wires meet (TC-style node).
+ * Electrically just a shared pin; drawn as a small filled square on the net.
+ */
+export interface JunctionComponent {
+  id: string;
+  kind: 'junction';
   pos: Point;
   pins: { net: Pin };
 }
@@ -258,8 +300,20 @@ export interface ChipInstanceComponent {
   boxWidth?: number;
   /** Optional silkscreen text override (default ChipDef name). */
   marking?: string;
+  /**
+   * Slim lab saves: ChipDef.name when the stdcell body was omitted from
+   * chipDefs. resolveStdcellInstances() rebinds defId after seedStandardCells.
+   */
+  defName?: string;
   /** ChipDef.revision when this instance was placed or last dived into. */
   defRevision?: number;
+  /**
+   * Soft Lab behavioral state (aliased across flatten like RAM `.bytes`).
+   * Present when Soft Lab keeps this instance opaque instead of expanding it.
+   */
+  softState?: import('./softLab.js').SoftLabState;
+  /** Canonical Soft Lab model key set during flatten when Soft Lab is on. */
+  softModel?: string;
   pins: Record<string, Pin>; // keyed by port name
 }
 
@@ -334,9 +388,11 @@ export type Component =
   | ClockComponent
   | AnalyzerComponent
   | BusProbeComponent
+  | BusSwitchComponent
   | TtyComponent
   | ProbeComponent
   | LabelComponent
+  | JunctionComponent
   | PortComponent
   | ChipInstanceComponent
   | RamComponent
@@ -348,12 +404,17 @@ export type Component =
  * `a` to `b` — they exist only for Renderer.ts and don't change the
  * electrical net at all: Circuit.computeNets() and solver.ts never look
  * at them, only at `a`/`b`.
+ *
+ * `bundleId` (if present) is cosmetic only — ribbon / bus wiring tags a
+ * group so Renderer can draw a thicker trunk with fanouts.
  */
 export interface Wire {
   id: string;
   a: string; // pin id
   b: string; // pin id
   waypoints?: Point[];
+  /** Cosmetic bus-bundle tag from ribbon wiring; ignored electrically. */
+  bundleId?: string;
 }
 
 /** Result of net resolution: every pin id maps to the net id it belongs to. */

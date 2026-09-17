@@ -17,7 +17,7 @@ describe('bundled Spectrum games catalog', () => {
   it('has expected demo ids', () => {
     const ids = SPECTRUM_GAMES.map((g) => g.id).sort();
     expect(ids).toEqual(
-      ['egghead', 'egghead-space', 'glazx', 'homebrew', 'pzxl', 'rainbow'].sort(),
+      ['ay-beep', 'egghead', 'egghead-space', 'glazx', 'homebrew', 'pzxl', 'rainbow'].sort(),
     );
   });
 

@@ -15,6 +15,8 @@ import {
   relayoutDefInstances,
 } from '../sim/orientation.js';
 import { CHIP_INSTANCE_WIDTH } from '../sim/library.js';
+import { firePulse } from '../sim/labTick.js';
+import { hasSoftLabModel, isSoftExpandForced, isSoftLabEnabled, setSoftExpandForced } from '../sim/softLab.js';
 import type { ChipInstanceComponent, Component } from '../sim/types.js';
 import type { Editor } from './Editor.js';
 import { FloatingWindow } from './FloatingWindow.js';
@@ -37,6 +39,13 @@ export class ObjectInspector {
   onWatchPins: ((pinIds: string[]) => void) | null = null;
   /** Refresh pinSide/layout/revision from the shared ChipDef. */
   onUpdateFromLibrary: ((inst: ChipInstanceComponent) => void) | null = null;
+  /**
+   * After Soft Lab force-expand: settle the sim and read silicon `q*` pin levels.
+   * Returns bit array (0/1) aligned with softQ, or null if unavailable.
+   */
+  onSettleReadQ:
+    | ((inst: ChipInstanceComponent, softQ: Uint8Array) => Promise<Uint8Array | null>)
+    | null = null;
   /** Editor for align/distribute (multi-select). */
   editor: Editor | null = null;
 
@@ -69,6 +78,7 @@ export class ObjectInspector {
       if (list.length === 0) this.win.setVisible(false);
       return;
     }
+    if (key !== this.lastSyncedKey) this.softDiffNote = null;
     this.lastSyncedKey = key;
     this.targets = list;
     this.target = list.length === 1 ? list[0]! : null;
@@ -101,6 +111,46 @@ export class ObjectInspector {
     if (this.targets.length > 1) this.renderMulti();
     else this.render();
   }
+
+  /** Snapshot Soft q → force transistor expand → settle → bit diff UI. */
+  private async runSoftSiliconDiff(c: ChipInstanceComponent, defName: string): Promise<void> {
+    if (!c.softState?.q.length) {
+      this.softDiffNote = 'No Soft Lab q state to compare.';
+      this.sync(c, true);
+      return;
+    }
+    const softQ = Uint8Array.from(c.softState.q);
+    let softHex = 0;
+    for (let i = 0; i < softQ.length; i++) softHex |= (softQ[i]! & 1) << i;
+    const softHexStr = `0x${softHex.toString(16).toUpperCase()}`;
+
+    setSoftExpandForced(defName, true);
+    this.onChange?.();
+
+    const silicon = this.onSettleReadQ ? await this.onSettleReadQ(c, softQ) : null;
+    if (!silicon || silicon.length !== softQ.length) {
+      this.softDiffNote = `Soft ${softHexStr} (${softQ.length}b) · expanded, but could not read silicon q pins after settle.`;
+      this.sync(c, true);
+      return;
+    }
+
+    let silHex = 0;
+    const diffs: number[] = [];
+    for (let i = 0; i < softQ.length; i++) {
+      const s = softQ[i]! & 1;
+      const g = silicon[i]! & 1;
+      silHex |= g << i;
+      if (s !== g) diffs.push(i);
+    }
+    const silHexStr = `0x${silHex.toString(16).toUpperCase()}`;
+    this.softDiffNote =
+      diffs.length === 0
+        ? `Soft ${softHexStr} = silicon ${silHexStr} · match (${softQ.length}b)`
+        : `Soft ${softHexStr} ≠ silicon ${silHexStr} · diff bits [${diffs.join(', ')}]`;
+    this.sync(c, true);
+  }
+
+  private softDiffNote: string | null = null;
 
   private orientTargets(mode: 'cw' | 'ccw' | 'flipH' | 'flipV'): void {
     const comps = this.targets.filter(isOrientable);
@@ -279,6 +329,14 @@ export class ObjectInspector {
       );
     }
 
+    if (c.kind === 'junction') {
+      const note = document.createElement('div');
+      note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin:4px 0';
+      note.textContent =
+        'Wire node — Delete heals the through-wire; branch stubs are removed';
+      body.appendChild(note);
+    }
+
     if (c.kind === 'port') {
       addRow(
         'name',
@@ -409,6 +467,57 @@ export class ObjectInspector {
           3599,
         ),
       );
+      const clkRow = document.createElement('div');
+      clkRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:4px';
+      clkRow.append(
+        this.mkBtn(c.running ? 'Stop' : 'Run', 'Start / stop continuous pulse', () => {
+          this.noteEdit();
+          if (c.mode === 'continuous') {
+            c.running = !c.running;
+            if (!c.running) {
+              c.value = 0;
+              c.phase = 0;
+            }
+          } else {
+            firePulse(c);
+          }
+          this.changed();
+          this.sync(c, true);
+        }),
+        this.mkBtn('Fire', 'Emit one pulse (oneshot) or kick continuous', () => {
+          this.noteEdit();
+          firePulse(c);
+          this.changed();
+        }),
+      );
+      body.appendChild(clkRow);
+    }
+
+    if (c.kind === 'sevenseg') {
+      addRow(
+        'color',
+        textInput(c.color, (v) => {
+          if (!v.trim()) return;
+          this.noteEdit();
+          c.color = v.trim();
+          this.changed();
+        }),
+      );
+      addRow(
+        'decimal pt',
+        select(
+          c.hasDp ? '1' : '0',
+          [
+            { value: '0', label: 'off' },
+            { value: '1', label: 'on' },
+          ],
+          (v) => {
+            this.editor?.setSevenSegHasDp(c.id, v === '1');
+            this.changed();
+            this.sync(c, true);
+          },
+        ),
+      );
     }
 
     if (c.kind === 'led') {
@@ -432,19 +541,7 @@ export class ObjectInspector {
       );
     }
 
-    if (c.kind === 'sevenseg') {
-      addRow(
-        'color',
-        textInput(c.color, (v) => {
-          if (!v.trim()) return;
-          this.noteEdit();
-          c.color = v.trim();
-          this.changed();
-        }),
-      );
-    }
-
-    if (c.kind === 'probe' || c.kind === 'busprobe') {
+    if (c.kind === 'probe' || c.kind === 'busprobe' || c.kind === 'busswitch') {
       addRow(
         'label',
         textInput(c.label ?? '', (v) => {
@@ -510,6 +607,124 @@ export class ObjectInspector {
           return span;
         })(),
       );
+      // Soft Lab live state (behavioral model + q bits).
+      {
+        const softOn = isSoftLabEnabled() && hasSoftLabModel(defName);
+        if (softOn || c.softState) {
+          addRow(
+            'soft',
+            (() => {
+              const span = document.createElement('span');
+              span.style.fontFamily = 'ui-monospace, monospace';
+              if (c.softState) {
+                const bits = [...c.softState.q].join('');
+                span.style.color = '#e6a23c';
+                span.textContent = `${c.softState.model} · q=${bits || '—'} · softModel`;
+              } else {
+                span.style.color = '#9aa1b3';
+                span.textContent = softOn ? 'soft model (no state yet)' : 'soft state';
+              }
+              return span;
+            })(),
+          );
+          const softNote = document.createElement('div');
+          softNote.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin:2px 0 6px';
+          softNote.textContent = 'Soft Lab — behavioral; toggle off for silicon';
+          body.appendChild(softNote);
+
+          if (softOn && c.softState && hasSoftLabModel(defName) && !isSoftExpandForced(defName)) {
+            const diverge = document.createElement('div');
+            diverge.style.cssText =
+              'font:11px ui-monospace,monospace;color:#1c1208;background:#e6a23c;border-radius:4px;padding:6px 8px;margin:0 0 8px';
+            diverge.innerHTML =
+              '<strong>Soft ≠ silicon view</strong> — q hex edits Soft Lab state only. Expand to compare gate flatten.';
+            body.appendChild(diverge);
+            body.appendChild(
+              this.mkBtn(
+                'Expand to compare silicon',
+                'Force transistor expand for this ChipDef (Soft Lab stays on for other defs)',
+                () => {
+                  setSoftExpandForced(defName, true);
+                  this.changed();
+                  this.sync(c, true);
+                },
+              ),
+            );
+            const diffBtn = document.createElement('button');
+            diffBtn.type = 'button';
+            diffBtn.textContent = 'Diff soft vs silicon';
+            diffBtn.title = 'Snapshot Soft q, force expand, settle, compare bit-for-bit';
+            diffBtn.style.cssText =
+              'background:#20242f;border:1px solid #333a48;border-radius:6px;color:#e7e9ef;padding:5px 10px;font:12px ui-monospace,monospace;cursor:pointer;margin:0 0 6px';
+            diffBtn.addEventListener('click', () => {
+              this.noteEdit();
+              void this.runSoftSiliconDiff(c, defName);
+            });
+            body.appendChild(diffBtn);
+          }
+
+          if (this.softDiffNote) {
+            const note = document.createElement('div');
+            note.style.cssText =
+              'font:11px ui-monospace,monospace;color:#e7e9ef;background:#1c2230;border:1px solid #3a4154;border-radius:4px;padding:6px 8px;margin:0 0 8px';
+            note.textContent = this.softDiffNote;
+            body.appendChild(note);
+          }
+
+          // Editable hex for sequential softState.q (registers/counters).
+          if (c.softState && c.softState.q.length > 0 && c.softState.q.length <= 16) {
+            addRow(
+              'q hex',
+              (() => {
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                let v = 0;
+                for (let i = 0; i < c.softState!.q.length; i++) v |= (c.softState!.q[i]! & 1) << i;
+                const digits = Math.max(1, Math.ceil(c.softState!.q.length / 4));
+                inp.value = v.toString(16).toUpperCase().padStart(digits, '0');
+                inp.style.cssText =
+                  'width:5em;background:#12141a;color:#e7e9ef;border:1px solid #3a4154;border-radius:4px;padding:2px 4px;font-family:ui-monospace,monospace';
+                inp.addEventListener('change', () => {
+                  const parsed = parseInt(inp.value.replace(/^0x/i, ''), 16);
+                  if (!Number.isFinite(parsed)) return;
+                  this.noteEdit();
+                  const q = c.softState!.q;
+                  for (let i = 0; i < q.length; i++) q[i] = (parsed >> i) & 1;
+                  this.changed();
+                  this.sync(c, true);
+                });
+                return inp;
+              })(),
+            );
+          }
+
+          body.appendChild(
+            this.mkBtn('Reset soft state', 'Clear Soft Lab sequential state on this chip', () => {
+              this.noteEdit();
+              delete c.softState;
+              this.changed();
+              this.sync(c, true);
+            }),
+          );
+
+          if (softOn && hasSoftLabModel(defName)) {
+            const forced = isSoftExpandForced(defName);
+            body.appendChild(
+              this.mkBtn(
+                forced ? 'Use Soft Lab again' : 'Force transistor expand',
+                forced
+                  ? 'Return this def to Soft Lab opaque eval'
+                  : 'Expand this ChipDef to transistors this session (Soft Lab stays on)',
+                () => {
+                  setSoftExpandForced(defName, !forced);
+                  this.changed();
+                  this.sync(c, true);
+                },
+              ),
+            );
+          }
+        }
+      }
       addRow(
         'marking',
         textInput(c.marking ?? '', (v) => {
@@ -587,14 +802,36 @@ export class ObjectInspector {
         })(),
       );
       this.appendPinOrderEditor(body, c);
+      if (!c.channelLabels) c.channelLabels = [];
+      while (c.channelLabels.length < c.channelCount) c.channelLabels.push(`ch${c.channelLabels.length}`);
+      for (let i = 0; i < c.channelCount; i++) {
+        const ch = i;
+        addRow(
+          `label ${ch}`,
+          textInput(c.channelLabels[ch] ?? `ch${ch}`, (v) => {
+            this.noteEdit();
+            if (!c.channelLabels) c.channelLabels = [];
+            c.channelLabels[ch] = v.trim() || `ch${ch}`;
+            this.changed();
+          }),
+        );
+      }
       body.appendChild(
         this.mkBtn('Add channel', 'Grow the analyzer by one sense pin', () => {
           this.editor?.addAnalyzerChannel(c.id);
+          this.sync(c, true);
+        }),
+      );
+      body.appendChild(
+        this.mkBtn('Remove channel', 'Drop the highest channel (min 1)', () => {
+          this.editor?.removeAnalyzerChannel(c.id);
+          this.sync(c, true);
         }),
       );
       body.appendChild(
         this.mkBtn(c.armed ? 'Disarm' : 'Arm', 'Toggle analyzer sampling', () => {
           c.armed = !c.armed;
+          this.sync(c, true);
         }),
       );
       const note = document.createElement('div');
@@ -644,6 +881,75 @@ export class ObjectInspector {
       const note = document.createElement('div');
       note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
       note.textContent = 'b0 = LSB · floating/contended → ?';
+      body.appendChild(note);
+    }
+
+    if (c.kind === 'busswitch') {
+      addRow(
+        'width',
+        (() => {
+          const inp = document.createElement('input');
+          inp.type = 'number';
+          inp.min = '1';
+          inp.max = '32';
+          inp.value = String(c.bitWidth);
+          inp.style.cssText = 'width:4em;background:#12141a;color:#e7e9ef;border:1px solid #3a4154;border-radius:4px;padding:2px 4px';
+          inp.addEventListener('change', () => {
+            const n = parseInt(inp.value, 10);
+            if (!Number.isFinite(n)) return;
+            this.editor?.setBusSwitchWidth(c.id, n);
+            this.refresh();
+          });
+          return inp;
+        })(),
+      );
+      addRow(
+        'radix',
+        (() => {
+          const sel = document.createElement('select');
+          sel.style.cssText = 'background:#12141a;color:#e7e9ef;border:1px solid #3a4154;border-radius:4px;padding:2px 4px';
+          for (const r of ['hex', 'dec', 'bin'] as const) {
+            const opt = document.createElement('option');
+            opt.value = r;
+            opt.textContent = r;
+            if (c.radix === r) opt.selected = true;
+            sel.appendChild(opt);
+          }
+          sel.addEventListener('change', () => {
+            this.editor?.setBusSwitchRadix(c.id, sel.value as 'hex' | 'dec' | 'bin');
+            this.refresh();
+          });
+          return sel;
+        })(),
+      );
+      addRow(
+        'value',
+        (() => {
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          const digits = Math.max(1, Math.ceil(c.bitWidth / 4));
+          inp.value =
+            c.radix === 'hex'
+              ? c.value.toString(16).toUpperCase().padStart(digits, '0')
+              : c.radix === 'bin'
+                ? c.value.toString(2).padStart(c.bitWidth, '0')
+                : String(c.value);
+          inp.style.cssText =
+            'width:6em;background:#12141a;color:#e7e9ef;border:1px solid #3a4154;border-radius:4px;padding:2px 4px;font-family:ui-monospace,monospace';
+          inp.addEventListener('change', () => {
+            const raw = inp.value.trim().replace(/^0x/i, '').replace(/^0b/i, '');
+            const base = c.radix === 'bin' ? 2 : c.radix === 'dec' ? 10 : 16;
+            const parsed = parseInt(raw, base);
+            if (!Number.isFinite(parsed)) return;
+            this.editor?.setBusSwitchValue(c.id, parsed);
+            this.refresh();
+          });
+          return inp;
+        })(),
+      );
+      const note = document.createElement('div');
+      note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
+      note.textContent = 'DIP: paddle = toggle bit · readout = +1 · b0 = LSB';
       body.appendChild(note);
     }
   }

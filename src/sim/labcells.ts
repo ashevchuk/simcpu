@@ -11,13 +11,14 @@
  */
 
 import type { ChipDef, ChipLibrary } from './ChipLibrary.js';
-import { Circuit } from './Circuit.js';
+import { Circuit, nextId } from './Circuit.js';
 import { foldExposing } from './hierarchy.js';
 import {
   buildDecoder,
   buildSrLatch,
   chipInstanceHeight,
   makeChipInstance,
+  makePort,
   makeSource,
   railPin,
   tiePowerRail,
@@ -134,6 +135,7 @@ export const LABCELL_NAMES = new Set([
   'SHIFT4_PISO',
   'SHIFT8_PISO',
   'COUNTER4',
+  'COUNTER8',
   'DECODER_2_4',
   'DECODER_3_8',
   'ENCODER_8_3',
@@ -150,6 +152,11 @@ export const LABCELL_NAMES = new Set([
   'PISO8',
   'CLK_DIV16',
   'CLK_DIV2',
+  'ADDER4',
+  'ADDER8',
+  'ALU4',
+  'ALU8',
+  'SOFT_RAM16',
   // Pack C — 74xx aliases
   '7400',
   '7404',
@@ -361,11 +368,14 @@ function seedCounter4(library: ChipLibrary): void {
   foldIfAbsent(library, 'COUNTER4', () => {
     // Sync binary up-counter from T_FF: t0=1, t_i = AND of q0..q{i-1}.
     // Shared active-high `clr` loads 0 on the next clock (breaks Z power-up).
+    // Active-high `ce` (clock enable) gates toggles; tie high to count every edge.
+    // Active-high `load` parallel-loads d0..d3 on rising clk (priority: clr > load > ce).
+    // `co` = (q==15) & ce & !clr (combinatorial carry / terminal count).
     const circuit = scratch();
     const row = chipInstanceHeight(5) + 40;
     const ffs = [];
     for (let i = 0; i < 4; i++) {
-      ffs.push(place(circuit, library, 'T_FF', { x: 500, y: i * row }));
+      ffs.push(place(circuit, library, 'T_FF', { x: 900, y: i * row }));
     }
     const q = ffs.map((f) => f.pins.q!);
     let clk = ffs[0]!.pins.clk!;
@@ -375,32 +385,87 @@ function seedCounter4(library: ChipLibrary): void {
       wire(circuit, clr, ffs[i]!.pins.clr!);
     }
 
-    // t0 = 1  (always toggle)
+    // Shared CE — AND into every count-toggle enable.
+    const ceGate0 = place(circuit, library, 'AND', { x: 480, y: 0 });
+    const ce = ceGate0.pins.b!;
+
+    // count_t0 = 1 & ce
     const one = notPin(circuit, library, railPin(circuit, 'GND', { x: 40, y: 0 }), { x: 160, y: 0 });
-    wire(circuit, one, ffs[0]!.pins.t!);
+    wire(circuit, one, ceGate0.pins.a!);
+    const countT: Pin[] = [ceGate0.pins.out!];
 
-    // t1 = q0
-    wire(circuit, q[0]!, ffs[1]!.pins.t!);
+    // count_t1 = q0 & ce
+    countT.push(and2(circuit, library, q[0]!, ce, { x: 480, y: row }));
 
-    // t2 = q0 & q1
-    const t2 = and2(circuit, library, q[0]!, q[1]!, { x: 280, y: 2 * row });
-    wire(circuit, t2, ffs[2]!.pins.t!);
+    // count_t2 = q0 & q1 & ce
+    const t2pre = and2(circuit, library, q[0]!, q[1]!, { x: 280, y: 2 * row });
+    countT.push(and2(circuit, library, t2pre, ce, { x: 480, y: 2 * row }));
 
-    // t3 = q0 & q1 & q2
-    const t3 = and2(circuit, library, t2, q[2]!, { x: 280, y: 3 * row });
-    wire(circuit, t3, ffs[3]!.pins.t!);
+    // count_t3 = q0 & q1 & q2 & ce
+    const t3pre = and2(circuit, library, t2pre, q[2]!, { x: 280, y: 3 * row });
+    countT.push(and2(circuit, library, t3pre, ce, { x: 480, y: 3 * row }));
 
-    return {
-      circuit,
-      ports: [
-        { pin: clk, isOutput: false, portName: 'clk' },
-        { pin: clr, isOutput: false, portName: 'clr' },
-        { pin: q[0]!, isOutput: true, portName: 'q0' },
-        { pin: q[1]!, isOutput: true, portName: 'q1' },
-        { pin: q[2]!, isOutput: true, portName: 'q2' },
-        { pin: q[3]!, isOutput: true, portName: 'q3' },
-      ],
-    };
+    // Parallel load: when load=1, t_i = q_i XOR d_i so next edge sets q←d.
+    const dPins: Pin[] = [];
+    let load!: Pin;
+    for (let i = 0; i < 4; i++) {
+      const y = i * row;
+      const xor = place(circuit, library, 'XOR', { x: 200, y });
+      wire(circuit, q[i]!, xor.pins.a!);
+      dPins.push(xor.pins.b!);
+      const mux = place(circuit, library, 'MUX2', { x: 680, y });
+      wire(circuit, countT[i]!, mux.pins.in0!);
+      wire(circuit, xor.pins.out!, mux.pins.in1!);
+      wire(circuit, mux.pins.out!, ffs[i]!.pins.t!);
+      if (i === 0) load = mux.pins.sel!;
+      else wire(circuit, load, mux.pins.sel!);
+    }
+
+    // co = q0 & q1 & q2 & q3 & ce & ~clr
+    const qAll = andReduce(circuit, library, q, { x: 1100, y: 0 });
+    const coCe = and2(circuit, library, qAll, ce, { x: 1280, y: 0 });
+    const notClr = notPin(circuit, library, clr, { x: 1100, y: 80 });
+    const co = and2(circuit, library, coCe, notClr, { x: 1280, y: 80 });
+
+    const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [
+      { pin: clk, isOutput: false, portName: 'clk' },
+      { pin: clr, isOutput: false, portName: 'clr' },
+      { pin: ce, isOutput: false, portName: 'ce' },
+      { pin: load, isOutput: false, portName: 'load' },
+    ];
+    for (let i = 0; i < 4; i++) ports.push({ pin: dPins[i]!, isOutput: false, portName: `d${i}` });
+    for (let i = 0; i < 4; i++) ports.push({ pin: q[i]!, isOutput: true, portName: `q${i}` });
+    ports.push({ pin: co, isOutput: true, portName: 'co' });
+    return { circuit, ports };
+  });
+}
+
+/** Two COUNTER4 cascaded: low.co → high.ce; shared clk/clr/load. */
+function seedCounter8(library: ChipLibrary): void {
+  foldIfAbsent(library, 'COUNTER8', () => {
+    const circuit = scratch();
+    const low = place(circuit, library, 'COUNTER4', { x: 200, y: 0 });
+    const high = place(circuit, library, 'COUNTER4', { x: 520, y: 0 });
+    wire(circuit, low.pins.clk!, high.pins.clk!);
+    wire(circuit, low.pins.clr!, high.pins.clr!);
+    wire(circuit, low.pins.load!, high.pins.load!);
+    wire(circuit, low.pins.co!, high.pins.ce!);
+    const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [
+      { pin: low.pins.clk!, isOutput: false, portName: 'clk' },
+      { pin: low.pins.clr!, isOutput: false, portName: 'clr' },
+      { pin: low.pins.ce!, isOutput: false, portName: 'ce' },
+      { pin: low.pins.load!, isOutput: false, portName: 'load' },
+    ];
+    for (let i = 0; i < 4; i++) ports.push({ pin: low.pins[`d${i}`]!, isOutput: false, portName: `d${i}` });
+    for (let i = 0; i < 4; i++) {
+      ports.push({ pin: high.pins[`d${i}`]!, isOutput: false, portName: `d${i + 4}` });
+    }
+    for (let i = 0; i < 4; i++) ports.push({ pin: low.pins[`q${i}`]!, isOutput: true, portName: `q${i}` });
+    for (let i = 0; i < 4; i++) {
+      ports.push({ pin: high.pins[`q${i}`]!, isOutput: true, portName: `q${i + 4}` });
+    }
+    ports.push({ pin: high.pins.co!, isOutput: true, portName: 'co' });
+    return { circuit, ports };
   });
 }
 
@@ -408,10 +473,21 @@ function seedDecoder(library: ChipLibrary, bits: number, name: string): void {
   foldIfAbsent(library, name, () => {
     const circuit = scratch();
     const dec = buildDecoder(circuit, bits, { x: 0, y: 0 });
+    // Active-high enable: when en=0 all y*=0.
+    let en!: Pin;
+    const gated: Pin[] = [];
+    for (let i = 0; i < dec.lines.length; i++) {
+      const g = place(circuit, library, 'AND', { x: 600, y: i * 80 });
+      wire(circuit, dec.lines[i]!, g.pins.a!);
+      gated.push(g.pins.out!);
+      if (i === 0) en = g.pins.b!;
+      else wire(circuit, en, g.pins.b!);
+    }
     const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [];
     for (let i = 0; i < bits; i++) ports.push({ pin: dec.addr[i]!, isOutput: false, portName: `a${i}` });
-    for (let i = 0; i < dec.lines.length; i++) {
-      ports.push({ pin: dec.lines[i]!, isOutput: true, portName: `y${i}` });
+    ports.push({ pin: en, isOutput: false, portName: 'en' });
+    for (let i = 0; i < gated.length; i++) {
+      ports.push({ pin: gated[i]!, isOutput: true, portName: `y${i}` });
     }
     return { circuit, ports };
   });
@@ -463,10 +539,39 @@ function seedComp(library: ChipLibrary, bits: number, name: string): void {
       eqBits.push(notPin(circuit, library, xor.pins.out!, { x: 400, y }));
     }
     const eq = andReduce(circuit, library, eqBits, { x: 600, y: 0 });
+
+    // Magnitude: cascade from MSB — gt = a>b, lt = b>a.
+    let gt!: Pin;
+    let lt!: Pin;
+    let eqAbove: Pin | null = null;
+    for (let i = bits - 1; i >= 0; i--) {
+      const y = i * 100;
+      const aGt = and2(circuit, library, a[i]!, notPin(circuit, library, b[i]!, { x: 700, y }), {
+        x: 820,
+        y,
+      });
+      const bGt = and2(circuit, library, b[i]!, notPin(circuit, library, a[i]!, { x: 700, y: y + 40 }), {
+        x: 820,
+        y: y + 40,
+      });
+      const gtTerm = eqAbove ? and2(circuit, library, eqAbove, aGt, { x: 980, y }) : aGt;
+      const ltTerm = eqAbove ? and2(circuit, library, eqAbove, bGt, { x: 980, y: y + 40 }) : bGt;
+      if (i === bits - 1) {
+        gt = gtTerm;
+        lt = ltTerm;
+      } else {
+        gt = or2(circuit, library, gt, gtTerm, { x: 1140, y });
+        lt = or2(circuit, library, lt, ltTerm, { x: 1140, y: y + 40 });
+      }
+      eqAbove = eqAbove ? and2(circuit, library, eqAbove, eqBits[i]!, { x: 600, y }) : eqBits[i]!;
+    }
+
     const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [];
     for (let i = 0; i < bits; i++) ports.push({ pin: a[i]!, isOutput: false, portName: `a${i}` });
     for (let i = 0; i < bits; i++) ports.push({ pin: b[i]!, isOutput: false, portName: `b${i}` });
     ports.push({ pin: eq, isOutput: true, portName: 'eq' });
+    ports.push({ pin: gt, isOutput: true, portName: 'gt' });
+    ports.push({ pin: lt, isOutput: true, portName: 'lt' });
     return { circuit, ports };
   });
 }
@@ -542,22 +647,20 @@ function seedBuf8(library: ChipLibrary): void {
   foldIfAbsent(library, 'BUF8', () => {
     const circuit = scratch();
     const row = chipInstanceHeight(3) + 20;
-    const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [];
+    const inPorts: { pin: Pin; isOutput: boolean; portName: string }[] = [];
+    const outPorts: { pin: Pin; isOutput: boolean; portName: string }[] = [];
+    let oe!: Pin;
     for (let i = 0; i < 8; i++) {
       const buf = place(circuit, library, 'TRI_BUF', { x: 200, y: i * row });
-      tiePowerRail(circuit, 'VCC', buf.pins.en!);
-      ports.push({ pin: buf.pins.a!, isOutput: false, portName: `in${i}` });
-      ports.push({ pin: buf.pins.out!, isOutput: true, portName: `out${i}` });
+      inPorts.push({ pin: buf.pins.a!, isOutput: false, portName: `in${i}` });
+      outPorts.push({ pin: buf.pins.out!, isOutput: true, portName: `out${i}` });
+      if (i === 0) oe = buf.pins.en!;
+      else wire(circuit, oe, buf.pins.en!);
     }
-    // Interleave in*/out* by index for readability: rebuild ordered list
-    const ordered: typeof ports = [];
-    for (let i = 0; i < 8; i++) {
-      ordered.push(ports[i * 2]!);
-    }
-    for (let i = 0; i < 8; i++) {
-      ordered.push(ports[i * 2 + 1]!);
-    }
-    return { circuit, ports: ordered };
+    return {
+      circuit,
+      ports: [{ pin: oe, isOutput: false, portName: 'oe' }, ...inPorts, ...outPorts],
+    };
   });
 }
 
@@ -640,6 +743,7 @@ function seedDemux18(library: ChipLibrary): void {
       const inst = makeChipInstance(circuit, decDef, { x: 80, y: 0 });
       sel = [inst.pins.a0!, inst.pins.a1!, inst.pins.a2!];
       lines = Array.from({ length: 8 }, (_, i) => inst.pins[`y${i}`]!);
+      if (inst.pins.en) tiePowerRail(circuit, 'VCC', inst.pins.en);
     } else {
       const dec = buildDecoder(circuit, 3, { x: 0, y: 0 });
       sel = dec.addr;
@@ -692,6 +796,12 @@ function seedClkDiv16(library: ChipLibrary): void {
   foldIfAbsent(library, 'CLK_DIV16', () => {
     const circuit = scratch();
     const c = place(circuit, library, 'COUNTER4', { x: 200, y: 0 });
+    if (c.pins.ce) tiePowerRail(circuit, 'VCC', c.pins.ce);
+    if (c.pins.load) tiePowerRail(circuit, 'GND', c.pins.load);
+    for (let i = 0; i < 4; i++) {
+      const d = c.pins[`d${i}`];
+      if (d) tiePowerRail(circuit, 'GND', d);
+    }
     return {
       circuit,
       ports: [
@@ -700,6 +810,198 @@ function seedClkDiv16(library: ChipLibrary): void {
         { pin: c.pins.q3!, isOutput: true, portName: 'out' },
       ],
     };
+  });
+}
+
+function seedAdderN(library: ChipLibrary, bits: number, name: string): void {
+  foldIfAbsent(library, name, () => {
+    const circuit = scratch();
+    const row = chipInstanceHeight(5) + 30;
+    const fas = [];
+    for (let i = 0; i < bits; i++) {
+      fas.push(place(circuit, library, 'FULL_ADDER', { x: 200, y: i * row }));
+    }
+    for (let i = 0; i < bits - 1; i++) {
+      wire(circuit, fas[i]!.pins.cout!, fas[i + 1]!.pins.cin!);
+    }
+    const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [
+      { pin: fas[0]!.pins.cin!, isOutput: false, portName: 'cin' },
+    ];
+    for (let i = 0; i < bits; i++) ports.push({ pin: fas[i]!.pins.a!, isOutput: false, portName: `a${i}` });
+    for (let i = 0; i < bits; i++) ports.push({ pin: fas[i]!.pins.b!, isOutput: false, portName: `b${i}` });
+    for (let i = 0; i < bits; i++) ports.push({ pin: fas[i]!.pins.sum!, isOutput: true, portName: `sum${i}` });
+    ports.push({ pin: fas[bits - 1]!.pins.cout!, isOutput: true, portName: 'cout' });
+    return { circuit, ports };
+  });
+}
+
+/**
+ * 4-bit ALU: op 00=add, 01=sub, 10=and, 11=or → s0..s3, cout (0 for logic).
+ */
+function seedAlu4(library: ChipLibrary): void {
+  foldIfAbsent(library, 'ALU4', () => {
+    const circuit = scratch();
+    const row = chipInstanceHeight(5) + 40;
+    const adder = place(circuit, library, 'ADDER4', { x: 700, y: 0 });
+
+    // op0/op1 decode: sub = !op1 & op0
+    const notOp1 = place(circuit, library, 'NOT', { x: 40, y: 200 });
+    const op1 = notOp1.pins.in!;
+    const subDec = place(circuit, library, 'AND', { x: 200, y: 200 });
+    wire(circuit, notOp1.pins.out!, subDec.pins.a!);
+    const op0 = subDec.pins.b!;
+    const isSub = subDec.pins.out!;
+
+    // cin = isSub; b_eff[i] = isSub ? ~b[i] : b[i]
+    wire(circuit, isSub, adder.pins.cin!);
+    const aPins: Pin[] = [];
+    const bPins: Pin[] = [];
+    for (let i = 0; i < 4; i++) {
+      const y = i * row;
+      const notB = place(circuit, library, 'NOT', { x: 200, y });
+      bPins.push(notB.pins.in!);
+      const muxB = place(circuit, library, 'MUX2', { x: 400, y });
+      wire(circuit, notB.pins.in!, muxB.pins.in0!); // add: use b
+      wire(circuit, notB.pins.out!, muxB.pins.in1!); // sub: use ~b
+      wire(circuit, isSub, muxB.pins.sel!);
+      wire(circuit, muxB.pins.out!, adder.pins[`b${i}`]!);
+      aPins.push(adder.pins[`a${i}`]!);
+    }
+
+    // Bitwise and/or + MUX4 per bit on op
+    const sPins: Pin[] = [];
+    for (let i = 0; i < 4; i++) {
+      const y = i * row;
+      const andG = place(circuit, library, 'AND', { x: 1000, y });
+      const orG = place(circuit, library, 'OR', { x: 1000, y: y + 40 });
+      wire(circuit, aPins[i]!, andG.pins.a!);
+      wire(circuit, bPins[i]!, andG.pins.b!);
+      wire(circuit, aPins[i]!, orG.pins.a!);
+      wire(circuit, bPins[i]!, orG.pins.b!);
+      const mux = place(circuit, library, 'MUX4', { x: 1200, y });
+      wire(circuit, adder.pins[`sum${i}`]!, mux.pins.in0!); // add
+      wire(circuit, adder.pins[`sum${i}`]!, mux.pins.in1!); // sub (same adder path)
+      wire(circuit, andG.pins.out!, mux.pins.in2!);
+      wire(circuit, orG.pins.out!, mux.pins.in3!);
+      wire(circuit, op0, mux.pins.sel0!);
+      wire(circuit, op1, mux.pins.sel1!);
+      sPins.push(mux.pins.out!);
+    }
+
+    // cout = 0 when op1 (logic); else adder.cout
+    const coutMux = place(circuit, library, 'MUX2', { x: 1200, y: 4 * row });
+    wire(circuit, adder.pins.cout!, coutMux.pins.in0!);
+    wire(circuit, railPin(circuit, 'GND', { x: 0, y: 0 }), coutMux.pins.in1!);
+    wire(circuit, op1, coutMux.pins.sel!);
+
+    const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [];
+    for (let i = 0; i < 4; i++) ports.push({ pin: aPins[i]!, isOutput: false, portName: `a${i}` });
+    for (let i = 0; i < 4; i++) ports.push({ pin: bPins[i]!, isOutput: false, portName: `b${i}` });
+    ports.push({ pin: op0, isOutput: false, portName: 'op0' });
+    ports.push({ pin: op1, isOutput: false, portName: 'op1' });
+    for (let i = 0; i < 4; i++) ports.push({ pin: sPins[i]!, isOutput: true, portName: `s${i}` });
+    ports.push({ pin: coutMux.pins.out!, isOutput: true, portName: 'cout' });
+    return { circuit, ports };
+  });
+}
+
+/**
+ * 8-bit ALU (same op encoding as ALU4) built on ADDER8.
+ */
+function seedAlu8(library: ChipLibrary): void {
+  foldIfAbsent(library, 'ALU8', () => {
+    const circuit = scratch();
+    const row = chipInstanceHeight(5) + 40;
+    const adder = place(circuit, library, 'ADDER8', { x: 700, y: 0 });
+
+    const notOp1 = place(circuit, library, 'NOT', { x: 40, y: 400 });
+    const op1 = notOp1.pins.in!;
+    const subDec = place(circuit, library, 'AND', { x: 200, y: 400 });
+    wire(circuit, notOp1.pins.out!, subDec.pins.a!);
+    const op0 = subDec.pins.b!;
+    const isSub = subDec.pins.out!;
+
+    wire(circuit, isSub, adder.pins.cin!);
+    const aPins: Pin[] = [];
+    const bPins: Pin[] = [];
+    for (let i = 0; i < 8; i++) {
+      const y = i * row;
+      const notB = place(circuit, library, 'NOT', { x: 200, y });
+      bPins.push(notB.pins.in!);
+      const muxB = place(circuit, library, 'MUX2', { x: 400, y });
+      wire(circuit, notB.pins.in!, muxB.pins.in0!);
+      wire(circuit, notB.pins.out!, muxB.pins.in1!);
+      wire(circuit, isSub, muxB.pins.sel!);
+      wire(circuit, muxB.pins.out!, adder.pins[`b${i}`]!);
+      aPins.push(adder.pins[`a${i}`]!);
+    }
+
+    const sPins: Pin[] = [];
+    for (let i = 0; i < 8; i++) {
+      const y = i * row;
+      const andG = place(circuit, library, 'AND', { x: 1000, y });
+      const orG = place(circuit, library, 'OR', { x: 1000, y: y + 40 });
+      wire(circuit, aPins[i]!, andG.pins.a!);
+      wire(circuit, bPins[i]!, andG.pins.b!);
+      wire(circuit, aPins[i]!, orG.pins.a!);
+      wire(circuit, bPins[i]!, orG.pins.b!);
+      const mux = place(circuit, library, 'MUX4', { x: 1200, y });
+      wire(circuit, adder.pins[`sum${i}`]!, mux.pins.in0!);
+      wire(circuit, adder.pins[`sum${i}`]!, mux.pins.in1!);
+      wire(circuit, andG.pins.out!, mux.pins.in2!);
+      wire(circuit, orG.pins.out!, mux.pins.in3!);
+      wire(circuit, op0, mux.pins.sel0!);
+      wire(circuit, op1, mux.pins.sel1!);
+      sPins.push(mux.pins.out!);
+    }
+
+    const coutMux = place(circuit, library, 'MUX2', { x: 1200, y: 8 * row });
+    wire(circuit, adder.pins.cout!, coutMux.pins.in0!);
+    wire(circuit, railPin(circuit, 'GND', { x: 0, y: 0 }), coutMux.pins.in1!);
+    wire(circuit, op1, coutMux.pins.sel!);
+
+    const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [];
+    for (let i = 0; i < 8; i++) ports.push({ pin: aPins[i]!, isOutput: false, portName: `a${i}` });
+    for (let i = 0; i < 8; i++) ports.push({ pin: bPins[i]!, isOutput: false, portName: `b${i}` });
+    ports.push({ pin: op0, isOutput: false, portName: 'op0' });
+    ports.push({ pin: op1, isOutput: false, portName: 'op1' });
+    for (let i = 0; i < 8; i++) ports.push({ pin: sPins[i]!, isOutput: true, portName: `s${i}` });
+    ports.push({ pin: coutMux.pins.out!, isOutput: true, portName: 'cout' });
+    return { circuit, ports };
+  });
+}
+
+/**
+ * Soft-only 16×8 RAM — port shell with Soft Lab behavioral model.
+ * (Cannot fold a RamComponent; Soft Lab off expands to empty ports.)
+ */
+function seedSoftRam16(library: ChipLibrary): void {
+  if (library.findByName('SOFT_RAM16')) return;
+  const circuit = new Circuit();
+  const ports: string[] = [];
+  let y = 0;
+  for (let i = 0; i < 4; i++) {
+    const name = `addr${i}`;
+    ports.push(name);
+    makePort(circuit, name, { x: -80, y: y }, 'in');
+    y += 20;
+  }
+  for (let i = 0; i < 8; i++) {
+    const name = `data${i}`;
+    ports.push(name);
+    makePort(circuit, name, { x: -80, y: y }, 'inout');
+    y += 20;
+  }
+  for (const name of ['we', 'oe', 'clk'] as const) {
+    ports.push(name);
+    makePort(circuit, name, { x: -80, y: y }, 'in');
+    y += 20;
+  }
+  library.register({
+    id: nextId('chipdef'),
+    name: 'SOFT_RAM16',
+    ports,
+    circuit,
   });
 }
 
@@ -723,6 +1025,7 @@ export function seedLabCells(library: ChipLibrary): void {
   seedShiftPiso(library, 4, 'SHIFT4_PISO');
   seedShiftPiso(library, 8, 'SHIFT8_PISO');
   seedCounter4(library);
+  seedCounter8(library);
   seedDecoder(library, 2, 'DECODER_2_4');
   seedDecoder(library, 3, 'DECODER_3_8');
   seedEncoder83(library);
@@ -737,6 +1040,11 @@ export function seedLabCells(library: ChipLibrary): void {
   seedDemux18(library);
   seedClkDiv2(library);
   seedClkDiv16(library);
+  seedAdderN(library, 4, 'ADDER4');
+  seedAdderN(library, 8, 'ADDER8');
+  seedAlu4(library);
+  seedAlu8(library);
+  seedSoftRam16(library);
 
   // Pack B serdes aliases
   aliasChip(library, 'SIPO8', 'SHIFT8_SIPO');

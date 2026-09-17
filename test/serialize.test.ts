@@ -162,3 +162,31 @@ describe('single chip def export/import', () => {
     for (const id of imported.circuit.components.keys()) expect(originalIds.has(id)).toBe(false);
   });
 });
+
+describe('deserializeProject isolates bundled example JSON', () => {
+  it('does not mutate EXAMPLE_PROJECTS when the live circuit is edited', async () => {
+    const { EXAMPLE_PROJECTS } = await import('../src/examples/catalog.js');
+    const latch = EXAMPLE_PROJECTS.find((e) => e.id === 'd-latch');
+    expect(latch).toBeTruthy();
+    const origX = latch!.project.topCircuit.components[0]!.pos.x;
+
+    const loaded = deserializeProject(latch!.project);
+    for (const c of loaded.topCircuit.components.values()) c.pos.x += 500;
+
+    expect(latch!.project.topCircuit.components[0]!.pos.x).toBe(origX);
+
+    const again = deserializeProject(latch!.project);
+    const first = [...again.topCircuit.components.values()][0]!;
+    expect(first.pos.x).toBe(origX);
+  });
+
+  it('switches between examples without aliasing component maps', async () => {
+    const { EXAMPLE_PROJECTS } = await import('../src/examples/catalog.js');
+    const latch = EXAMPLE_PROJECTS.find((e) => e.id === 'd-latch')!;
+    const counter = EXAMPLE_PROJECTS.find((e) => e.id === 'lab-counter-7seg')!;
+    const a = deserializeProject(latch.project);
+    const b = deserializeProject(counter.project);
+    expect(a.topCircuit.components.size).not.toBe(b.topCircuit.components.size);
+    expect([...a.topCircuit.components.keys()][0]).not.toBe([...b.topCircuit.components.keys()][0]);
+  });
+});

@@ -3,10 +3,12 @@ import { Circuit, nextId } from '../sim/Circuit.js';
 import {
   makeAnalyzer,
   makeBusProbe,
+  makeBusSwitch,
   makeButton,
   makeChipInstance,
   makeClock,
   makeInput,
+  makeJunction,
   makeLabel,
   makeLed,
   makePort,
@@ -18,20 +20,24 @@ import {
   nextAutoPortName,
   parseBusPortSpec,
   relayoutBusProbePins,
+  relayoutBusSwitchPins,
 } from '../sim/library.js';
 import { firePulse } from '../sim/labTick.js';
 import { applyPinLayout, syncPinSidesFromDef } from '../sim/orientation.js';
 import { captureCircuit, type CircuitSnapshot } from '../sim/serialize.js';
-import type { Component, Pin, Point } from '../sim/types.js';
+import type { ChipInstanceComponent, Component, Pin, Point } from '../sim/types.js';
 import { showPrompt } from './Dialog.js';
 import type { TutorialHint } from './Tutorial.js';
 import {
+  busSwitchBitAt,
   dist,
   findComponentNear,
   findPinNear,
   findWaypointNear,
   findWireNear,
   GRID,
+  interiorWaypoints,
+  nearestOnPolyline,
   pinExitDir,
   rawWirePolyline,
   routeWirePoints,
@@ -57,6 +63,7 @@ export type Tool =
   | { kind: 'clock' }
   | { kind: 'analyzer' }
   | { kind: 'busprobe' }
+  | { kind: 'busswitch' }
   | { kind: 'tty' }
   | { kind: 'probe' }
   | { kind: 'label' }
@@ -450,9 +457,85 @@ export class Editor {
       return;
     }
     const removed = [...this.selectedIds];
-    for (const id of removed) this.circuit.removeComponent(id);
+    for (const id of removed) {
+      const c = this.circuit.components.get(id);
+      if (c?.kind === 'junction') this.removeJunctionKeepThrough(id);
+      else this.circuit.removeComponent(id);
+    }
     this.selectedIds.clear();
     if (removed.length > 0) this.onComponentsRemoved?.(removed);
+  }
+
+  /**
+   * Delete a solder-dot without nuking the wire it sits on: heal the best
+   * through-path (two stubs → one wire), drop only the leftover branch stubs
+   * that would otherwise dangle without the junction pin.
+   */
+  removeJunctionKeepThrough(junctionId: string): boolean {
+    const j = this.circuit.components.get(junctionId);
+    if (!j || j.kind !== 'junction') return false;
+    const jPin = j.pins.net.id;
+    const pinById = new Map<string, Pin>();
+    for (const p of this.circuit.allPins()) pinById.set(p.id, p);
+
+    type Stub = { wireId: string; otherId: string; pathToJ: Point[]; bundleId?: string };
+    const stubs: Stub[] = [];
+    for (const w of this.circuit.wires.values()) {
+      if (w.a !== jPin && w.b !== jPin) continue;
+      const otherId = w.a === jPin ? w.b : w.a;
+      const other = pinById.get(otherId);
+      const jp = pinById.get(jPin);
+      if (!other || !jp) continue;
+      // Path other → … → junction (for merging).
+      let pathToJ: Point[];
+      if (w.b === jPin) {
+        pathToJ = [other.pos, ...(w.waypoints ?? []).map((q) => ({ x: q.x, y: q.y })), jp.pos];
+      } else {
+        const wps = w.waypoints ? [...w.waypoints].reverse() : [];
+        pathToJ = [other.pos, ...wps.map((q) => ({ x: q.x, y: q.y })), jp.pos];
+      }
+      stubs.push({ wireId: w.id, otherId, pathToJ, bundleId: w.bundleId });
+    }
+
+    for (const s of stubs) this.circuit.removeWire(s.wireId);
+
+    if (stubs.length >= 2) {
+      // Prefer a near-collinear pair through the junction (the “wire it sits on”).
+      let bestI = 0;
+      let bestK = 1;
+      let bestScore = -Infinity;
+      const jpos = j.pos;
+      for (let i = 0; i < stubs.length; i++) {
+        for (let k = i + 1; k < stubs.length; k++) {
+          const a = stubs[i]!.pathToJ[0]!;
+          const b = stubs[k]!.pathToJ[0]!;
+          const vax = a.x - jpos.x;
+          const vay = a.y - jpos.y;
+          const vbx = b.x - jpos.x;
+          const vby = b.y - jpos.y;
+          const la = Math.hypot(vax, vay) || 1;
+          const lb = Math.hypot(vbx, vby) || 1;
+          // Collinear opposite directions → dot ≈ -1 (best through-wire).
+          const score = -((vax / la) * (vbx / lb) + (vay / la) * (vby / lb));
+          if (score > bestScore) {
+            bestScore = score;
+            bestI = i;
+            bestK = k;
+          }
+        }
+      }
+      const left = stubs[bestI]!;
+      const right = stubs[bestK]!;
+      const combined = [...left.pathToJ, ...[...right.pathToJ].reverse().slice(1)];
+      const mid = interiorWaypoints(combined);
+      const bundleId = left.bundleId || right.bundleId;
+      this.circuit.addWire(left.otherId, right.otherId, mid.length ? mid : undefined, bundleId);
+      // Other stubs were branches — already removed; they stay gone.
+    }
+
+    // No wires left on the junction pin; removeComponent only drops the node.
+    this.circuit.removeComponent(junctionId);
+    return true;
   }
 
   /** Copy selected components + wires wholly inside the selection. */
@@ -547,6 +630,10 @@ export class Editor {
     const newIds: string[] = [];
 
     for (const sc of snap.components) {
+      if (sc.kind === 'chip' && !this.library.has((sc as ChipInstanceComponent).defId)) {
+        // Clipboard from a prior project load — def was wiped with the library.
+        continue;
+      }
       const raw = structuredClone(sc) as Component;
       const prefix =
         raw.kind === 'transistor'
@@ -592,6 +679,11 @@ export class Editor {
   }
 
   /** Clears every kind of selection at once (components and selected wires) — e.g. after clearing the circuit or navigating levels. */
+  /** Drop clipboard (e.g. after project load — chip defIds may no longer exist). */
+  clearClipboard(): void {
+    this.clipboard = null;
+  }
+
   clearSelection(): void {
     this.selectedIds.clear();
     this.selectedWireIds.clear();
@@ -756,6 +848,20 @@ export class Editor {
   }
 
   /**
+   * Re-route every wire with smart ortho + pin-exit stubs (examples / tutorials).
+   */
+  tidyAllWires(checkpoint = true): number {
+    const prevSel = new Set(this.selectedWireIds);
+    const prevComp = new Set(this.selectedIds);
+    this.selectedWireIds = new Set(this.circuit.wires.keys());
+    this.selectedIds.clear();
+    const n = this.tidySelectedWires(checkpoint);
+    this.selectedWireIds = prevSel;
+    this.selectedIds = prevComp;
+    return n;
+  }
+
+  /**
    * Re-route selected wires (or wires attached to selected components) with
    * fresh orthogonal waypoints — drops manual kinks. Avoids chip/RAM/ROM/button bodies.
    */
@@ -854,8 +960,58 @@ export class Editor {
       pos: { ...c.pos },
     };
     if (!c.pinOrder.includes(name)) c.pinOrder.push(name);
+    if (!c.channelLabels) c.channelLabels = [];
+    while (c.channelLabels.length < c.channelCount) c.channelLabels.push(`ch${c.channelLabels.length}`);
     applyPinLayout(c);
     return c.pins[name]!.id;
+  }
+
+  /** Drop the highest channel (keeps at least one); returns true if changed. */
+  removeAnalyzerChannel(analyzerId: string): boolean {
+    const c = this.circuit.components.get(analyzerId);
+    if (!c || c.kind !== 'analyzer' || c.channelCount <= 1) return false;
+    this.noteEdit();
+    const i = c.channelCount - 1;
+    const name = `ch${i}`;
+    const pin = c.pins[name];
+    const removedId = pin?.id;
+    delete c.pins[name];
+    c.pinOrder = c.pinOrder.filter((p) => p !== name);
+    c.channelCount = i;
+    if (c.channelLabels) c.channelLabels = c.channelLabels.slice(0, i);
+    if (c.triggerChannel != null && c.triggerChannel >= i) c.triggerChannel = null;
+    applyPinLayout(c);
+    if (removedId) {
+      for (const [wid, w] of [...this.circuit.wires]) {
+        if (w.a === removedId || w.b === removedId) this.circuit.removeWire(wid);
+      }
+    }
+    return true;
+  }
+
+  /** Enable / disable decimal-point pin on a 7-seg display. */
+  setSevenSegHasDp(id: string, hasDp: boolean): boolean {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'sevenseg' || c.hasDp === hasDp) return false;
+    this.noteEdit();
+    c.hasDp = hasDp;
+    if (hasDp) {
+      if (!c.pins.dp) {
+        c.pins.dp = { id: `${c.id}:dp`, componentId: c.id, name: 'dp', pos: { ...c.pos } };
+      }
+      if (!c.pinOrder.includes('dp')) c.pinOrder.push('dp');
+    } else {
+      const dp = c.pins.dp;
+      delete c.pins.dp;
+      c.pinOrder = c.pinOrder.filter((p) => p !== 'dp');
+      if (dp) {
+        for (const [wid, w] of [...this.circuit.wires]) {
+          if (w.a === dp.id || w.b === dp.id) this.circuit.removeWire(wid);
+        }
+      }
+    }
+    applyPinLayout(c);
+    return true;
   }
 
   /** Change bus-probe width (1–32); drops wires on removed high bits. */
@@ -887,6 +1043,49 @@ export class Editor {
     if (c.radix === radix) return false;
     this.noteEdit();
     c.radix = radix;
+    return true;
+  }
+
+  /** Change bus-switch width (1–32); drops wires on removed high bits. */
+  setBusSwitchWidth(id: string, bitWidth: number): boolean {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'busswitch') return false;
+    const n = Math.max(1, Math.min(32, bitWidth | 0));
+    if (n === c.bitWidth) return false;
+    this.noteEdit();
+    const removed: string[] = [];
+    for (let i = n; i < c.bitWidth; i++) {
+      const p = c.pins[`b${i}`];
+      if (p) removed.push(p.id);
+    }
+    c.bitWidth = n;
+    relayoutBusSwitchPins(c);
+    applyPinLayout(c);
+    if (removed.length) {
+      for (const [wid, w] of [...this.circuit.wires]) {
+        if (removed.includes(w.a) || removed.includes(w.b)) this.circuit.removeWire(wid);
+      }
+    }
+    return true;
+  }
+
+  setBusSwitchRadix(id: string, radix: 'hex' | 'dec' | 'bin'): boolean {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'busswitch') return false;
+    if (c.radix === radix) return false;
+    this.noteEdit();
+    c.radix = radix;
+    return true;
+  }
+
+  setBusSwitchValue(id: string, value: number): boolean {
+    const c = this.circuit.components.get(id);
+    if (!c || c.kind !== 'busswitch') return false;
+    const mask = c.bitWidth >= 31 ? 0x7fffffff : (1 << c.bitWidth) - 1;
+    const v = (value | 0) & mask;
+    if (v === c.value) return false;
+    this.noteEdit();
+    c.value = v;
     return true;
   }
 
@@ -923,6 +1122,17 @@ export class Editor {
       if (hit) {
         this.selectedWireId = null;
         if (hit.kind === 'input') hit.value = hit.value === 1 ? 0 : 1;
+        if (hit.kind === 'busswitch' && !additive) {
+          // DIP paddles toggle one bit; click on the readout steps the whole value.
+          // (Hex step-by-0x10 used to no-op on 4-bit switches: (v+16)&0xF === v.)
+          const bit = busSwitchBitAt(hit, p);
+          if (bit != null) {
+            hit.value ^= 1 << bit;
+          } else {
+            const mask = hit.bitWidth >= 31 ? 0x7fffffff : (1 << hit.bitWidth) - 1;
+            hit.value = (hit.value + 1) & mask;
+          }
+        }
         if (hit.kind === 'button') {
           if (hit.mode === 'toggle') {
             hit.value = hit.value === 1 ? 0 : 1;
@@ -956,29 +1166,168 @@ export class Editor {
   }
 
   /**
-   * Click-to-route wiring: the first click on a pin starts the wire: each
-   * further click on empty canvas commits a bend point (snapped to the
-   * grid, like placement), and a click on a second pin completes the wire
-   * as a polyline through every bend point collected so far — the standard
-   * schematic-tool gesture (KiCad, Logisim, ...), not a one-shot straight
-   * line. The waypoints are purely cosmetic (see Wire in types.ts): the
-   * electrical net is exactly the same regardless of how the wire is routed.
+   * Click-to-route wiring: first click on a pin (or wire node / mid-wire T-junction)
+   * starts the wire; further empty clicks add bends; click a pin or another wire
+   * commits. Pin→pin with no manual bends uses smart orthogonal routing (obstacles /
+   * crossings) like Tidy — same as Turing Complete nodes + our auto-route.
    */
   private handleWireClick(p: Point): void {
     const pin = findPinNear(this.circuit, p, 22);
     if (!this.wireStartPinId) {
-      if (pin) this.wireStartPinId = pin.id;
+      if (pin) {
+        this.wireStartPinId = pin.id;
+        return;
+      }
+      // Click existing bend → promote to junction and start a branch.
+      const wp = findWaypointNear(this.circuit, p, 10);
+      if (wp) {
+        this.noteEdit();
+        const jPin = this.splitWireAtWaypoint(wp.wireId, wp.index);
+        if (jPin) this.wireStartPinId = jPin.id;
+        return;
+      }
+      // Click mid-wire → solder-dot + start branch (TC-style node).
+      const seg = findWireNear(this.circuit, p, 8);
+      if (seg) {
+        this.noteEdit();
+        const jPin = this.splitWireAtPoint(seg.wireId, p);
+        if (jPin) this.wireStartPinId = jPin.id;
+      }
       return;
     }
+
     if (pin) {
       if (pin.id !== this.wireStartPinId) {
         this.noteEdit();
-        this.circuit.addWire(this.wireStartPinId, pin.id, this.wireWaypoints.length ? [...this.wireWaypoints] : undefined);
+        this.commitRoutedWire(this.wireStartPinId, pin.id, this.wireWaypoints);
       }
       this.cancelWire();
       return;
     }
+
+    // Drop onto another wire → T-junction finish (unless already same net).
+    const seg = findWireNear(this.circuit, p, 8);
+    if (seg) {
+      const w = this.circuit.wires.get(seg.wireId);
+      if (w) {
+        const nets = this.circuit.computeNets();
+        const startNet = nets.netOf.get(this.wireStartPinId);
+        const wireNet = nets.netOf.get(w.a);
+        if (startNet && wireNet && startNet === wireNet) {
+          this.wireWaypoints.push(this.getSnap(p));
+          return;
+        }
+        this.noteEdit();
+        const jPin = this.splitWireAtPoint(seg.wireId, p);
+        if (jPin && jPin.id !== this.wireStartPinId) {
+          this.commitRoutedWire(this.wireStartPinId, jPin.id, this.wireWaypoints);
+        }
+        this.cancelWire();
+        return;
+      }
+    }
+
     this.wireWaypoints.push(this.getSnap(p));
+  }
+
+  /**
+   * Add a wire with smart ortho routing when the user did not place bends;
+   * otherwise keep their waypoints.
+   */
+  private commitRoutedWire(aId: string, bId: string, manualWaypoints: Point[]): void {
+    if (manualWaypoints.length > 0) {
+      this.circuit.addWire(aId, bId, manualWaypoints.map((q) => ({ x: q.x, y: q.y })));
+      return;
+    }
+    const pinById = new Map<string, Pin>();
+    for (const pin of this.circuit.allPins()) pinById.set(pin.id, pin);
+    const a = pinById.get(aId);
+    const b = pinById.get(bId);
+    if (!a || !b) {
+      this.circuit.addWire(aId, bId);
+      return;
+    }
+    const aComp = this.circuit.components.get(a.componentId);
+    const bComp = this.circuit.components.get(b.componentId);
+    const exclude = new Set([a.componentId, b.componentId]);
+    const nets = this.circuit.computeNets();
+    const otherPaths: Point[][] = [];
+    const preferAlong: Point[][] = [];
+    const netId = nets.netOf.get(aId);
+    for (const ow of this.circuit.wires.values()) {
+      const poly = rawWirePolyline(this.circuit, ow);
+      if (!poly) continue;
+      const drawn = routeWirePoints(poly);
+      otherPaths.push(drawn);
+      if (netId && nets.netOf.get(ow.a) === netId) preferAlong.push(drawn);
+    }
+    const routed = routeWirePoints([a.pos, b.pos], {
+      obstacles: routingObstacles(this.circuit, exclude),
+      startDir: aComp ? pinExitDir(a.pos, aComp.pos) : null,
+      endDir: bComp ? pinExitDir(b.pos, bComp.pos) : null,
+      avoidCrossings: otherPaths,
+      preferAlong,
+    });
+    const mid = interiorWaypoints(routed);
+    this.circuit.addWire(aId, bId, mid.length ? mid : undefined);
+  }
+
+  /** Split wire at a stored waypoint index → junction pin (replaces that bend). */
+  private splitWireAtWaypoint(wireId: string, index: number): Pin | null {
+    const w = this.circuit.wires.get(wireId);
+    if (!w?.waypoints?.[index]) return null;
+    const jPos = { ...w.waypoints[index]! };
+    const existing = findPinNear(this.circuit, jPos, 4);
+    if (existing) {
+      const comp = this.circuit.components.get(existing.componentId);
+      if (comp?.kind === 'junction') {
+        // Already a node — just use it (wire still has the bend; leave topology).
+        return existing;
+      }
+    }
+    const j = makeJunction(this.circuit, jPos);
+    const left = w.waypoints.slice(0, index);
+    const right = w.waypoints.slice(index + 1);
+    const bundleId = w.bundleId;
+    this.circuit.removeWire(w.id);
+    this.circuit.addWire(w.a, j.pins.net.id, left.length ? left : undefined, bundleId);
+    this.circuit.addWire(j.pins.net.id, w.b, right.length ? right : undefined, bundleId);
+    return j.pins.net;
+  }
+
+  /** Split drawn wire path at click → junction; returns junction pin. */
+  private splitWireAtPoint(wireId: string, p: Point): Pin | null {
+    const w = this.circuit.wires.get(wireId);
+    if (!w) return null;
+    const drawn = wirePolyline(this.circuit, w);
+    if (!drawn || drawn.length < 2) return null;
+    const hit = nearestOnPolyline(drawn, p, 12);
+    if (!hit) return null;
+    const jPos = this.getSnap(hit.point);
+    // Too close to an endpoint → start from that pin instead.
+    if (dist(jPos, drawn[0]!) < 10) {
+      const pinById = new Map(this.circuit.allPins().map((x) => [x.id, x]));
+      return pinById.get(w.a) ?? null;
+    }
+    if (dist(jPos, drawn[drawn.length - 1]!) < 10) {
+      const pinById = new Map(this.circuit.allPins().map((x) => [x.id, x]));
+      return pinById.get(w.b) ?? null;
+    }
+    const near = findPinNear(this.circuit, jPos, 6);
+    if (near) {
+      const comp = this.circuit.components.get(near.componentId);
+      if (comp?.kind === 'junction') return near;
+    }
+    const left = [...drawn.slice(0, hit.segIndex + 1), jPos];
+    const right = [jPos, ...drawn.slice(hit.segIndex + 1)];
+    const leftMid = interiorWaypoints(left);
+    const rightMid = interiorWaypoints(right);
+    const j = makeJunction(this.circuit, jPos);
+    const bundleId = w.bundleId;
+    this.circuit.removeWire(w.id);
+    this.circuit.addWire(w.a, j.pins.net.id, leftMid.length ? leftMid : undefined, bundleId);
+    this.circuit.addWire(j.pins.net.id, w.b, rightMid.length ? rightMid : undefined, bundleId);
+    return j.pins.net;
   }
 
   private placeAt(p: Point): void {
@@ -1038,6 +1387,17 @@ export class Editor {
         });
         break;
       }
+      case 'busswitch': {
+        void showPrompt('Bus switch width (4 or 8):', '8').then((raw) => {
+          if (!raw) return;
+          let n = parseInt(raw, 10);
+          if (!Number.isFinite(n) || n < 1) return;
+          if (n !== 4 && n !== 8) n = n <= 4 ? 4 : 8;
+          this.noteEdit();
+          makeBusSwitch(this.circuit, n, p);
+        });
+        break;
+      }
       case 'tty':
         place(() => makeTty(this.circuit, p));
         break;
@@ -1074,10 +1434,365 @@ export class Editor {
         break;
       }
       case 'place-chip': {
+        if (!this.library.has(this.tool.defId)) {
+          // Stale palette selection after Lab course / example reload.
+          this.tool = { kind: 'select' };
+          break;
+        }
         const def = this.library.get(this.tool.defId);
         place(() => makeChipInstance(this.circuit, def, p));
         break;
       }
     }
   }
+
+  /** Components that support multi-bit ribbon wiring by shared pin name. */
+  private ribbonTarget(
+    c: Component | undefined,
+  ): c is Component & {
+    kind: 'chip' | 'sevenseg' | 'busprobe' | 'busswitch' | 'analyzer';
+    pins: Record<string, Pin>;
+  } {
+    return (
+      !!c &&
+      (c.kind === 'chip' ||
+        c.kind === 'sevenseg' ||
+        c.kind === 'busprobe' ||
+        c.kind === 'busswitch' ||
+        c.kind === 'analyzer')
+    );
+  }
+
+  private isBankDriver(c: Component | undefined): c is Component & {
+    kind: 'input' | 'button';
+    pins: { out: Pin };
+    pos: Point;
+  } {
+    return !!c && (c.kind === 'input' || c.kind === 'button');
+  }
+
+  /**
+   * True when Wire matching / bus pins can run (2 ribbon targets, chip+bank,
+   * or bus-switch + chip).
+   */
+  canWireMatchingPorts(): boolean {
+    if (this.ribbonBusSwitchPair()) return true;
+    if (this.ribbonBankPair()) return true;
+    const pair = this.ribbonPair();
+    if (!pair) return false;
+    return matchingPortPairs(pair[0].pins, pair[1].pins).length > 0;
+  }
+
+  /** Selection is specifically a bus switch + chip (or hover chip). */
+  canRibbonBusSwitch(): boolean {
+    return this.ribbonBusSwitchPair() != null;
+  }
+
+  /**
+   * Bus switch (b0..) + chip/host — one-click ribbon onto a/d/in/data/addr/q.
+   */
+  private ribbonBusSwitchPair(): {
+    sw: Component & { kind: 'busswitch'; pins: Record<string, Pin>; pos: Point };
+    host: Component & { pins: Record<string, Pin>; pos: Point };
+  } | null {
+    const selected = [...this.selectedIds]
+      .map((id) => this.circuit.components.get(id))
+      .filter((c): c is Component => !!c);
+    const switches = selected.filter((c) => c.kind === 'busswitch') as Array<
+      Component & { kind: 'busswitch'; pins: Record<string, Pin>; pos: Point }
+    >;
+    const hosts = selected.filter(
+      (c) => c.kind === 'chip' || c.kind === 'busprobe' || c.kind === 'analyzer' || c.kind === 'sevenseg',
+    ) as Array<Component & { pins: Record<string, Pin>; pos: Point }>;
+
+    if (switches.length === 1 && hosts.length === 1) {
+      return { sw: switches[0]!, host: hosts[0]! };
+    }
+    if (switches.length === 1 && hosts.length === 0 && this.hoveredPinId) {
+      const pin = this.circuit.allPins().find((p) => p.id === this.hoveredPinId);
+      const other = pin ? this.circuit.components.get(pin.componentId) : undefined;
+      if (
+        other &&
+        (other.kind === 'chip' ||
+          other.kind === 'busprobe' ||
+          other.kind === 'analyzer' ||
+          other.kind === 'sevenseg') &&
+        other.id !== switches[0]!.id
+      ) {
+        return {
+          sw: switches[0]!,
+          host: other as Component & { pins: Record<string, Pin>; pos: Point },
+        };
+      }
+    }
+    if (hosts.length === 1 && switches.length === 0 && this.hoveredPinId) {
+      const pin = this.circuit.allPins().find((p) => p.id === this.hoveredPinId);
+      const other = pin ? this.circuit.components.get(pin.componentId) : undefined;
+      if (other?.kind === 'busswitch' && other.id !== hosts[0]!.id) {
+        return {
+          sw: other as Component & { kind: 'busswitch'; pins: Record<string, Pin>; pos: Point },
+          host: hosts[0]!,
+        };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Ribbon bus-switch `bN` onto the best host bus (`a`/`d`/`in`/`data`/`addr`/`q`/`b`).
+   * Returns number of new wires.
+   */
+  wireBusSwitchToHost(checkpoint = true): number {
+    const pair = this.ribbonBusSwitchPair();
+    if (!pair) return 0;
+    const { sw, host } = pair;
+    const swBits: string[] = [];
+    for (let i = 0; i < 64; i++) {
+      if (sw.pins[`b${i}`]) swBits.push(`b${i}`);
+      else break;
+    }
+    if (swBits.length === 0) return 0;
+
+    const prefixes = ['a', 'd', 'in', 'data', 'addr', 'q', 'b', 's', 'ch'] as const;
+    let hostNames: string[] | null = null;
+    for (const pref of prefixes) {
+      const names: string[] = [];
+      for (let i = 0; i < 64; i++) {
+        const name = `${pref}${i}`;
+        if (host.pins[name]) names.push(name);
+        else break;
+      }
+      if (names.length >= 1) {
+        hostNames = names;
+        break;
+      }
+    }
+    if (!hostNames?.length) return 0;
+
+    if (checkpoint) this.noteEdit();
+    let nets = this.circuit.computeNets();
+    let n = 0;
+    const otherPaths: Point[][] = [];
+    for (const ow of this.circuit.wires.values()) {
+      const poly = rawWirePolyline(this.circuit, ow);
+      if (poly) otherPaths.push(routeWirePoints(poly));
+    }
+    const bundleId = `bundle-${nextId('rb')}`;
+    const count = Math.min(swBits.length, hostNames.length);
+    for (let i = 0; i < count; i++) {
+      const pa = sw.pins[swBits[i]!]!;
+      const pb = host.pins[hostNames[i]!]!;
+      const netA = nets.netOf.get(pa.id);
+      const netB = nets.netOf.get(pb.id);
+      if (netA !== undefined && netB !== undefined && netA === netB) continue;
+      const exclude = new Set([sw.id, host.id]);
+      const routed = routeWirePoints([pa.pos, pb.pos], {
+        obstacles: routingObstacles(this.circuit, exclude),
+        startDir: pinExitDir(pa.pos, sw.pos),
+        endDir: pinExitDir(pb.pos, host.pos),
+        avoidCrossings: otherPaths,
+        preferAlong: otherPaths.filter((_, j) => j >= otherPaths.length - n),
+      });
+      const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
+      this.circuit.addWire(pa.id, pb.id, mid.length ? mid : undefined, bundleId);
+      otherPaths.push(routed);
+      n++;
+      nets = this.circuit.computeNets();
+    }
+    return n;
+  }
+
+  private ribbonPair(): [
+    Component & { pins: Record<string, Pin>; pos: Point },
+    Component & { pins: Record<string, Pin>; pos: Point },
+  ] | null {
+    const selected = [...this.selectedIds]
+      .map((id) => this.circuit.components.get(id))
+      .filter((c): c is Component => this.ribbonTarget(c));
+    if (selected.length === 2 && this.ribbonTarget(selected[0]) && this.ribbonTarget(selected[1])) {
+      return [selected[0], selected[1]];
+    }
+    if (selected.length === 1 && this.hoveredPinId) {
+      const pin = this.circuit.allPins().find((p) => p.id === this.hoveredPinId);
+      const other = pin ? this.circuit.components.get(pin.componentId) : undefined;
+      if (this.ribbonTarget(other) && this.ribbonTarget(selected[0]) && other.id !== selected[0].id) {
+        return [selected[0], other];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Chip (or busprobe/analyzer) + multiple selected inputs/buttons sorted by Y
+   * → wire to d0.. / q0.. / b0.. / ch0.. by stamp order.
+   */
+  private ribbonBankPair(): {
+    host: Component & { pins: Record<string, Pin>; pos: Point };
+    banks: Array<Component & { pins: { out: Pin }; pos: Point }>;
+  } | null {
+    const selected = [...this.selectedIds]
+      .map((id) => this.circuit.components.get(id))
+      .filter((c): c is Component => !!c);
+    const hosts = selected.filter((c) => this.ribbonTarget(c));
+    const banks = selected.filter((c) => this.isBankDriver(c)) as Array<
+      Component & { pins: { out: Pin }; pos: Point }
+    >;
+    if (hosts.length === 1 && banks.length >= 2) {
+      return { host: hosts[0]!, banks };
+    }
+    // Also: one host selected + hover on bank, with other banks selected
+    if (hosts.length === 1 && banks.length >= 1) return { host: hosts[0]!, banks };
+    return null;
+  }
+
+  /**
+   * Wire matching pins between two chips (or chip+sevenseg/busprobe): exact
+   * names first, then bus remaps (qN↔dN/bN, aN↔bN, …). Also wires Input/Button
+   * banks (sorted by Y) onto d0../q0../b0... Skips already-connected.
+   */
+  wireMatchingPorts(checkpoint = true): number {
+    // Prefer explicit bus-switch → chip ribbon when that pair is selected.
+    if (this.ribbonBusSwitchPair()) {
+      return this.wireBusSwitchToHost(checkpoint);
+    }
+    const bank = this.ribbonBankPair();
+    if (bank && bank.banks.length >= 1) {
+      return this.wireBankToHost(bank.host, bank.banks, checkpoint);
+    }
+
+    const pair = this.ribbonPair();
+    if (!pair) return 0;
+    const [a, b] = pair;
+    const pairs = matchingPortPairs(a.pins, b.pins);
+    if (pairs.length === 0) return 0;
+
+    if (checkpoint) this.noteEdit();
+    let nets = this.circuit.computeNets();
+    let n = 0;
+    const otherPaths: Point[][] = [];
+    for (const ow of this.circuit.wires.values()) {
+      const poly = rawWirePolyline(this.circuit, ow);
+      if (poly) otherPaths.push(routeWirePoints(poly));
+    }
+
+    const bundleId = `bundle-${nextId('rb')}`;
+    for (const { na, nb } of pairs) {
+      const pa = a.pins[na]!;
+      const pb = b.pins[nb]!;
+      const netA = nets.netOf.get(pa.id);
+      const netB = nets.netOf.get(pb.id);
+      if (netA !== undefined && netB !== undefined && netA === netB) continue;
+
+      const exclude = new Set([a.id, b.id]);
+      const routed = routeWirePoints([pa.pos, pb.pos], {
+        obstacles: routingObstacles(this.circuit, exclude),
+        startDir: pinExitDir(pa.pos, a.pos),
+        endDir: pinExitDir(pb.pos, b.pos),
+        avoidCrossings: otherPaths,
+        preferAlong: otherPaths.filter((_, j) => j >= otherPaths.length - n),
+      });
+      const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
+      this.circuit.addWire(pa.id, pb.id, mid.length ? mid : undefined, bundleId);
+      otherPaths.push(routed);
+      n++;
+      nets = this.circuit.computeNets();
+    }
+    return n;
+  }
+
+  private wireBankToHost(
+    host: Component & { pins: Record<string, Pin>; pos: Point },
+    banks: Array<Component & { pins: { out: Pin }; pos: Point }>,
+    checkpoint: boolean,
+  ): number {
+    const sorted = [...banks].sort((a, b) => a.pos.y - b.pos.y || a.pos.x - b.pos.x);
+    const prefixes = ['d', 'q', 'b', 'ch', 'a', 'in', 's', 'data', 'addr'] as const;
+    let hostNames: string[] | null = null;
+    for (const pref of prefixes) {
+      const names: string[] = [];
+      for (let i = 0; i < 64; i++) {
+        const name = `${pref}${i}`;
+        if (host.pins[name]) names.push(name);
+        else break;
+      }
+      if (names.length >= 2) {
+        hostNames = names;
+        break;
+      }
+    }
+    if (!hostNames || hostNames.length === 0) return 0;
+
+    if (checkpoint) this.noteEdit();
+    let nets = this.circuit.computeNets();
+    let n = 0;
+    const otherPaths: Point[][] = [];
+    for (const ow of this.circuit.wires.values()) {
+      const poly = rawWirePolyline(this.circuit, ow);
+      if (poly) otherPaths.push(routeWirePoints(poly));
+    }
+    const bundleId = `bundle-${nextId('rb')}`;
+    const count = Math.min(sorted.length, hostNames.length);
+    for (let i = 0; i < count; i++) {
+      const bank = sorted[i]!;
+      const hostPin = host.pins[hostNames[i]!]!;
+      const bankPin = bank.pins.out;
+      const netA = nets.netOf.get(bankPin.id);
+      const netB = nets.netOf.get(hostPin.id);
+      if (netA !== undefined && netB !== undefined && netA === netB) continue;
+      const exclude = new Set([host.id, bank.id]);
+      const routed = routeWirePoints([bankPin.pos, hostPin.pos], {
+        obstacles: routingObstacles(this.circuit, exclude),
+        startDir: pinExitDir(bankPin.pos, bank.pos),
+        endDir: pinExitDir(hostPin.pos, host.pos),
+        avoidCrossings: otherPaths,
+        preferAlong: otherPaths.filter((_, j) => j >= otherPaths.length - n),
+      });
+      const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
+      this.circuit.addWire(bankPin.id, hostPin.id, mid.length ? mid : undefined, bundleId);
+      otherPaths.push(routed);
+      n++;
+      nets = this.circuit.computeNets();
+    }
+    return n;
+  }
+}
+
+/** Exact name pairs first, then bus remaps; each pin used at most once. */
+function matchingPortPairs(
+  pinsA: Record<string, Pin>,
+  pinsB: Record<string, Pin>,
+): { na: string; nb: string }[] {
+  const pairs: { na: string; nb: string }[] = [];
+  const usedA = new Set<string>();
+  const usedB = new Set<string>();
+
+  for (const name of Object.keys(pinsA)) {
+    if (!pinsB[name]) continue;
+    pairs.push({ na: name, nb: name });
+    usedA.add(name);
+    usedB.add(name);
+  }
+
+  const tryPair = (na: string, nb: string): void => {
+    if (!pinsA[na] || !pinsB[nb]) return;
+    if (usedA.has(na) || usedB.has(nb)) return;
+    pairs.push({ na, nb });
+    usedA.add(na);
+    usedB.add(nb);
+  };
+
+  for (let i = 0; i < 32; i++) {
+    // Register/counter/bus: q↔d, q↔b, d↔b (either orientation).
+    tryPair(`q${i}`, `d${i}`);
+    tryPair(`d${i}`, `q${i}`);
+    tryPair(`q${i}`, `b${i}`);
+    tryPair(`b${i}`, `q${i}`);
+    tryPair(`d${i}`, `b${i}`);
+    tryPair(`b${i}`, `d${i}`);
+    // COMP-style aN ↔ bN across two chips / probe.
+    tryPair(`a${i}`, `b${i}`);
+    tryPair(`b${i}`, `a${i}`);
+  }
+  // sevenseg a..g ↔ chip a..g is already covered by exact names.
+  return pairs;
 }

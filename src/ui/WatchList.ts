@@ -1,5 +1,6 @@
 /**
- * Floating watch list — pinned schematic pin ids with live levels (0/1/Z/X).
+ * Floating watch list — pinned schematic pin ids with live levels (0/1/Z/X),
+ * plus optional multi-bit bus rows (hex/dec).
  */
 
 import { FloatingWindow } from './FloatingWindow.js';
@@ -12,6 +13,13 @@ export interface WatchEntry {
   level: WatchLevel;
 }
 
+export interface WatchBusGroup {
+  id: string;
+  label: string;
+  /** Pin ids LSB-first (index 0 = bit 0). */
+  pinIds: string[];
+}
+
 export class WatchList {
   private readonly win: FloatingWindow;
   readonly root: HTMLElement;
@@ -20,15 +28,19 @@ export class WatchList {
   private readonly breakContendEl: HTMLInputElement;
   private readonly breakWatchEl: HTMLInputElement;
   private pinIds: string[] = [];
+  private buses: WatchBusGroup[] = [];
   private levels = new Map<string, WatchLevel>();
   private labels = new Map<string, string>();
   /** Live row level cells — updated in place so sim ticks don't destroy × buttons. */
   private readonly lvlEls = new Map<string, HTMLElement>();
+  private readonly busLvlEls = new Map<string, HTMLElement>();
 
   /** Fired when the pin set changes (add/remove). */
   onChange: (() => void) | null = null;
   /** Fired when a row is clicked — select that pin's component. */
   onSelectPin: ((pinId: string) => void) | null = null;
+  /** Right-click on a bus row — spawn probe / wire to LA. */
+  onBusContext: ((bus: WatchBusGroup, clientX: number, clientY: number) => void) | null = null;
 
   constructor() {
     this.win = new FloatingWindow('Watch List', 'watch-list');
@@ -40,7 +52,7 @@ export class WatchList {
       </div>
       <div class="watch-list-rows" data-act="rows"></div>
       <div class="watch-list-la" data-act="la" hidden></div>
-      <div class="lab-panel-status">Ctrl+W or context menu · Watch pin</div>
+      <div class="lab-panel-status">Ctrl+W or context menu · Watch pin / bus</div>
     `;
     this.listEl = this.root.querySelector('[data-act="rows"]')!;
     this.laEl = this.root.querySelector('[data-act="la"]')!;
@@ -69,6 +81,10 @@ export class WatchList {
     return this.pinIds;
   }
 
+  getBuses(): readonly WatchBusGroup[] {
+    return this.buses;
+  }
+
   has(pinId: string): boolean {
     return this.pinIds.includes(pinId);
   }
@@ -81,6 +97,32 @@ export class WatchList {
     this.renderRows();
     this.onChange?.();
     return true;
+  }
+
+  /** Group pins as a bus row (LSB-first). Returns false if fewer than 2 pins. */
+  addBus(pinIds: string[], label?: string): boolean {
+    const ids = [...new Set(pinIds.filter(Boolean))];
+    if (ids.length < 2) return false;
+    const id = `bus:${ids.join('|')}`;
+    if (this.buses.some((b) => b.id === id)) return false;
+    const prefix = busPrefixLabel(ids);
+    this.buses.push({
+      id,
+      label: label ?? prefix,
+      pinIds: ids,
+    });
+    this.renderRows();
+    this.onChange?.();
+    return true;
+  }
+
+  removeBus(busId: string): void {
+    const i = this.buses.findIndex((b) => b.id === busId);
+    if (i < 0) return;
+    this.buses.splice(i, 1);
+    this.busLvlEls.delete(busId);
+    this.renderRows();
+    this.onChange?.();
   }
 
   remove(pinId: string): void {
@@ -99,10 +141,12 @@ export class WatchList {
     const gone = new Set(componentIds);
     if (gone.size === 0) return;
     const next = this.pinIds.filter((id) => !gone.has(id.split(':')[0]!));
-    if (next.length === this.pinIds.length) return;
+    const nextBuses = this.buses.filter((b) => !b.pinIds.some((id) => gone.has(id.split(':')[0]!)));
+    if (next.length === this.pinIds.length && nextBuses.length === this.buses.length) return;
     this.pinIds = next;
+    this.buses = nextBuses;
     for (const id of [...this.levels.keys()]) {
-      if (!this.pinIds.includes(id)) {
+      if (!this.pinIds.includes(id) && !this.buses.some((b) => b.pinIds.includes(id))) {
         this.levels.delete(id);
         this.labels.delete(id);
         this.lvlEls.delete(id);
@@ -114,9 +158,11 @@ export class WatchList {
 
   clear(): void {
     this.pinIds = [];
+    this.buses = [];
     this.levels.clear();
     this.labels.clear();
     this.lvlEls.clear();
+    this.busLvlEls.clear();
     this.renderRows();
     this.onChange?.();
   }
@@ -147,7 +193,8 @@ export class WatchList {
     resolve: (localPinId: string) => { level: 0 | 1 | 'Z'; contended: boolean },
   ): string[] {
     const changed: string[] = [];
-    for (const pinId of this.pinIds) {
+    const allPins = new Set([...this.pinIds, ...this.buses.flatMap((b) => b.pinIds)]);
+    for (const pinId of allPins) {
       const { level, contended } = resolve(pinId);
       const next: WatchLevel = contended ? 'X' : level;
       const prev = this.levels.get(pinId);
@@ -162,8 +209,19 @@ export class WatchList {
         }
       }
     }
+    for (const bus of this.buses) {
+      const el = this.busLvlEls.get(bus.id);
+      if (!el) continue;
+      const text = formatBusValue(bus.pinIds.map((id) => this.levels.get(id) ?? 'Z'));
+      if (el.dataset.lvl !== text) {
+        el.dataset.lvl = text;
+        el.textContent = text;
+      }
+    }
     // First paint / empty→nonempty without a prior renderRows.
-    if (this.pinIds.length > 0 && this.lvlEls.size === 0) this.renderRows();
+    if ((this.pinIds.length > 0 || this.buses.length > 0) && this.lvlEls.size === 0 && this.busLvlEls.size === 0) {
+      this.renderRows();
+    }
     return changed;
   }
 
@@ -200,13 +258,48 @@ export class WatchList {
   private renderRows(): void {
     this.listEl.replaceChildren();
     this.lvlEls.clear();
-    this.win.setTitle('Watch List', this.pinIds.length ? `${this.pinIds.length}` : '');
-    if (this.pinIds.length === 0) {
+    this.busLvlEls.clear();
+    const count = this.pinIds.length + this.buses.length;
+    this.win.setTitle('Watch List', count ? `${count}` : '');
+    if (count === 0) {
       const empty = document.createElement('div');
       empty.className = 'watch-list-empty';
       empty.textContent = 'No watched pins';
       this.listEl.appendChild(empty);
       return;
+    }
+    for (const bus of this.buses) {
+      const row = document.createElement('div');
+      row.className = 'watch-list-row watch-list-bus';
+      row.dataset.busId = bus.id;
+      row.title = bus.pinIds.join(', ');
+      const name = document.createElement('button');
+      name.type = 'button';
+      name.className = 'watch-list-name';
+      name.textContent = bus.label;
+      name.addEventListener('click', () => this.onSelectPin?.(bus.pinIds[0]!));
+      const lvl = document.createElement('span');
+      lvl.className = 'watch-list-lvl';
+      const text = formatBusValue(bus.pinIds.map((id) => this.levels.get(id) ?? 'Z'));
+      lvl.dataset.lvl = text;
+      lvl.textContent = text;
+      this.busLvlEls.set(bus.id, lvl);
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'watch-list-rm';
+      rm.title = 'Remove bus';
+      rm.textContent = '×';
+      rm.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.removeBus(bus.id);
+      });
+      row.append(name, lvl, rm);
+      row.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        this.onBusContext?.(bus, ev.clientX, ev.clientY);
+      });
+      this.listEl.appendChild(row);
     }
     for (const pinId of this.pinIds) {
       const row = document.createElement('div');
@@ -229,8 +322,6 @@ export class WatchList {
       rm.className = 'watch-list-rm';
       rm.title = 'Remove';
       rm.textContent = '×';
-      // pointerdown: survives even if a later frame rebuilds (shouldn't now),
-      // and fires before any click-loss from focus quirks.
       rm.addEventListener('pointerdown', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
@@ -246,6 +337,60 @@ function shortPinLabel(pinId: string): string {
   const colon = pinId.lastIndexOf(':');
   if (colon >= 0) return pinId.slice(colon + 1) || pinId;
   return pinId;
+}
+
+function busPrefixLabel(pinIds: string[]): string {
+  const names = pinIds.map(shortPinLabel);
+  const m = names[0]?.match(/^([a-zA-Z_]+)\d+$/);
+  if (m) return `${m[1]}[${names.length - 1}:0]`;
+  return `bus×${names.length}`;
+}
+
+/** LSB-first levels → "0xN (d)" or partial if Z/X present. */
+export function formatBusValue(levels: WatchLevel[]): string {
+  let v = 0;
+  let ok = true;
+  for (let i = 0; i < levels.length; i++) {
+    const lvl = levels[i]!;
+    if (lvl !== 0 && lvl !== 1) {
+      ok = false;
+      break;
+    }
+    v |= lvl << i;
+  }
+  if (!ok) return levels.map(String).join('');
+  const hex = `0x${v.toString(16).toUpperCase()}`;
+  return `${hex} (${v})`;
+}
+
+/**
+ * Collect consecutive numbered pins on a chip with the same letter prefix
+ * as `pinName` (e.g. q0 → q0..qN). Returns LSB-first pin ids, or [] if under 2.
+ */
+export function consecutiveBusPins(
+  pins: Record<string, { id: string }>,
+  pinName: string,
+): string[] {
+  const m = pinName.match(/^([a-zA-Z_]+)(\d+)$/);
+  if (!m) return [];
+  const prefix = m[1]!;
+  const indices: number[] = [];
+  for (const name of Object.keys(pins)) {
+    const mm = name.match(new RegExp(`^${prefix}(\\d+)$`));
+    if (mm) indices.push(Number(mm[1]));
+  }
+  if (indices.length < 2) return [];
+  indices.sort((a, b) => a - b);
+  // Require contiguous from 0 or from min.
+  const start = indices[0]!;
+  for (let i = 0; i < indices.length; i++) {
+    if (indices[i] !== start + i) {
+      indices.length = i;
+      break;
+    }
+  }
+  if (indices.length < 2) return [];
+  return indices.map((i) => pins[`${prefix}${i}`]!.id);
 }
 
 function cssEscape(value: string): string {

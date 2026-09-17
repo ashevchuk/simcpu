@@ -26,19 +26,25 @@ export async function spectrumScreenActive(page: Page): Promise<boolean> {
     if (!c || c.width < 64 || c.height < 64) return false;
     const ctx = c.getContext('2d');
     if (!ctx) return false;
-    const x0 = Math.floor(c.width * 0.2);
-    const y0 = Math.floor(c.height * 0.2);
-    const w = Math.floor(c.width * 0.6);
-    const h = Math.floor(c.height * 0.6);
-    const { data } = ctx.getImageData(x0, y0, w, h);
-    let colorful = 0;
-    for (let i = 0; i < data.length; i += 4) {
+    // Full frame (incl. border) — blank white paper alone must not pass.
+    const { data } = ctx.getImageData(0, 0, c.width, c.height);
+    const buckets = new Map<string, number>();
+    let lit = 0;
+    for (let i = 0; i < data.length; i += 32) {
       const r = data[i]!;
       const g = data[i + 1]!;
       const b = data[i + 2]!;
-      if (r > 20 || g > 20 || b > 20) colorful++;
+      if (r > 20 || g > 20 || b > 20) lit++;
+      const key = `${r >> 5},${g >> 5},${b >> 5}`;
+      buckets.set(key, (buckets.get(key) || 0) + 1);
     }
-    return colorful > 200;
+    if (lit < 30) return false;
+    if (buckets.size >= 2) return true;
+    // Single near-white bucket = cleared Spectrum screen (the old broken rainbow).
+    const only = [...buckets.keys()][0] ?? '';
+    const [rq, gq, bq] = only.split(',').map(Number);
+    const nearWhite = (rq ?? 0) >= 6 && (gq ?? 0) >= 6 && (bq ?? 0) >= 6;
+    return !nearWhite;
   });
 }
 

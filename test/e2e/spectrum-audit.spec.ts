@@ -17,7 +17,7 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const indexHtml = path.join(root, 'dist-file', 'index.html');
 
-const DEMO_IDS = ['rainbow', 'glazx', 'homebrew', 'egghead', 'egghead-space', 'pzxl'] as const;
+const DEMO_IDS = ['rainbow', 'ay-beep', 'glazx', 'homebrew', 'egghead', 'egghead-space', 'pzxl'] as const;
 
 test.describe('Spectrum audit — demos', () => {
   test.beforeEach(async ({ page }) => {
@@ -28,13 +28,43 @@ test.describe('Spectrum audit — demos', () => {
   for (const id of DEMO_IDS) {
     test(`Load demo "${id}" paints screen`, async ({ page }) => {
       test.setTimeout(120_000);
-      await placeSpectrum48(page);
+      if (id === 'ay-beep') await placeSpectrum128(page);
+      else await placeSpectrum48(page);
       await loadBundledDemo(page, id);
       await expect
-        .poll(() => spectrumScreenActive(page), { timeout: id === 'rainbow' ? 20_000 : 60_000 })
+        .poll(() => spectrumScreenActive(page), {
+          timeout: id === 'rainbow' || id === 'ay-beep' ? 20_000 : 60_000,
+        })
         .toBe(true);
     });
   }
+
+  test('GLAZX loads WASD pad and up changes map selection activity', async ({ page }) => {
+    test.setTimeout(120_000);
+    await placeSpectrum48(page);
+    await loadBundledDemo(page, 'glazx');
+    await expect.poll(() => spectrumScreenActive(page), { timeout: 60_000 }).toBe(true);
+    await expect.poll(async () => page.locator('.spec-joy-mode').innerText()).toMatch(/WASD/i);
+    await page.locator('canvas[data-canvas="spec"]').click();
+    // Reach map select: Space / Enter / 0 / 1 then WASD up
+    for (const k of ['Space', 'Enter', 'Digit0', 'Digit1']) {
+      await page.keyboard.press(k);
+      await page.waitForTimeout(200);
+    }
+    const before = await page.locator('[data-spec-regs]').innerText();
+    await page.locator('.spec-joy-up').click();
+    await page.waitForTimeout(300);
+    await page.locator('.spec-joy-down').click();
+    await page.waitForTimeout(300);
+    await expect
+      .poll(async () => {
+        const regs = await page.locator('[data-spec-regs]').innerText();
+        const health = await page.locator('[data-spec-health]').innerText();
+        return { regs, health, moved: regs !== before || /IM2|main|worker/i.test(health) };
+      }, { timeout: 10_000 })
+      .toMatchObject({ moved: true });
+    await expect(page.locator('[data-spec-health]')).toContainText(/IM|main|worker/i);
+  });
 
   for (const id of ['rainbow', 'glazx'] as const) {
     test(`#demo=${id} boots via hash`, async ({ page }) => {

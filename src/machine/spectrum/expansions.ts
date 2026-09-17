@@ -69,10 +69,13 @@ export class ContendedStub {
   hits = 0;
   /** Extra soft-ops burned this frame from contended accesses / FE port. */
   waitUnits = 0;
-  /** Wait units charged per contended mem access. */
-  memCost = 1;
-  /** Wait units charged per FE port access. */
-  portCost = 2;
+  /**
+   * Soft-ops charged per contended mem access ($4000–$7FFF).
+   * Tuned ≈ late-ULA contention (real machine ~5–6 T) mapped onto soft-op budget.
+   */
+  memCost = 4;
+  /** Soft-ops charged per FE port access (border/EAR/mic). */
+  portCost = 3;
   enabled = true;
 
   reset(): void {

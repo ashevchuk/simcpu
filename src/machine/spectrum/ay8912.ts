@@ -228,6 +228,8 @@ export class AyAudio {
   ): void {
     if (!this.ctx || !this.gain || this.muted) return;
     const n = Math.max(64, Math.floor(this.ctx.sampleRate * (tStates / 3_500_000)));
+    // Frame length tracks soft Spectrum frame (48K ≈ 69888 T @ 3.5 MHz).
+    // AY chip clock is CPU/2 inside Ay8912; beeper edges are frac-accurate within the buffer.
     const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
     const data = buf.getChannelData(0);
     this.chip.render(tStates, data);
@@ -248,7 +250,7 @@ export function mixBeeperSquare(
   data: Float32Array,
   startEar: boolean,
   transitions: readonly { frac: number; bit: boolean }[],
-  amp = 0.08,
+  amp = 0.1,
 ): void {
   let ear = startEar;
   let ti = 0;

@@ -6,11 +6,12 @@ Only titles with clear redistribution permission are included.
 | File | Type | Source / terms |
 |------|------|----------------|
 | `glazx48.tap` | TAP 48K | [GLAZX](https://github.com/EugenyN/GLAZX) — **MIT** |
+| `ay-beep128.sna` | SNA 128K | Project-made AY tone + border flash smoke |
 | `Homebrew.tap` | TAP 48K | Jonathan Cauldwell — freeware; author permits hosting |
 | `Egghead.tap` | TAP 48K | Jonathan Cauldwell — freeware; author permits hosting |
 | `EggheadInSpace.tap` | TAP 48K | Jonathan Cauldwell (Egghead 3) — freeware |
 | `pZXl.tap` + `pZXl.txt` | TAP 48K | [ParaZXland](https://massimiliano-arca.itch.io/parazxland) — free redistribution if unmodified + keep `pZXl.txt` |
-| `rainbow-demo.sna` | SNA 48K | Project-made smoke snapshot (attr rainbow loop @ `$8000`) |
+| `rainbow-demo.sna` | SNA 48K | Project smoke — bright paper-colour rainbow (attrs @ `$5800`, code @ `$8000`, DI) |
 
 ## How to try
 
@@ -26,6 +27,7 @@ Only titles with clear redistribution permission are included.
 | 48K SNA | `rainbow` |
 | 48K TAP + PAUSE | `pzxl` (ParaZXland) |
 | 48K TAP paint | `glazx` / Cauldwell titles |
+| 48K TAP IM 2 gameplay | `glazx` (HALT+IM2 frame IRQ — needs soft IM 2) |
 | 128K + 48 BASIC + TAP | Place 128 → 48 BASIC → `glazx` |
 | Worker (http) | `spectrum-worker.spec.ts` |
 | Beta TRD mount | synthetic `buildMinimalTrd` (sector stub — not full disk games) |

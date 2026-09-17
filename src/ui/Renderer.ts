@@ -3,10 +3,11 @@ import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import { decodeBusProbe } from '../sim/busProbe.js';
 import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from '../sim/library.js';
-import type { Component, Level, Pin, Point } from '../sim/types.js';
+import { hasSoftLabModel, isSoftLabEnabled } from '../sim/softLab.js';
+import type { Component, Level, Pin, Point, Wire } from '../sim/types.js';
 import type { Camera } from './Camera.js';
 import type { Editor } from './Editor.js';
-import { GRID, findWireCrossings, isBusName, pinExitDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
+import { GRID, BUS_SWITCH_BODY_W, busSwitchPaddleCenter, busSwitchSideUnit, findWireCrossings, isBusName, pinExitDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
 
 const COLOR = {
   bg: '#12141a',
@@ -76,10 +77,14 @@ export function componentRadius(c: Component): { rx: number; ry: number } {
       return { rx: 40, ry: Math.max(28, (c.channelCount * 16) / 2 + 20) };
     case 'busprobe':
       return { rx: 52, ry: Math.max(28, (c.bitWidth * 16) / 2 + 24) };
+    case 'busswitch':
+      return { rx: 60, ry: Math.max(28, (c.bitWidth * 16) / 2 + 24) };
     case 'tty':
       return { rx: 44, ry: 30 };
     case 'probe':
       return { rx: 24, ry: 34 };
+    case 'junction':
+      return { rx: 14, ry: 14 };
     case 'led':
       return { rx: 26, ry: 34 };
     case 'sevenseg':
@@ -216,6 +221,7 @@ export function draw(
 
   // Wires first, so component bodies sit on top of the lines meeting them.
   const routedWires: Point[][] = [];
+  const wireEntries: Array<{ w: Wire; points: Point[] }> = [];
   for (const w of circuit.wires.values()) {
     const a = pinById.get(w.a);
     const b = pinById.get(w.b);
@@ -223,6 +229,12 @@ export function draw(
     const raw = w.waypoints && w.waypoints.length ? [a.pos, ...w.waypoints, b.pos] : [a.pos, b.pos];
     const points = routeWirePoints(raw);
     routedWires.push(points);
+    wireEntries.push({ w, points });
+  }
+
+  // Group bundleId wires: draw a thicker shared trunk once, then fan to pins.
+  const bundleDrawn = new Set<string>();
+  for (const { w, points } of wireEntries) {
     if (!isWireVisible(points, visible)) continue;
     const { level, contended } = resolve(w.a);
     const netHit = netOf != null && glowNet != null && netOf.get(w.a) === glowNet;
@@ -238,11 +250,27 @@ export function draw(
               ? 'hover'
               : 'none';
     const netName = editor.formatNetName(nets.netOf.get(w.a) ?? null);
+    const a = pinById.get(w.a)!;
+    const b = pinById.get(w.b)!;
     const bus =
+      !!w.bundleId ||
       isBusName(netName) ||
       isBusName(a.name) ||
       isBusName(b.name) ||
       (netName?.includes('[') ?? false);
+
+    if (w.bundleId && !bundleDrawn.has(w.bundleId)) {
+      bundleDrawn.add(w.bundleId);
+      // Thicker trunk along the middle segment of the first bundled wire.
+      if (points.length >= 2) {
+        const midStart = Math.max(0, Math.floor((points.length - 1) / 2) - 1);
+        const midEnd = Math.min(points.length - 1, midStart + 2);
+        const trunk = points.slice(midStart, midEnd + 1);
+        if (trunk.length >= 2) {
+          drawWire(ctx, trunk, levelColor(level, contended), contended, 'none', true);
+        }
+      }
+    }
     drawWire(ctx, points, levelColor(level, contended), contended, emphasis, bus);
   }
 
@@ -691,6 +719,8 @@ export function formatPinLabel(name: string): string {
   if (data) return `D${data[1]}`;
   const ch = /^ch(\d+)$/i.exec(name);
   if (ch) return `CH${ch[1]}`;
+  const bit = /^b(\d+)$/i.exec(name);
+  if (bit) return `B${bit[1]}`;
   const known: Record<string, string> = {
     we: 'WE',
     oe: 'OE',
@@ -739,9 +769,44 @@ function drawChipMarking(
 }
 
 /**
- * Pin name just inside the body beside the pin. Offset is axis-aligned
- * toward the body center (not along the pin→center ray) so tall left/right
- * stacks keep labels level with each pin instead of sliding onto the pad.
+ * Classify which body edge a pin sits on for label placement.
+ * Tall left/right stacks put corner pins closer to the top/bottom edge than
+ * to the side — prefer the side the pin is actually beside (dx vs dy), not
+ * whichever body edge happens to be nearest in absolute distance.
+ */
+export function pinLabelEdge(
+  pin: Point,
+  cx: number,
+  cy: number,
+  bodyW: number,
+  _bodyH: number,
+): 'left' | 'right' | 'top' | 'bottom' {
+  const halfW = bodyW / 2;
+  const dx = pin.x - cx;
+  const dy = pin.y - cy;
+  const adx = Math.abs(dx);
+  const ady = Math.abs(dy);
+
+  // Stacked side pins (busprobe / analyzer / DIP): corner pins are still
+  // beside the left/right edge even when closer to the top/bottom of a short body.
+  if (adx >= Math.max(halfW * 0.35, ady * 0.35)) {
+    return dx <= 0 ? 'left' : 'right';
+  }
+
+  const halfH = _bodyH / 2;
+  const distL = Math.abs(cx - halfW - pin.x);
+  const distR = Math.abs(cx + halfW - pin.x);
+  const distT = Math.abs(cy - halfH - pin.y);
+  const distB = Math.abs(cy + halfH - pin.y);
+  const minH = Math.min(distL, distR);
+  const minV = Math.min(distT, distB);
+  if (minH <= minV) return distL <= distR ? 'left' : 'right';
+  return distT <= distB ? 'top' : 'bottom';
+}
+
+/**
+ * Pin name just inside the body beside the pin. Left/right labels always share
+ * the pin's Y with middle baseline so a stack reads as one column.
  */
 function drawBodyPinLabel(
   ctx: CanvasRenderingContext2D,
@@ -752,39 +817,28 @@ function drawBodyPinLabel(
   bodyW = CHIP_INSTANCE_WIDTH,
   bodyH?: number,
 ): void {
-  const halfW = bodyW / 2;
-  const halfH = bodyH != null ? bodyH / 2 : halfW;
-  const distL = Math.abs(cx - halfW - pin.pos.x);
-  const distR = Math.abs(cx + halfW - pin.pos.x);
-  const distT = Math.abs(cy - halfH - pin.pos.y);
-  const distB = Math.abs(cy + halfH - pin.pos.y);
-  const minH = Math.min(distL, distR);
-  const minV = Math.min(distT, distB);
+  const halfH = bodyH != null ? bodyH / 2 : bodyW / 2;
+  const h = halfH * 2;
+  const edge = pinLabelEdge(pin.pos, cx, cy, bodyW, h);
 
   const inset = 10;
   let lx = pin.pos.x;
   let ly = pin.pos.y;
   let align: CanvasTextAlign = 'center';
-  let baseline: CanvasTextBaseline = 'middle';
+  // Always middle — top/bottom baseline shifts glyphs and makes corner
+  // labels look crooked against a left/right stack.
+  const baseline: CanvasTextBaseline = 'middle';
 
-  if (minH <= minV) {
-    // Left / right edge — label sits inward on the same row as the pin.
-    if (distL <= distR) {
-      lx = pin.pos.x + inset;
-      align = 'left';
-    } else {
-      lx = pin.pos.x - inset;
-      align = 'right';
-    }
+  if (edge === 'left') {
+    lx = pin.pos.x + inset;
+    align = 'left';
+  } else if (edge === 'right') {
+    lx = pin.pos.x - inset;
+    align = 'right';
+  } else if (edge === 'top') {
+    ly = pin.pos.y + inset;
   } else {
-    // Top / bottom edge — label sits inward on the same column.
-    if (distT <= distB) {
-      ly = pin.pos.y + inset;
-      baseline = 'top';
-    } else {
-      ly = pin.pos.y - inset;
-      baseline = 'bottom';
-    }
+    ly = pin.pos.y - inset;
   }
 
   ctx.save();
@@ -1145,7 +1199,7 @@ function drawComponent(
     case 'analyzer': {
       const { x, y } = c.pos;
       const n = c.channelCount;
-      const h = Math.max(36, n * 16 + 12);
+      const h = Math.max(36, (n - 1) * 20 + 28);
       const w = 64;
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 6, ringColor);
       ctx.fillStyle = c.armed ? '#1a2430' : COLOR.body;
@@ -1172,7 +1226,8 @@ function drawComponent(
     case 'busprobe': {
       const { x, y } = c.pos;
       const n = c.bitWidth;
-      const h = Math.max(40, n * 16 + 16);
+      // Match analyzer pitch so body edges don't steal corner pins for labels.
+      const h = Math.max(40, (n - 1) * 20 + 28);
       const w = 78;
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 6, ringColor);
       ctx.fillStyle = '#161a22';
@@ -1209,6 +1264,82 @@ function drawComponent(
         const bin = decoded.bitsMsbFirst;
         const shown = bin.length > 12 ? `${bin.slice(0, 6)}…${bin.slice(-4)}` : bin;
         ctx.fillText(shown, x + 12, y + 16);
+      }
+      break;
+    }
+    case 'busswitch': {
+      const { x, y } = c.pos;
+      const n = c.bitWidth;
+      const h = Math.max(44, (n - 1) * 20 + 28);
+      const w = BUS_SWITCH_BODY_W;
+      if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 5, ringColor);
+      // Package
+      ctx.fillStyle = '#181c14';
+      roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 5);
+      ctx.fill();
+      ctx.strokeStyle = bodyStroke('#6a9a5a');
+      ctx.lineWidth = selected || hovered ? 2 : 1.25;
+      ctx.stroke();
+
+      // Left readout strip (clear of paddles)
+      const levels = Array.from({ length: n }, (_, i) => ({
+        level: (((c.value >> i) & 1) as 0 | 1),
+        contended: false,
+      }));
+      const decoded = decodeBusProbe(levels, c.radix);
+      const prefix = c.radix === 'hex' ? '0x' : c.radix === 'bin' ? '0b' : '';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = COLOR.textDim;
+      ctx.font = '9px ui-monospace, "SF Mono", monospace';
+      ctx.fillText(c.label?.trim() || `DIP${n}`, x - w / 2 + 22, y - 10);
+      ctx.fillStyle = COLOR.selected;
+      ctx.font = '12px ui-monospace, "SF Mono", monospace';
+      ctx.fillText(`${prefix}${decoded.text}`, x - w / 2 + 22, y + 6);
+
+      // Vertical divider between readout and DIP bank
+      ctx.strokeStyle = '#2e3828';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x - 8, y - h / 2 + 6);
+      ctx.lineTo(x - 8, y + h / 2 - 6);
+      ctx.stroke();
+
+      // Always stub onto the pin-bank side (not top/bottom for end bits).
+      const side = busSwitchSideUnit(c);
+      const hw = w / 2;
+      const hh = h / 2;
+      for (let i = 0; i < n; i++) {
+        const p = c.pins[`b${i}`];
+        if (!p) continue;
+        let ex: number;
+        let ey: number;
+        if (Math.abs(side.x) >= Math.abs(side.y)) {
+          ex = side.x >= 0 ? x + hw : x - hw;
+          ey = Math.max(y - hh, Math.min(y + hh, p.pos.y));
+        } else {
+          ex = Math.max(x - hw, Math.min(x + hw, p.pos.x));
+          ey = side.y >= 0 ? y + hh : y - hh;
+        }
+        stub(ex, ey, p);
+        drawPinDot(ctx, p, resolve);
+        drawBodyPinLabel(ctx, p, x, y, String(i), w, h);
+
+        const pad = busSwitchPaddleCenter(c, i);
+        if (!pad) continue;
+        const on = ((c.value >> i) & 1) === 1;
+        const slotW = 10;
+        const slotH = 14;
+        ctx.fillStyle = '#0c0e0a';
+        roundRectPath(ctx, pad.x - slotW / 2, pad.y - slotH / 2, slotW, slotH, 2);
+        ctx.fill();
+        ctx.strokeStyle = '#3d4a34';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        const ky = pad.y + (on ? -3.5 : 3.5);
+        ctx.fillStyle = on ? '#8fd46a' : '#5a6270';
+        roundRectPath(ctx, pad.x - 4, ky - 3.5, 8, 7, 1.5);
+        ctx.fill();
       }
       break;
     }
@@ -1355,6 +1486,18 @@ function drawComponent(
       ctx.fillText(c.name, x, y - 12);
       break;
     }
+    case 'junction': {
+      const { x, y } = c.pos;
+      const { level, contended } = resolve(c.pins.net.id);
+      const fill = levelColor(level, contended);
+      const s = selected || hovered ? 5 : 3.5;
+      ctx.fillStyle = fill;
+      ctx.fillRect(x - s, y - s, s * 2, s * 2);
+      ctx.strokeStyle = selected ? COLOR.selected : hovered ? COLOR.hover : '#1a1c22';
+      ctx.lineWidth = selected || hovered ? 1.5 : 1;
+      ctx.strokeRect(x - s, y - s, s * 2, s * 2);
+      break;
+    }
     case 'port': {
       const { x, y } = c.pos;
       const s = 8;
@@ -1426,6 +1569,41 @@ function drawComponent(
       const name =
         c.marking?.trim() || (library.has(c.defId) ? library.get(c.defId).name : '?');
       drawChipMarking(ctx, x, y, w, h, name);
+      if (isSoftLabEnabled() && library.has(c.defId) && hasSoftLabModel(library.get(c.defId).name)) {
+        ctx.save();
+        ctx.font = 'bold 8px ui-monospace, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        const badge = 'SOFT';
+        const tw = ctx.measureText(badge).width;
+        const bx = x - w / 2 + 4;
+        const by = y - h / 2 + 4;
+        ctx.fillStyle = 'rgba(40, 28, 12, 0.9)';
+        ctx.strokeStyle = '#e6a23c';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.rect(bx, by, tw + 6, 11);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#e6a23c';
+        ctx.fillText(badge, bx + 3, by + 1);
+        ctx.restore();
+        // Sequential Soft Lab value under marking (skip combinatorial q.length===0).
+        if (c.softState && c.softState.q.length > 0) {
+          let v = 0;
+          for (let i = 0; i < c.softState.q.length; i++) v |= (c.softState.q[i]! & 1) << i;
+          const hex = `0x${v.toString(16).toUpperCase()}`;
+          ctx.save();
+          ctx.fillStyle = '#e6a23c';
+          ctx.font = '9px ui-monospace, monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.translate(x, y);
+          if (h > w) ctx.rotate(-Math.PI / 2);
+          ctx.fillText(hex, 0, 12);
+          ctx.restore();
+        }
+      }
       // Shared ChipDef was edited after this instance was placed / last dived.
       if (library.has(c.defId)) {
         const rev = library.get(c.defId).revision ?? 0;

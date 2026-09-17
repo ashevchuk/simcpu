@@ -49,4 +49,45 @@ describe('edit history + clipboard', () => {
     expect(ed.pasteClipboard()).toBe(true);
     expect(c.components.size).toBe(2);
   });
+
+  it('skips pasting chips whose defId was wiped from the library', () => {
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    // Simulate clipboard captured before a Lab-course project reload.
+    (ed as unknown as { clipboard: { components: unknown[]; wires: unknown[] } }).clipboard = {
+      components: [
+        {
+          id: 'chip1',
+          kind: 'chip',
+          defId: 'chipdef1702629',
+          defRevision: 0,
+          pos: { x: 0, y: 0 },
+          rotation: 0,
+          mirrorX: false,
+          mirrorY: false,
+          pinOrder: [],
+          pins: {},
+        },
+        {
+          id: 't1',
+          kind: 'transistor',
+          type: 'N',
+          pos: { x: 20, y: 0 },
+          rotation: 0,
+          mirrorX: false,
+          mirrorY: false,
+          pins: {
+            gate: { id: 't1:gate', componentId: 't1', name: 'gate', pos: { x: 0, y: 0 } },
+            drain: { id: 't1:drain', componentId: 't1', name: 'drain', pos: { x: 0, y: 0 } },
+            source: { id: 't1:source', componentId: 't1', name: 'source', pos: { x: 0, y: 0 } },
+          },
+        },
+      ],
+      wires: [],
+    };
+    expect(ed.pasteClipboard()).toBe(true);
+    expect([...c.components.values()].some((x) => x.kind === 'chip')).toBe(false);
+    expect([...c.components.values()].some((x) => x.kind === 'transistor')).toBe(true);
+  });
 });

@@ -679,9 +679,12 @@ export class MachineRunner {
    * engine (ROM @0000, clear tape/AY/beta) instead of creating an orphan
    * SoftZ80 that tickBudget would discard.
    */
+  onReboot: (() => void) | null = null;
+
   reboot(): void {
     const wasRunning = this.running;
     this.running = false;
+    this.onReboot?.();
 
     if (this.spectrumHost) {
       const model = this.spectrumMmu?.model ?? this.spectrumHost.engine.mmu.model ?? '48';
@@ -811,7 +814,10 @@ export class MachineRunner {
         }
         if (this.spectrum) {
           this.spectrumFrameCounter++;
-          const tStates = Math.min(200_000, 69888 * Math.max(1, this.spectrumTurbo));
+          const tStates = Math.min(
+            200_000,
+            Math.floor(69888 * Math.max(1, this.spectrumTurbo)),
+          );
           this.ayAudio.playFrame(tStates, this.spectrum.beeperSegments());
         }
         if (this.soft.halted && !this.spectrum) this.running = false;

@@ -23,6 +23,7 @@
 import { ChipLibrary, type ChipDef } from './ChipLibrary.js';
 import { bumpStructureVersion, Circuit, nextId, noteUsedId } from './Circuit.js';
 import { applyPinLayout, isOrientable } from './orientation.js';
+import { isStdcellName } from './stdcells.js';
 import type {
   ChipInstanceComponent,
   ClockComponent,
@@ -41,7 +42,9 @@ type SerializedComponent =
   | (Omit<RomComponent, 'bytes'> & { bytes: number[] });
 
 function toSerializedComponent(c: Component): SerializedComponent {
-  return c.kind === 'ram' || c.kind === 'rom' ? { ...c, bytes: Array.from(c.bytes) } : c;
+  if (c.kind === 'ram' || c.kind === 'rom') return { ...c, bytes: Array.from(c.bytes) };
+  // Shallow clone so slim-lab annotate (defName) cannot mutate live instances.
+  return { ...c } as SerializedComponent;
 }
 
 function fromSerializedComponent(c: SerializedComponent): Component {
@@ -109,6 +112,19 @@ function fromSerializedComponent(c: SerializedComponent): Component {
     };
     applyPinLayout(clock);
     return clock;
+  }
+  if (c.kind === 'analyzer') {
+    const raw = c as import('./types.js').AnalyzerComponent;
+    const n = raw.channelCount;
+    return {
+      ...raw,
+      triggerChannel: raw.triggerChannel ?? null,
+      triggerEdge: raw.triggerEdge ?? 'rise',
+      channelLabels:
+        raw.channelLabels?.length === n
+          ? raw.channelLabels
+          : Array.from({ length: n }, (_, i) => raw.channelLabels?.[i] || `ch${i}`),
+    };
   }
   const comp = c as Component;
   if (isOrientable(comp)) {
@@ -212,15 +228,18 @@ export function serializeProject(topCircuit: Circuit, library: ChipLibrary): Ser
 
 function loadCircuit(data: SerializedCircuit): Circuit {
   const circuit = new Circuit();
+  // Clone every component/wire so bundled example JSON (Vite imports) and
+  // autosave payloads are never live-mutated by applyPinLayout / edits.
   for (const sc of data.components) {
-    const c = fromSerializedComponent(sc);
+    const c = fromSerializedComponent(structuredClone(sc));
     circuit.addComponent(c);
     noteUsedId(c.id);
     for (const p of Object.values(c.pins) as Pin[]) noteUsedId(p.id);
   }
   for (const w of data.wires) {
-    circuit.addRawWire(w);
-    noteUsedId(w.id);
+    const wire = structuredClone(w);
+    circuit.addRawWire(wire);
+    noteUsedId(wire.id);
   }
   return circuit;
 }
@@ -240,6 +259,73 @@ export function deserializeProject(data: SerializedProject): { topCircuit: Circu
   }
   const topCircuit = loadCircuit(data.topCircuit);
   return { topCircuit, library };
+}
+
+/**
+ * After seedStandardCells: rebind chip instances whose defId is missing (slim
+ * lab JSON) to the seeded library def with the same name (defName / marking).
+ * Walks `circuit` and every chip-def body in `library`.
+ */
+export function resolveStdcellInstances(circuit: Circuit, library: ChipLibrary): number {
+  let n = 0;
+  const visit = (c: Circuit): void => {
+    for (const comp of c.components.values()) {
+      if (comp.kind !== 'chip') continue;
+      if (library.has(comp.defId)) {
+        if (comp.defName) delete comp.defName;
+        continue;
+      }
+      const name = comp.defName?.trim() || comp.marking?.trim();
+      if (!name) continue;
+      const seeded = library.findByName(name);
+      if (!seeded) continue;
+      comp.defId = seeded.id;
+      comp.defRevision = seeded.revision ?? 0;
+      delete comp.defName;
+      n++;
+    }
+  };
+  visit(circuit);
+  for (const def of library.list()) visit(def.circuit);
+  return n;
+}
+
+/**
+ * Project JSON with stdcell/labcell bodies omitted — instances carry `defName`
+ * so resolveStdcellInstances can rebind after seedStandardCells on load.
+ * Keeps non-stdcell (user) defs and annotates nested stdcell refs inside them.
+ */
+export function serializeSlimStdcells(topCircuit: Circuit, library: ChipLibrary): SerializedProject {
+  const full = serializeProject(topCircuit, library);
+  const nameById = new Map<string, string>();
+  for (const def of library.list()) nameById.set(def.id, def.name);
+
+  const annotate = (sc: SerializedCircuit): void => {
+    for (const c of sc.components) {
+      if (c.kind !== 'chip') continue;
+      const chip = c as ChipInstanceComponent;
+      const name = nameById.get(chip.defId);
+      if (name && isStdcellName(name)) chip.defName = name;
+    }
+  };
+  annotate(full.topCircuit);
+  for (const d of full.chipDefs) annotate(d.circuit);
+
+  const used = new Set<string>();
+  const visitCircuit = (circuit: Circuit): void => {
+    for (const c of circuit.components.values()) {
+      if (c.kind !== 'chip') continue;
+      if (used.has(c.defId)) continue;
+      used.add(c.defId);
+      visitCircuit(library.get(c.defId).circuit);
+    }
+  };
+  visitCircuit(topCircuit);
+
+  return {
+    ...full,
+    chipDefs: full.chipDefs.filter((d) => used.has(d.id) && !isStdcellName(d.name)),
+  };
 }
 
 // --- Single chip def export/import (merges into the running session) ---
@@ -269,9 +355,11 @@ const ID_PREFIX: Record<Component['kind'], string> = {
   clock: 'clk',
   analyzer: 'la',
   busprobe: 'bus',
+  busswitch: 'bsw',
   tty: 'tty',
   probe: 'probe',
   label: 'lbl',
+  junction: 'junc',
   port: 'port',
   chip: 'chip',
   ram: 'ram',

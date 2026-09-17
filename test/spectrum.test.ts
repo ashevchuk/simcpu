@@ -121,4 +121,51 @@ describe('soft ZX Spectrum 48K', () => {
     // After init, PC usually in ROM interrupt/BASIC loop or HALT
     expect(cpu.pc).toBeLessThan(0x4000);
   }, 30000);
+
+  it('accepts IM 2 IRQ via I/bus vector (Spectrum 0xFF)', async () => {
+    const { softAcceptIrq } = await import('../src/machine/softZ80.js');
+    const ram = new Uint8Array(0x10000);
+    const ula = new SpectrumUla();
+    const cpu = createSoftZ80(0xffff);
+    cpu.im = 2;
+    cpu.i = 0xfe;
+    cpu.iff1 = true;
+    cpu.iff2 = true;
+    cpu.halted = true;
+    cpu.pc = 0x8000;
+    cpu.sp = 0xfffd;
+    // Vector table entry at FEFF → handler $9000
+    ram[0xfeff] = 0x00;
+    ram[0xff00] = 0x90;
+    ram[0x9000] = 0x00; // NOP
+    ula.pulseFrameIrq();
+    expect(
+      softAcceptIrq(cpu, ram, {
+        irqPending: () => ula.irqPending,
+        clearIrq: () => ula.clearIrq(),
+      }),
+    ).toBe(true);
+    expect(cpu.halted).toBe(false);
+    expect(cpu.pc).toBe(0x9000);
+    expect(cpu.iff1).toBe(false);
+    expect(ula.irqPending).toBe(false);
+    expect(cpu.sp).toBe(0xfffb);
+    expect(ram[cpu.sp]! | (ram[(cpu.sp + 1) & 0xffff]! << 8)).toBe(0x8000);
+  });
+
+  it('ay-beep 128K SNA loads and drives AY after a few frames', async () => {
+    const { SpectrumEngine } = await import('../src/machine/spectrum/engine.js');
+    const { decodeSpectrumGame, findSpectrumGame } = await import('../src/machine/spectrum/gamesData.js');
+    const entry = findSpectrumGame('ay-beep');
+    expect(entry?.model).toBe('128');
+    const eng = new SpectrumEngine();
+    eng.loadSna(decodeSpectrumGame(entry!));
+    eng.running = true;
+    expect(eng.mmu.model).toBe('128');
+    expect(eng.cpu.pc & 0xffff).toBe(0x8000);
+    for (let i = 0; i < 40; i++) eng.tickFrame(false);
+    // Mixer / vol programmed by the demo loop
+    expect(eng.ay.regs[7]! & 0xff).toBe(0x38);
+    expect(eng.ay.regs[8]! & 0x0f).toBeGreaterThan(0);
+  });
 });

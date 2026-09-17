@@ -366,6 +366,25 @@
         background: transparent;
         border-color: var(--border);
       }
+      #sim-soft-lab.active {
+        background: var(--accent, #f5c518);
+        color: #14161d;
+        border-color: #c9a312;
+      }
+      .la-trig {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font: 11px ui-monospace, monospace;
+        color: var(--text-dim);
+      }
+      .la-trig select {
+        background: #191c25;
+        color: #e7e9ef;
+        border: 1px solid #333a48;
+        border-radius: 4px;
+        font: 11px ui-monospace, monospace;
+      }
 
       .watch-list-toolbar {
         display: flex;
@@ -997,6 +1016,65 @@
         background: rgba(10, 12, 16, 0.72);
       }
       .spec-computer-placeholder[hidden] { display: none !important; }
+      .spec-pause-tip {
+        position: absolute;
+        left: 50%;
+        bottom: 14px;
+        transform: translateX(-50%);
+        z-index: 2;
+        max-width: 92%;
+        padding: 5px 10px;
+        border-radius: 4px;
+        background: rgba(28, 24, 10, 0.92);
+        border: 1px solid var(--accent);
+        color: var(--accent);
+        font: 600 11px ui-monospace, monospace;
+        text-align: center;
+        pointer-events: none;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+      }
+      .spec-pause-tip[hidden] { display: none !important; }
+      .spec-focus-tip {
+        position: absolute;
+        left: 50%;
+        top: 14px;
+        transform: translateX(-50%);
+        z-index: 2;
+        max-width: 92%;
+        padding: 5px 10px;
+        border-radius: 4px;
+        background: rgba(12, 18, 28, 0.92);
+        border: 1px solid #5a7a9a;
+        color: #9ec3e8;
+        font: 600 11px ui-monospace, monospace;
+        text-align: center;
+        pointer-events: none;
+      }
+      .spec-focus-tip[hidden] { display: none !important; }
+      .spec-slots {
+        display: inline-flex;
+        gap: 3px;
+        margin-left: 6px;
+      }
+      .spec-slots button {
+        font: 600 10px ui-monospace, monospace;
+        padding: 2px 6px;
+        border-radius: 4px;
+        border: 1px solid #2e3648;
+        background: #1c2230;
+        color: #9aa3b5;
+        cursor: pointer;
+      }
+      .spec-slots button.is-filled {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .spec-health {
+        font: 10px/1.35 ui-monospace, monospace;
+        color: #7a8499;
+        padding: 2px 6px 4px;
+        border-top: 1px solid #1e2430;
+      }
       .spec-regs {
         margin: 0;
         padding: 4px 6px;
@@ -1050,10 +1128,28 @@
       }
       .spec-joy-up { grid-column: 2; grid-row: 1; }
       .spec-joy-left { grid-column: 1; grid-row: 2; }
-      .spec-joy-fire { grid-column: 2; grid-row: 2; font-size: 9px; }
+      .spec-joy-fire {
+        grid-column: 2;
+        grid-row: 2;
+        font-size: 8px;
+        letter-spacing: 0.02em;
+        text-align: center;
+      }
       .spec-joy-right { grid-column: 3; grid-row: 2; }
       .spec-joy-down { grid-column: 2; grid-row: 3; }
       .spec-joy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0;
+        line-height: 1;
+        font: inherit;
+        -webkit-appearance: none;
+        appearance: none;
+        text-align: center;
+        vertical-align: middle;
+        box-sizing: border-box;
         border: 1px solid #2e3648;
         border-radius: 6px;
         background: linear-gradient(180deg, #3a4558 0%, #2a3344 100%);
@@ -1285,8 +1381,8 @@
             <button type="button" class="menu-item" data-tool="led" data-key="e" title="Place an LED indicator (E)">
               LED<span class="kbd">E</span>
             </button>
-            <button type="button" class="menu-item" data-tool="sevenseg" title="Place a 7-segment display">
-              7-seg display
+            <button type="button" class="menu-item" data-tool="sevenseg" data-key="s" title="Place a 7-segment display (S)">
+              7-seg display<span class="kbd">S</span>
             </button>
             <button type="button" class="menu-item" data-tool="clock" data-key="k" title="Place a pulse generator — OUT + TRIG (K)">
               Pulse generator<span class="kbd">K</span>
@@ -1296,6 +1392,9 @@
             </button>
             <button type="button" class="menu-item" data-tool="busprobe" title="Place a multi-bit bus probe (hex/dec/bin decode)">
               Bus probe…
+            </button>
+            <button type="button" class="menu-item" data-tool="busswitch" title="Place a hex/DIP bus switch (writable multi-bit driver)">
+              Bus switch…
             </button>
             <button type="button" class="menu-item" data-tool="tty" title="Place a TTY / machine console instrument">
               TTY console
@@ -1367,7 +1466,9 @@
             </div>
             <div class="chip-palette-tags" role="group" aria-label="Filter by source">
               <button type="button" class="chip-tag-filter active" data-tag="all">All</button>
-              <button type="button" class="chip-tag-filter" data-tag="stdcell">Stdcell</button>
+              <button type="button" class="chip-tag-filter" data-tag="gates">Gates</button>
+              <button type="button" class="chip-tag-filter" data-tag="lab">Lab</button>
+              <button type="button" class="chip-tag-filter" data-tag="74xx">74xx</button>
               <button type="button" class="chip-tag-filter" data-tag="user">User</button>
             </div>
             <div id="chip-palette-list"><div class="menu-empty">No chips yet — fold a selection (Ctrl+G)</div></div>
@@ -1421,14 +1522,23 @@
             <button type="button" class="menu-item" id="help-cheatsheet" title="Keyboard shortcuts">
               Keyboard shortcuts…<span class="kbd">?</span>
             </button>
+            <button type="button" class="menu-item" id="help-lab-manual" title="Soft Lab guide with screenshots and course map">
+              Lab manual…
+            </button>
             <button type="button" class="menu-item" id="help-tutorial" title="In-canvas walkthrough: button → LED → wire → toggle">
               Tutorial…
             </button>
             <button type="button" class="menu-item" id="help-tutorial-latch" title="Load the D-latch walkthrough example">
               Tutorial (latch)…
             </button>
+            <button type="button" class="menu-item" id="help-tutorial-lab" title="Load Counter + 7-seg lab example">
+              Tutorial (lab counter)…
+            </button>
+            <button type="button" class="menu-item" id="help-lab-course" title="Guided Soft Lab curriculum ladder">
+              Lab course…
+            </button>
             <div class="menu-sep"></div>
-            <div class="menu-empty">Press ? anytime for the cheat sheet</div>
+            <div class="menu-empty">Lab manual… for Soft Lab docs · ? for shortcuts</div>
           </div>
         </div>
 
@@ -1441,6 +1551,7 @@
           <button type="button" id="sim-run" title="Run simulation / soft machine">Run</button>
           <button type="button" id="sim-pause" title="Pause simulation">Pause</button>
           <button type="button" id="sim-step" title="Step one sim tick (or one soft instruction)">Step</button>
+          <button type="button" id="sim-soft-lab" class="active" title="Toggle Soft Lab (behavioral eval for COUNTER/BCD/REG…)">Soft Lab</button>
           <span id="sim-mode-badge" data-mode="idle" title="Simulation mode">Idle</span>
           <div id="active-place-hint" hidden>
             <span class="tool-label" id="active-tool-name"></span>

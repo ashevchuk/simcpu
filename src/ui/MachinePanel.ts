@@ -29,7 +29,8 @@ import { loadHexAt, parseHex, parseHexBlob, runSoftCommand } from '../machine/so
 import { injectKey } from '../machine/tty.js';
 import { FloatingWindow } from './FloatingWindow.js';
 import { SpectrumKeyboard } from './SpectrumKeyboard.js';
-import { SpectrumJoystick } from './SpectrumJoystick.js';
+import { SpectrumJoystick, joyMatrixKeys } from './SpectrumJoystick.js';
+import { spectrumDemoHint } from './spectrumDemoHints.js';
 import { formatSpectrumRegs } from './spectrumRegs.js';
 import {
   decodeSpectrumGame,
@@ -107,6 +108,13 @@ export class MachinePanel {
   private cheatStorageKey = 'simcpu-spectrum-cheats';
   /** Optional: copy #sna= link (wired from main). */
   onCopySnaLink: (() => void) | null = null;
+  private pauseTipEl: HTMLElement | null = null;
+  private focusTipEl: HTMLElement | null = null;
+  private healthEl: HTMLElement | null = null;
+  private currentDemoId: string | null = null;
+  private readonly slotStorageKey = 'simcpu-spectrum-slots-v1';
+  private slotFilled = [false, false, false, false];
+  private lastHealthText = '';
 
   constructor() {
     this.win = new FloatingWindow('TTY', 'machine-panel');
@@ -202,7 +210,7 @@ JR spin</textarea>
           </div>
         </div>
         <pre class="machine-panel-out"></pre>
-        <div class="machine-panel-hint">Console: soft TTY / CP/M. Spectrum: SNA/Z80/TAP/TZX/SCR/TRD · Kempston/Cursor/Sinclair · BP/NMI.</div>
+        <div class="machine-panel-hint">Console: soft TTY / CP/M. Spectrum: SNA/Z80/TAP/TZX/SCR/TRD · Kempston/Cursor/Sinclair/WASD · TR-DOS* = Beta stub · BP/NMI.</div>
       </div>
       <div class="machine-panel-pane" data-pane="spectrum" hidden>
         <div class="spec-computer">
@@ -213,6 +221,12 @@ JR spin</textarea>
             <button type="button" class="spec-computer-png" data-act="save-scr-tab" title="Export .SCR">SCR</button>
             <button type="button" class="spec-computer-png" data-act="nmi" title="Soft NMI → $0066">NMI</button>
             <button type="button" class="spec-computer-png" data-act="step-over" title="Step over CALL/RST">Over</button>
+            <span class="spec-slots" title="Quick SNA slots (F6–F9 save with Shift, F6–F9 load)">
+              <button type="button" data-act="slot-1" data-slot="1" title="Slot 1 — click load · Shift+click save · F6">S1</button>
+              <button type="button" data-act="slot-2" data-slot="2" title="Slot 2 — F7">S2</button>
+              <button type="button" data-act="slot-3" data-slot="3" title="Slot 3 — F8">S3</button>
+              <button type="button" data-act="slot-4" data-slot="4" title="Slot 4 — F9">S4</button>
+            </span>
           </div>
           <div class="spec-media" title="Load images / demos without leaving Spectrum tab">
             <button type="button" data-act="sna-tab" title="Load 48K or 128K .SNA">.SNA</button>
@@ -228,11 +242,14 @@ JR spin</textarea>
             </label>
             <button type="button" data-act="load-game-tab" title="Load selected bundled demo">Load</button>
             <button type="button" data-act="spectrum-48basic-tab" title="128K: page 48 BASIC ROM">48 BASIC</button>
-            <button type="button" data-act="trdos-boot-tab" title="Boot TR-DOS">TR-DOS</button>
+            <button type="button" data-act="trdos-boot-tab" title="Boot TR-DOS (Beta sector stub — not full WD1793)">TR-DOS*</button>
+            <button type="button" data-act="save-z80-tab" title="Save current Spectrum as .Z80 v3">.Z80↓</button>
             <button type="button" data-act="copy-sna-link-tab" title="Copy #sna= share link">#sna=</button>
           </div>
           <div class="spec-computer-screen-wrap">
             <canvas class="machine-panel-canvas spec-computer-screen" data-canvas="spec" tabindex="0" title="Spectrum display — click then type, or use keys below"></canvas>
+            <div class="spec-pause-tip" data-spec-pause-tip hidden>Hold Space (or any key) — BASIC PAUSE / press-any-key</div>
+            <div class="spec-focus-tip" data-spec-focus-tip hidden>Click the screen — editor keys steal WASD / arrows</div>
             <div class="spec-computer-placeholder">Place Spectrum, or load .SNA / .TAP / Demo above</div>
           </div>
           <div class="spec-computer-controls">
@@ -251,11 +268,23 @@ JR spin</textarea>
             <label>Poke $<input data-act="poke-addr" spellcheck="false" value="0000" size="4" /></label>
             <label>=$<input data-act="poke-val" spellcheck="false" value="00" size="2" /></label>
             <button type="button" data-act="poke-go" title="Write byte">Poke</button>
+            <label class="spec-preset-label">Preset
+              <select data-act="poke-preset" title="Quick poke / NMI helpers">
+                <option value="">—</option>
+                <option value="nmi">NMI ($0066)</option>
+                <option value="border0">Border black</option>
+                <option value="border7">Border white</option>
+                <option value="ei">Force EI (soft)</option>
+                <option value="di">Force DI (soft)</option>
+              </select>
+            </label>
+            <button type="button" data-act="poke-preset-go" title="Run selected preset">Go</button>
             <button type="button" data-act="cheat-add" title="Add poke to session cheats">+Cheat</button>
             <button type="button" data-act="cheat-apply" title="Apply all session cheats">Apply cheats</button>
             <select data-act="cheat-list" title="Session cheats"></select>
             <button type="button" data-act="cheat-del" title="Remove selected cheat">Del</button>
           </div>
+          <div class="spec-health" data-spec-health>—</div>
           <div class="spec-tape">
             <span class="spec-tape-label">Tape</span>
             <select data-act="tape-pos" title="Tape block position" disabled>
@@ -289,6 +318,9 @@ JR spin</textarea>
     this.gameSel = this.root.querySelector('[data-act="game"]')!;
     this.gameSelTab = this.root.querySelector('[data-act="game-tab"]')!;
     this.regsEl = this.root.querySelector('[data-spec-regs]')!;
+    this.pauseTipEl = this.root.querySelector('[data-spec-pause-tip]');
+    this.focusTipEl = this.root.querySelector('[data-spec-focus-tip]');
+    this.healthEl = this.root.querySelector('[data-spec-health]');
     this.watchInput = this.root.querySelector('[data-act="watch"]')!;
     this.bpInput = this.root.querySelector('[data-act="bp"]')!;
     this.tapeSel = this.root.querySelector('[data-act="tape-pos"]')!;
@@ -415,7 +447,7 @@ JR spin</textarea>
         this.runner?.bootSpectrumTrdos();
         this.setTab('spectrum');
         this.log(
-          'Boot TR-DOS — ROM paged @0000. Mount .TRD for Beta sector I/O (seek/read/write); not cycle-exact WD1793.',
+          'Boot TR-DOS* — ROM paged @0000. Soft Beta: sector R/W + seek (not full WD1793 timing). Mount .TRD for I/O.',
         );
         this.draw();
         this.refreshControls();
@@ -447,6 +479,7 @@ JR spin</textarea>
     this.root.querySelector('[data-act="z80-tab"]')!.addEventListener('click', clickFile('z80'));
     this.root.querySelector('[data-act="save-sna"]')!.addEventListener('click', () => this.doSaveSna());
     this.root.querySelector('[data-act="save-z80"]')!.addEventListener('click', () => this.doSaveZ80());
+    this.root.querySelector('[data-act="save-z80-tab"]')!.addEventListener('click', () => this.doSaveZ80());
     this.root.querySelector('[data-act="save-png"]')!.addEventListener('click', () => this.doSavePng());
     this.root.querySelector('[data-act="save-png-tab"]')!.addEventListener('click', () => this.doSavePng());
     this.root.querySelector('[data-act="save-scr"]')!.addEventListener('click', () => this.doSaveScr());
@@ -533,6 +566,16 @@ JR spin</textarea>
       this.saveSessionCheats();
       this.refreshCheatList();
     });
+    this.root.querySelector('[data-act="poke-preset-go"]')!.addEventListener('click', () => this.runPokePreset());
+    for (const btn of Array.from(this.root.querySelectorAll<HTMLButtonElement>('[data-slot]'))) {
+      btn.addEventListener('click', (e) => {
+        const n = Number(btn.dataset.slot);
+        if (!n) return;
+        if (e.shiftKey) void this.saveSlot(n);
+        else void this.loadSlot(n);
+      });
+    }
+    this.refreshSlotButtons();
     this.root.querySelector('[data-act="tape-pause"]')!.addEventListener('click', () => {
       const on = !this.runner?.tapePaused;
       this.runner?.setTapePaused(!!on);
@@ -984,6 +1027,8 @@ JR spin</textarea>
 
   private async applyDemoGame(entry: SpectrumGameEntry): Promise<void> {
     const buf = decodeSpectrumGame(entry);
+    this.currentDemoId = entry.id;
+    this.applyDemoControlHints(entry.id);
     if (entry.kind === 'sna') {
       const { pc, border, model, port7ffd } = this.runner!.loadSpectrumSna(buf);
       this.win.setTitle('TTY', `ZX Spectrum ${model} · ${entry.title}`);
@@ -993,6 +1038,7 @@ JR spin</textarea>
           ' — Soft Run',
       );
       this.setTab('spectrum');
+      this.focusSpectrumCanvas();
       this.draw();
       this.refreshControls();
       return;
@@ -1000,14 +1046,13 @@ JR spin</textarea>
 
     // TAP demos: prefer entry.model or 48K BASIC so LOAD "" works
     const wantModel = entry.model ?? '48';
-    const wasCold = !this.runner!.isSpectrum;
-    const prevModel = this.runner!.spectrumModel;
     this.runner!.ensureSpectrumSoft(wantModel);
-    const { blocks, cold } = this.runner!.mountSpectrumTap(buf);
+    const { blocks } = this.runner!.mountSpectrumTap(buf);
     this.win.setTitle('TTY', `ZX Spectrum · ${entry.title}`);
     this.log(`Demo TAP ${entry.file}: ${blocks} block(s). Auto LOAD ""…`);
     this.runner!.setRunning(true);
     this.setTab('spectrum');
+    this.focusSpectrumCanvas();
     this.draw();
     this.refreshControls();
     this.refreshTapeUi(true);
@@ -1015,6 +1060,22 @@ JR spin</textarea>
     // soft-booted (wasCold=false) but still in early ROM init — typing LOAD ""
     // too early leaves the tape at block 0 (ParaZXland never reaches PAUSE).
     void this.autoTypeLoadEmpty(true);
+  }
+
+  private applyDemoControlHints(demoId: string): void {
+    const hint = spectrumDemoHint(demoId);
+    this.specJoy.setMode(hint.joyMode);
+    this.specJoy.setHint(hint.padHint);
+  }
+
+  /** Prefer Spectrum canvas so browser / global keys hit the ULA, not the editor. */
+  focusSpectrumCanvas(): void {
+    this.setTab('spectrum');
+    try {
+      this.specCanvas.focus({ preventScroll: true });
+    } catch {
+      this.specCanvas.focus();
+    }
   }
 
   /** Wait for BASIC input loop, type LOAD ""; retry once if tape never advances. */
@@ -1044,16 +1105,24 @@ JR spin</textarea>
     this.log(ready ? 'Typing LOAD ""…' : 'Typing LOAD "" (BASIC wait timed out)…');
     await this.specKbd.typeLoadEmpty();
     this.draw();
+    this.focusSpectrumCanvas();
     // Under heavy UI/CDP load, short key pulses can miss frames — retry once.
     const advanced = await this.waitTapeAdvanced(tapeBefore, 3_500);
-    if (advanced || !this.runner?.isSpectrum || !this.win.visible) return;
-    if (this.runner.spectrumTapePos > tapeBefore) return;
+    if (advanced || !this.runner?.isSpectrum || !this.win.visible) {
+      this.focusSpectrumCanvas();
+      return;
+    }
+    if (this.runner.spectrumTapePos > tapeBefore) {
+      this.focusSpectrumCanvas();
+      return;
+    }
     this.log('LOAD "" did not start — retrying…');
     this.specKbd.clearAll();
     this.runner.setRunning(true);
     await sleepMs(400);
     await this.specKbd.typeLoadEmpty();
     this.draw();
+    this.focusSpectrumCanvas();
   }
 
   private async waitTapeAdvanced(before: number, timeoutMs: number): Promise<boolean> {
@@ -1183,6 +1252,122 @@ JR spin</textarea>
     } catch (e) {
       this.log(`! ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  private runPokePreset(): void {
+    if (!this.runner?.isSpectrum) {
+      this.log('! Preset needs an active Spectrum session');
+      return;
+    }
+    const sel = this.root.querySelector('[data-act="poke-preset"]') as HTMLSelectElement | null;
+    const v = sel?.value ?? '';
+    if (!v) {
+      this.log('! Pick a preset first');
+      return;
+    }
+    if (v === 'nmi') {
+      this.doNmi();
+      return;
+    }
+    if (v === 'border0' || v === 'border7') {
+      const border = v === 'border0' ? 0 : 7;
+      if (this.runner.spectrum) this.runner.spectrum.border = border;
+      this.log(`Border → ${border}`);
+      this.draw();
+      return;
+    }
+    const cpu = this.runner.softCpu;
+    if (v === 'ei' && cpu) {
+      cpu.iff1 = true;
+      cpu.iff2 = true;
+      cpu.eiDelay = 0;
+      this.log('Soft EI (IFF=11)');
+      this.refreshSpectrumRegs();
+      return;
+    }
+    if (v === 'di' && cpu) {
+      cpu.iff1 = false;
+      cpu.iff2 = false;
+      cpu.eiDelay = 0;
+      this.log('Soft DI (IFF=00)');
+      this.refreshSpectrumRegs();
+      return;
+    }
+  }
+
+  private slotKey(n: number): string {
+    return `${this.slotStorageKey}:${n}`;
+  }
+
+  private refreshSlotButtons(): void {
+    for (let i = 1; i <= 4; i++) {
+      let filled = false;
+      try {
+        filled = !!sessionStorage.getItem(this.slotKey(i));
+      } catch {
+        filled = false;
+      }
+      this.slotFilled[i - 1] = filled;
+      const btn = this.root.querySelector(`[data-slot="${i}"]`);
+      btn?.classList.toggle('is-filled', filled);
+      if (btn) btn.setAttribute('title', filled ? `Slot ${i} — click load · Shift+click overwrite` : `Slot ${i} empty — Shift+click save`);
+    }
+  }
+
+  private async saveSlot(n: number): Promise<void> {
+    if (!this.runner?.isSpectrum || n < 1 || n > 4) return;
+    try {
+      const data = await this.runner.saveSpectrumSna();
+      let s = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < data.length; i += chunk) {
+        s += String.fromCharCode(...data.subarray(i, i + chunk));
+      }
+      sessionStorage.setItem(this.slotKey(n), btoa(s));
+      this.refreshSlotButtons();
+      this.log(`Slot ${n} saved (${data.length}B SNA)`);
+    } catch (e) {
+      this.log(`! Slot ${n} save: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  private async loadSlot(n: number): Promise<void> {
+    if (!this.runner?.isSpectrum || n < 1 || n > 4) return;
+    let b64: string | null = null;
+    try {
+      b64 = sessionStorage.getItem(this.slotKey(n));
+    } catch {
+      b64 = null;
+    }
+    if (!b64) {
+      this.log(`! Slot ${n} empty — Shift+click S${n} to save`);
+      return;
+    }
+    try {
+      const bin = atob(b64);
+      const data = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+      const { pc, model } = this.runner.loadSpectrumSna(data);
+      this.log(`Slot ${n} loaded (${model}K) PC=${pc.toString(16).padStart(4, '0')}`);
+      this.setTab('spectrum');
+      this.focusSpectrumCanvas();
+      this.draw();
+      this.refreshControls();
+    } catch (e) {
+      this.log(`! Slot ${n} load: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** F6–F9 load slots; Shift+F6–F9 save. */
+  handleSlotHotkey(e: KeyboardEvent): boolean {
+    if (!this.runner?.isSpectrum || !this.win.visible) return false;
+    const map: Record<string, number> = { F6: 1, F7: 2, F8: 3, F9: 4 };
+    const n = map[e.key];
+    if (!n) return false;
+    e.preventDefault();
+    if (e.shiftKey) void this.saveSlot(n);
+    else void this.loadSlot(n);
+    return true;
   }
 
   /** Boot soft Spectrum when 64K RAM is already attached (Place Spectrum / menu). */
@@ -1323,7 +1508,7 @@ JR spin</textarea>
     this.root.classList.toggle('machine-panel--spectrum', spec);
     const model = this.runner?.spectrumModel;
     if (model) {
-      const trdos = this.runner?.spectrumMmu?.trdosPaged ? ' · TR-DOS flag' : '';
+      const trdos = this.runner?.spectrumMmu?.trdosPaged ? ' · TR-DOS* (Beta stub)' : '';
       this.specModelEl.textContent = `${model}K soft${trdos}`;
     } else {
       this.specModelEl.textContent = '48K / 128K soft';
@@ -1388,6 +1573,8 @@ JR spin</textarea>
         : false;
     if (drawSpec) this.drawSpectrum();
     this.refreshSpectrumRegs();
+    this.updateFocusTip();
+    this.updateHealthLine();
     this.refreshTapeUi(false);
     if (this.runner?.isSoft && this.runner.attached) {
       const soft = this.runner.softCpu;
@@ -1548,6 +1735,60 @@ JR spin</textarea>
     if (text === this.lastRegsText) return;
     this.lastRegsText = text;
     this.regsEl.textContent = text;
+    this.updatePauseTip();
+    this.updateFocusTip();
+    this.updateHealthLine();
+  }
+
+  /** Show tip when ROM PAUSE ($1F3E) / press-any-key with IFF on. */
+  private updatePauseTip(): void {
+    if (!this.pauseTipEl) return;
+    const cpu = this.runner?.softCpu;
+    const show =
+      !!this.runner?.isSpectrum &&
+      !!cpu &&
+      cpu.iff1 &&
+      (cpu.pc & 0xffff) >= 0x1f3d &&
+      (cpu.pc & 0xffff) <= 0x1f4f;
+    this.pauseTipEl.hidden = !show;
+  }
+
+  private updateFocusTip(): void {
+    if (!this.focusTipEl) return;
+    const spec =
+      !!this.runner?.isSpectrum &&
+      this.win.visible &&
+      this.activeTab === 'spectrum' &&
+      !!this.runner.running;
+    const focused = document.activeElement === this.specCanvas;
+    this.focusTipEl.hidden = !spec || focused;
+  }
+
+  private updateHealthLine(): void {
+    if (!this.healthEl || !this.runner?.isSpectrum) {
+      if (this.healthEl && this.lastHealthText !== '—') {
+        this.lastHealthText = '—';
+        this.healthEl.textContent = '—';
+      }
+      return;
+    }
+    const host = this.runner.spectrumHost;
+    const cpu = this.runner.softCpu;
+    const cont = this.runner.contended;
+    const tape = this.runner.spectrumTape;
+    const path = host?.usingWorker ? 'worker' : 'main';
+    const im = cpu ? `IM${cpu.im}` : 'IM?';
+    const iff = cpu ? `IFF=${cpu.iff1 ? 1 : 0}${cpu.iff2 ? 1 : 0}` : '';
+    const halt = cpu?.halted ? ' HALT' : '';
+    const contend = cont ? `contend≈${cont.hits}` : '';
+    const tapePos =
+      tape && tape.blocks.length
+        ? `tape ${tape.pos}/${tape.blocks.length}`
+        : 'tape —';
+    const text = [path, im + halt, iff, contend, tapePos].filter(Boolean).join(' · ');
+    if (text === this.lastHealthText) return;
+    this.lastHealthText = text;
+    this.healthEl.textContent = text;
   }
 
   private drawSpectrum(): void {
@@ -1612,6 +1853,7 @@ JR spin</textarea>
    * the circuit canvas has focus — otherwise editor hotkeys steal Q/W/O/P/Space).
    */
   handleGlobalKey(e: KeyboardEvent, down: boolean): boolean {
+    if (down && this.handleSlotHotkey(e)) return true;
     return this.applySpectrumKey(e, down);
   }
 
@@ -1637,10 +1879,19 @@ JR spin</textarea>
       else ula.setKey(k, down);
     }
 
-    // Mirror arrows / fire onto Kempston for games that enable joystick
+    // Mirror arrows / fire onto the active pad mode (Kempston / Cursor / Sinclair / WASD)
     const joy = (bit: 0 | 1 | 2 | 3 | 4) => {
-      if (host) host.setKempston(bit, down);
-      else ula.setKempston(bit, down);
+      const mode = this.specJoy.mode;
+      if (mode === 'kempston') {
+        if (host) host.setKempston(bit, down);
+        else ula.setKempston(bit, down);
+        return;
+      }
+      const keys = joyMatrixKeys(mode);
+      const label = keys?.[bit];
+      if (!label) return;
+      if (host) host.setKey(label, down);
+      else ula.setKey(label, down);
     };
     if (e.code === 'ArrowRight' || e.key === 'ArrowRight') joy(0);
     else if (e.code === 'ArrowLeft' || e.key === 'ArrowLeft') joy(1);

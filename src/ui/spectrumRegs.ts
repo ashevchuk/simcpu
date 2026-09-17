@@ -80,18 +80,20 @@ export function formatSpectrumRegs(
     );
   }
   if (extra?.contended) {
-    lines.push(`contend≈ hits=${extra.contended.hits} waits=${extra.contended.waitUnits}`);
+    lines.push(
+      `contend≈ hits=${extra.contended.hits} waits=${extra.contended.waitUnits} (soft budget; not T-exact)`,
+    );
   }
   if (extra?.expansion) {
     const ex = extra.expansion;
     if (ex.plusModel !== 'none' || ex.port1ffd || ex.divmmcPaged) {
       lines.push(
-        `1FFD=${hex2(ex.port1ffd)}  DivMMC=${hex2(ex.divmmcControl)}${ex.divmmcPaged ? ' paged' : ''}  ${ex.plusModel}`,
+        `1FFD=${hex2(ex.port1ffd)}  DivMMC=${hex2(ex.divmmcControl)}${ex.divmmcPaged ? ' paged' : ''}  ${ex.plusModel} (latch only)`,
       );
     }
   }
   if (extra?.trd) {
-    lines.push(`TRD "${extra.trd.label}" ${extra.trd.sides}side (Beta stub)`);
+    lines.push(`TRD "${extra.trd.label}" ${extra.trd.sides}side · Beta stub (not full WD1793)`);
   }
   return lines.join('\n');
 }

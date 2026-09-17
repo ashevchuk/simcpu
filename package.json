@@ -14,8 +14,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:spectrum-play": "vitest run test/spectrum-playability.test.ts test/spectrum-glazx-im2.test.ts test/spectrum.test.ts",
     "test:e2e": "npm run build:dist-file && playwright test",
-    "test:e2e:spectrum": "npm run build:dist-file && playwright test test/e2e/spectrum.spec.ts test/e2e/spectrum-worker.spec.ts test/e2e/spectrum-audit.spec.ts -g \"Place Spectrum|rainbow|TAP demo|ParaZXland|Worker|128K TAP|TRD|SNA round-trip|glazx|Boot TR-DOS|#demo=\""
+    "test:e2e:spectrum": "npm run build:dist-file && playwright test test/e2e/spectrum.spec.ts test/e2e/spectrum-worker.spec.ts test/e2e/spectrum-audit.spec.ts -g \"Place Spectrum|rainbow|TAP demo|ParaZXland|Worker|128K TAP|TRD|SNA|Z80 round-trip|glazx|Boot TR-DOS|#demo=|Save .Z80\""
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

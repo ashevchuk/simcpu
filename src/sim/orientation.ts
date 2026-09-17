@@ -10,6 +10,7 @@ import type { Circuit } from './Circuit.js';
 import {
   ANALYZER_PIN_DX,
   analyzerPinDys,
+  BUS_SWITCH_PIN_DX,
   CHIP_PIN_DX,
   CHIP_PIN_DX_RIGHT,
   chipBodyWidth,
@@ -97,7 +98,8 @@ export function isOrientable(c: Component): boolean {
     c.kind === 'ram' ||
     c.kind === 'rom' ||
     c.kind === 'analyzer' ||
-    c.kind === 'busprobe'
+    c.kind === 'busprobe' ||
+    c.kind === 'busswitch'
   );
 }
 
@@ -227,6 +229,13 @@ export function applyPinLayout(c: Component): void {
       const order = c.pinOrder?.length ? c.pinOrder : Object.keys(c.pins);
       if (!c.pinOrder?.length) c.pinOrder = order;
       applyStackedPins(c, ANALYZER_PIN_DX, analyzerPinDys(order.length), rotation, mirrorX, mirrorY);
+      break;
+    }
+    case 'busswitch': {
+      const order = c.pinOrder?.length ? c.pinOrder : Object.keys(c.pins);
+      if (!c.pinOrder?.length) c.pinOrder = order;
+      // Outputs on the right (outside package), same side for every bit including ends.
+      applyStackedPins(c, BUS_SWITCH_PIN_DX, analyzerPinDys(order.length), rotation, mirrorX, mirrorY);
       break;
     }
     default:

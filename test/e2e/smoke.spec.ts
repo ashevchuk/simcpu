@@ -33,25 +33,24 @@ test.describe('schematic smoke', () => {
     expect(await canvasPainted(page)).toBe(true);
   });
 
-  test('Help → Tutorial (latch) loads D-latch example', async ({ page }) => {
+  test('Help → Tutorial (lab counter) loads Counter + 7-seg', async ({ page }) => {
     await page.goto(`file://${indexHtml}`);
     await expect(page.locator('#menubar')).toBeVisible();
     await page.waitForTimeout(400);
 
     await page.evaluate(() => {
       document.querySelector('.menu[data-menu="help"]')?.classList.add('open');
-      (document.getElementById('help-tutorial-latch') as HTMLButtonElement | null)?.click();
+      (document.getElementById('help-tutorial-lab') as HTMLButtonElement | null)?.click();
     });
 
-    // Confirm replace (Cancel | OK)
     await expect(page.locator('.z80-dialog-overlay')).toBeVisible({ timeout: 10_000 });
     await page.locator('.z80-dialog-overlay button.z80-dialog-primary').click();
 
-    // Dismiss walkthrough alert
     await expect(page.locator('.z80-dialog-overlay')).toBeVisible({ timeout: 10_000 });
     await page.locator('.z80-dialog-overlay button.z80-dialog-primary').click();
 
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(600);
     expect(await canvasPainted(page)).toBe(true);
+    await expect(page.locator('#sim-soft-lab')).toHaveClass(/active/);
   });
 });

@@ -9,11 +9,13 @@ import { Circuit, nextId } from './Circuit.js';
 import type {
   AnalyzerComponent,
   BusProbeComponent,
+  BusSwitchComponent,
   ButtonComponent,
   ChipInstanceComponent,
   ClockComponent,
   InputComponent,
   LabelComponent,
+  JunctionComponent,
   LedComponent,
   Pin,
   Point,
@@ -47,6 +49,10 @@ export const CHIP_PIN_DX_RIGHT = -CHIP_PIN_DX;
 /** Analyzer channel stack uses a tighter pitch. */
 export const ANALYZER_PIN_DX = -28;
 export const ANALYZER_PIN_PITCH = 20;
+/** Bus-switch package width (must match Renderer drawing). */
+export const BUS_SWITCH_BODY_W = 100;
+/** Output pin bank just outside the right edge of the package. */
+export const BUS_SWITCH_PIN_DX = BUS_SWITCH_BODY_W / 2 + 4;
 
 export function chipPinDys(portCount: number): number[] {
   let dys = chipPinDyByCount[portCount];
@@ -328,6 +334,9 @@ export function makeAnalyzer(
     kind: 'analyzer',
     channelCount: n,
     armed: false,
+    channelLabels: Array.from({ length: n }, (_, i) => `ch${i}`),
+    triggerChannel: null,
+    triggerEdge: 'rise',
     pos,
     rotation: 0,
     mirrorX: false,
@@ -404,6 +413,77 @@ export function relayoutBusProbePins(c: BusProbeComponent): void {
   c.pinOrder = pinOrder;
 }
 
+/**
+ * Writable multi-bit bus switch — drives `b0`…`bN-1` from `value` (LSB = b0).
+ * Pins stack on the right (outputs), mirroring Input bank geometry.
+ */
+export function makeBusSwitch(
+  circuit: Circuit,
+  bitWidth = 8,
+  pos: Point = { x: 0, y: 0 },
+  radix: BusSwitchComponent['radix'] = 'hex',
+  value = 0,
+): BusSwitchComponent {
+  const n = Math.max(1, Math.min(32, bitWidth | 0));
+  const id = nextId('bsw');
+  const pins: Record<string, Pin> = {};
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  const pinDx = BUS_SWITCH_PIN_DX; // right side (outputs), outside package edge
+  for (let i = 0; i < n; i++) {
+    const name = `b${i}`;
+    pinOrder.push(name);
+    pins[name] = pin(id, name, pos, pinDx, (i - mid) * ANALYZER_PIN_PITCH);
+  }
+  const mask = n >= 31 ? 0x7fffffff : (1 << n) - 1;
+  const c: BusSwitchComponent = {
+    id,
+    kind: 'busswitch',
+    bitWidth: n,
+    value: (value | 0) & mask,
+    radix,
+    pos,
+    rotation: 0,
+    mirrorX: false,
+    mirrorY: false,
+    pinOrder,
+    pins,
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+export function busSwitchPortCount(c: BusSwitchComponent): number {
+  return c.bitWidth;
+}
+
+/** Relayout bus-switch pins after bitWidth change. */
+export function relayoutBusSwitchPins(c: BusSwitchComponent): void {
+  const n = c.bitWidth;
+  const mid = (n - 1) / 2;
+  const pinOrder: string[] = [];
+  const pinDx = BUS_SWITCH_PIN_DX;
+  for (let i = 0; i < n; i++) {
+    const name = `b${i}`;
+    pinOrder.push(name);
+    const existing = c.pins[name];
+    if (existing) {
+      existing.pos = {
+        x: c.pos.x + pinDx,
+        y: c.pos.y + (i - mid) * ANALYZER_PIN_PITCH,
+      };
+    } else {
+      c.pins[name] = pin(c.id, name, c.pos, pinDx, (i - mid) * ANALYZER_PIN_PITCH);
+    }
+  }
+  for (const name of Object.keys(c.pins)) {
+    if (!pinOrder.includes(name)) delete c.pins[name];
+  }
+  c.pinOrder = pinOrder;
+  const mask = n >= 31 ? 0x7fffffff : (1 << n) - 1;
+  c.value = (c.value | 0) & mask;
+}
+
 /** TTY / machine console instrument (no electrical pins). */
 export function makeTty(
   circuit: Circuit,
@@ -428,6 +508,21 @@ export function makeLabel(circuit: Circuit, name: string, pos: Point = { x: 0, y
     id,
     kind: 'label',
     name,
+    pos,
+    pins: {
+      net: { id: id + ':net', componentId: id, name: 'net', pos: { x: pos.x, y: pos.y } },
+    },
+  };
+  circuit.addComponent(c);
+  return c;
+}
+
+/** Passive solder-dot for T-junctions / wire nodes (single `net` pin). */
+export function makeJunction(circuit: Circuit, pos: Point = { x: 0, y: 0 }): JunctionComponent {
+  const id = nextId('junc');
+  const c: JunctionComponent = {
+    id,
+    kind: 'junction',
     pos,
     pins: {
       net: { id: id + ':net', componentId: id, name: 'net', pos: { x: pos.x, y: pos.y } },

@@ -1,15 +1,16 @@
 import { buildAlu, buildInstructionRegister, buildMinimalCpu, buildProgramCounter, buildRegister, buildRingCounter, buildStubRom, buildZ80Cpu } from './sim/blocks.js';
 import { ChipLibrary } from './sim/ChipLibrary.js';
-import { Circuit, currentStructureVersion } from './sim/Circuit.js';
+import { bumpStructureVersion, Circuit, currentStructureVersion } from './sim/Circuit.js';
 import { foldZ80CpuLeavingRam, newComponentIdSet, packFoldedMachine } from './sim/foldZ80.js';
 import { replaceLongWiresWithLabels } from './sim/labelWires.js';
 import { circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
 import { flatten, fold, foldPortWarnings, forkChipInstance, unfold } from './sim/hierarchy.js';
-import { buildNot, makeButton, makeLed, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
+import { buildNot, makeButton, makeBusProbe, makeLed, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
 import { EXAMPLE_PROJECTS } from './examples/catalog.js';
 import {
   deserializeProject,
   importChipDef,
+  resolveStdcellInstances,
   serializeChipDef,
   serializeProject,
   type SerializedChipBundle,
@@ -30,9 +31,18 @@ import {
 } from './sim/autosave.js';
 import { netIdFromEditorSelection, renameNet } from './sim/netRename.js';
 import { initialState, step } from './sim/solver.js';
-import { pruneDuplicateChipNames, seedStandardCells, isStdcellName } from './sim/stdcells.js';
+import { pruneDuplicateChipNames, seedStandardCells, isStdcellName, STDCELL_NAMES } from './sim/stdcells.js';
+import { isLabcellName } from './sim/labcells.js';
+import {
+  clearSoftExpandForced,
+  clearSoftLabState,
+  isSoftLabEnabled,
+  loadSoftLabPreference,
+  persistSoftLabPreference,
+  setSoftLabEnabled,
+} from './sim/softLab.js';
 import { decodeShareHash, encodeShareHash } from './sim/shareLink.js';
-import type { ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
+import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
 import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
 import { commandRomHexPrompt } from './machine/commandRom.js';
@@ -41,11 +51,14 @@ import { showAlert, showChoice, showConfirm, showPrompt } from './ui/Dialog.js';
 import { EditHistory } from './ui/EditHistory.js';
 import { Editor, type Tool } from './ui/Editor.js';
 import { GRID, isBusName, routeWirePoints, snap } from './ui/geometry.js';
+import { LAB_CURRICULUM, labCurriculumIndex, labCurriculumStep } from './ui/LabCurriculum.js';
+import { LabCoursePanel } from './ui/LabCoursePanel.js';
+import { LabManual } from './ui/LabManual.js';
 import { LogicAnalyzer } from './ui/LogicAnalyzer.js';
 import { MachinePanel } from './ui/MachinePanel.js';
 import { MemoryEditor } from './ui/MemoryEditor.js';
 import { ObjectInspector } from './ui/ObjectInspector.js';
-import { WatchList } from './ui/WatchList.js';
+import { WatchList, consecutiveBusPins, type WatchBusGroup } from './ui/WatchList.js';
 import { IoMapViewer } from './ui/IoMapViewer.js';
 import { draw } from './ui/Renderer.js';
 import { isOrientable, orientSelection } from './sim/orientation.js';
@@ -67,6 +80,9 @@ if (!ctx) throw new Error('2D canvas context is not available');
 const machinePanel = new MachinePanel();
 const machineRunner = new MachineRunner();
 machinePanel.bindRunner(machineRunner);
+machineRunner.onReboot = () => {
+  clearSoftLabState(topCircuit);
+};
 
 const memoryEditor = new MemoryEditor();
 const logicAnalyzer = new LogicAnalyzer();
@@ -105,6 +121,7 @@ function openIoMapViewer(): void {
 const library = new ChipLibrary();
 seedStandardCells(library); // NOT/NAND/AND/NOR/OR/XOR/MUX2/MUX4/FULL_ADDER/D_LATCH/D_FF, ready to drag out
 const topCircuit = new Circuit();
+loadSoftLabPreference();
 
 /** `#demo=id` boots a bundled Spectrum game (skips session restore). */
 function parseDemoHash(hash: string): string | null {
@@ -112,26 +129,36 @@ function parseDemoHash(hash: string): string | null {
   const id = decodeURIComponent(hash.slice(6)).trim();
   return id || null;
 }
+/** `#e=example-id` loads a built-in EXAMPLE_PROJECTS entry. */
+function parseExampleHash(hash: string): string | null {
+  if (!hash.startsWith('#e=')) return null;
+  const id = decodeURIComponent(hash.slice(3)).trim();
+  return id || null;
+}
 function hasSnaHash(hash: string): boolean {
   return hash.startsWith('#sna=');
 }
 const bootDemoId = parseDemoHash(location.hash);
+const bootExampleId = parseExampleHash(location.hash);
 const bootSnaPending = hasSnaHash(location.hash);
 
 function applyLoadedProject(loaded: { topCircuit: Circuit; library: ChipLibrary }): void {
+  clearSoftExpandForced();
   topCircuit.components.clear();
   topCircuit.wires.clear();
+  bumpStructureVersion();
   for (const c of loaded.topCircuit.components.values()) topCircuit.addComponent(c);
   for (const w of loaded.topCircuit.wires.values()) topCircuit.addRawWire(w);
   library.clear();
   for (const def of loaded.library.list()) library.register(def);
   // Fill any missing stdcells without re-adding names already in the session,
-  // then drop orphan duplicates left by older builds that re-seeded on every load.
+  // rebind slim lab instances (defName → seeded id), then drop orphan duplicates.
   seedStandardCells(library);
+  resolveStdcellInstances(topCircuit, library);
   pruneDuplicateChipNames(library, [topCircuit, ...library.list().map((d) => d.circuit)]);
 }
 
-const restoredSync = bootDemoId || bootSnaPending ? null : loadAutosaveSync();
+const restoredSync = bootDemoId || bootSnaPending || bootExampleId ? null : loadAutosaveSync();
 if (restoredSync) {
   try {
     applyLoadedProject(deserializeProject(restoredSync));
@@ -310,6 +337,66 @@ watchList.onSelectPin = (pinId) => {
   selectPinComponent(pinId);
 };
 
+watchList.onBusContext = (bus: WatchBusGroup, clientX: number, clientY: number) => {
+  showContextMenu(clientX, clientY, [
+    {
+      label: 'Spawn bus probe',
+      run: () => {
+        editHistory.checkpoint(editor.circuit);
+        const probe = makeBusProbe(editor.circuit, bus.pinIds.length, {
+          x: editor.mouse.x + 80,
+          y: editor.mouse.y,
+        });
+        const nets = editor.circuit.computeNets();
+        for (let i = 0; i < bus.pinIds.length; i++) {
+          const src = bus.pinIds[i]!;
+          const dst = probe.pins[`b${i}`];
+          if (!dst) continue;
+          const na = nets.netOf.get(src);
+          const nb = nets.netOf.get(dst.id);
+          if (na !== undefined && nb !== undefined && na === nb) continue;
+          editor.circuit.addWire(src, dst.id, undefined, `bundle-watch-${probe.id}`);
+        }
+        uiDirty = true;
+      },
+    },
+    {
+      label: 'Add channels to open LA',
+      run: () => {
+        let la: AnalyzerComponent | null = null;
+        for (const c of editor.circuit.components.values()) {
+          if (c.kind === 'analyzer') {
+            la = c;
+            break;
+          }
+        }
+        if (!la) {
+          void showAlert('Place an Analyzer first (Place → Logic analyzer).');
+          return;
+        }
+        editHistory.checkpoint(editor.circuit);
+        const need = bus.pinIds.length;
+        while (la.channelCount < need) {
+          if (!editor.addAnalyzerChannel(la.id)) break;
+          la = editor.circuit.components.get(la.id) as AnalyzerComponent;
+        }
+        const nets = editor.circuit.computeNets();
+        for (let i = 0; i < Math.min(need, la.channelCount); i++) {
+          const src = bus.pinIds[i]!;
+          const dst = la.pins[`ch${i}`];
+          if (!dst) continue;
+          const na = nets.netOf.get(src);
+          const nb = nets.netOf.get(dst.id);
+          if (na !== undefined && nb !== undefined && na === nb) continue;
+          editor.circuit.addWire(src, dst.id, undefined, `bundle-la-${la.id}`);
+        }
+        logicAnalyzer.attach(la);
+        uiDirty = true;
+      },
+    },
+  ]);
+};
+
 function selectPinComponent(pinId: string): void {
   const compId = pinId.split(':')[0];
   if (!compId || !editor.circuit.components.has(compId)) return;
@@ -355,6 +442,36 @@ let lastFlatNetMap: ReturnType<Circuit['computeNets']> | null = null;
 let uiDirty = true;
 objectInspector.onChange = () => {
   uiDirty = true;
+};
+objectInspector.onSettleReadQ = async (inst, softQ) => {
+  // Force a structure rebuild + several settle steps so transistor q pins resolve.
+  uiDirty = true;
+  const flat = flatten(topCircuit, library);
+  const flatNetMap = flat.computeNets();
+  lastFlatNetMap = flatNetMap;
+  simState = initialState();
+  for (let i = 0; i < 64; i++) {
+    simState = step(flat, flatNetMap, simState);
+    if (simState.settled) break;
+  }
+  // One more frame of instruments / clocks if needed
+  tickLabInstruments(topCircuit, flatNetMap, simState.levelOf);
+  for (let i = 0; i < 16; i++) {
+    simState = step(flat, flatNetMap, simState);
+    if (simState.settled) break;
+  }
+  const out = new Uint8Array(softQ.length);
+  for (let i = 0; i < softQ.length; i++) {
+    const pin = inst.pins[`q${i}`];
+    if (!pin) {
+      out[i] = 0;
+      continue;
+    }
+    const net = flatNetMap.netOf.get(pin.id);
+    const lvl = net != null ? (simState.levelOf.get(net) ?? 'Z') : 'Z';
+    out[i] = lvl === 1 ? 1 : 0;
+  }
+  return out;
 };
 objectInspector.setContext({
   circuit: topCircuit,
@@ -488,22 +605,13 @@ camera.centerOn(centroid(circuitBounds(topCircuit)), 1);
 
 // IndexedDB-only autosave (too big for localStorage) — apply once if boot
 // only saw the demo because LS was empty. Skip when `#demo=` is loading.
-if (!restoredSync && !bootDemoId && !bootSnaPending) {
+if (!restoredSync && !bootDemoId && !bootSnaPending && !bootExampleId) {
   void loadAutosave().then((data) => {
     if (!data) return;
     // Still on the fresh demo (no user edits yet, or empty) — replace.
     try {
       applyLoadedProject(deserializeProject(data));
-      navStack.length = 0;
-      navStack.push({ circuit: topCircuit, pathPrefix: '', label: 'top' });
-      editor.circuit = topCircuit;
-      editor.clearSelection();
-      editHistory.clear();
-      simState = initialState();
-      renderBreadcrumb();
-      refreshChipPalette();
-      camera.centerOn(centroid(circuitBounds(topCircuit)), 1);
-      uiDirty = true;
+      resetViewAfterProjectLoad();
     } catch {
       /* keep demo */
     }
@@ -514,7 +622,7 @@ if (!restoredSync && !bootDemoId && !bootSnaPending) {
 const chipPaletteListEl = document.getElementById('chip-palette-list') as HTMLDivElement;
 const libraryMenuTrigger = document.getElementById('library-menu-trigger');
 const chipPaletteSearchEl = document.getElementById('chip-palette-search') as HTMLInputElement | null;
-let chipPaletteTag: 'all' | 'stdcell' | 'user' = 'all';
+let chipPaletteTag: 'all' | 'gates' | 'lab' | '74xx' | 'user' = 'all';
 
 function refreshChipPalette(): void {
   chipPaletteListEl.replaceChildren();
@@ -522,7 +630,12 @@ function refreshChipPalette(): void {
   const defs = library.list().filter((def) => {
     if (q && !def.name.toLowerCase().includes(q)) return false;
     const std = isStdcellName(def.name);
-    if (chipPaletteTag === 'stdcell' && !std) return false;
+    const gate = STDCELL_NAMES.has(def.name);
+    const lab = isLabcellName(def.name);
+    const is74 = /^74/.test(def.name);
+    if (chipPaletteTag === 'gates' && !gate) return false;
+    if (chipPaletteTag === 'lab' && !(lab && !is74)) return false;
+    if (chipPaletteTag === '74xx' && !is74) return false;
     if (chipPaletteTag === 'user' && std) return false;
     return true;
   });
@@ -543,7 +656,13 @@ function refreshChipPalette(): void {
       btn.className = 'menu-item';
       const tag = document.createElement('span');
       tag.className = 'chip-tag';
-      tag.textContent = isStdcellName(def.name) ? 'std' : 'user';
+      tag.textContent = STDCELL_NAMES.has(def.name)
+        ? 'gate'
+        : /^74/.test(def.name)
+          ? '74xx'
+          : isLabcellName(def.name)
+            ? 'lab'
+            : 'user';
       btn.append(document.createTextNode(def.name), tag);
       btn.dataset.defId = def.id;
       btn.classList.toggle('active', editor.tool.kind === 'place-chip' && editor.tool.defId === def.id);
@@ -562,7 +681,7 @@ chipPaletteSearchEl?.addEventListener('keydown', (ev) => ev.stopPropagation());
 for (const btn of Array.from(document.querySelectorAll<HTMLButtonElement>('.chip-tag-filter'))) {
   btn.addEventListener('click', (ev) => {
     ev.stopPropagation();
-    const tag = btn.dataset.tag as 'all' | 'stdcell' | 'user';
+    const tag = btn.dataset.tag as typeof chipPaletteTag;
     chipPaletteTag = tag;
     for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>('.chip-tag-filter'))) {
       b.classList.toggle('active', b.dataset.tag === tag);
@@ -639,6 +758,7 @@ const CURSOR: Record<Tool['kind'], string> = {
   clock: 'copy',
   analyzer: 'copy',
   busprobe: 'copy',
+  busswitch: 'copy',
   tty: 'copy',
   probe: 'copy',
   label: 'copy',
@@ -661,9 +781,11 @@ const PLACE_TOOL_LABELS: Partial<Record<Tool['kind'], string>> = {
   input: 'placing input',
   button: 'placing button',
   led: 'placing LED',
+  sevenseg: 'placing 7-seg',
   clock: 'placing pulse gen',
   analyzer: 'placing analyzer',
   busprobe: 'placing bus probe',
+  busswitch: 'placing bus switch',
   tty: 'placing TTY',
   probe: 'placing probe',
   label: 'placing net label',
@@ -673,6 +795,9 @@ const PLACE_TOOL_LABELS: Partial<Record<Tool['kind'], string>> = {
 const activePlaceHint = document.getElementById('active-place-hint');
 const activeToolName = document.getElementById('active-tool-name');
 function setTool(tool: Tool): void {
+  if (tool.kind === 'place-chip' && !library.has(tool.defId)) {
+    tool = { kind: 'select' };
+  }
   editor.tool = tool;
   editor.cancelWire();
   editor.marqueeStart = null;
@@ -680,7 +805,7 @@ function setTool(tool: Tool): void {
   canvas.style.cursor = CURSOR[tool.kind];
   const placeLabel =
     tool.kind === 'place-chip'
-      ? `placing ${library.get(tool.defId)?.name ?? 'chip'}`
+      ? `placing ${library.get(tool.defId).name}`
       : PLACE_TOOL_LABELS[tool.kind];
   if (activePlaceHint && activeToolName) {
     if (placeLabel) {
@@ -1458,11 +1583,16 @@ function updateWatchLevels(
 refreshWatchStrip();
 
 function resetViewAfterProjectLoad(): void {
+  tutorial.stop();
   navStack.length = 0;
   navStack.push({ circuit: topCircuit, pathPrefix: '', label: 'top' });
   editor.circuit = topCircuit;
   editor.clearSelection();
+  editor.clearClipboard();
   editor.cancelWire();
+  // Library was replaced — any place-chip defId from the previous session is
+  // gone (throws "unknown chip definition" on click and freezes interaction).
+  setTool({ kind: 'select' });
   editHistory.clear();
   simState = initialState();
   renderBreadcrumb();
@@ -1484,59 +1614,69 @@ function resetViewAfterProjectLoad(): void {
   autosave.schedule();
 }
 
+async function loadExampleById(id: string, confirmReplace = true): Promise<boolean> {
+  const ex = EXAMPLE_PROJECTS.find((e) => e.id === id);
+  if (!ex) {
+    await showAlert(`Unknown example “${id}”.`);
+    return false;
+  }
+  if (
+    confirmReplace &&
+    topCircuit.components.size > 0 &&
+    !(await showConfirm(
+      `Load “${ex.title}”? This replaces the current circuit and chip library in this session.`,
+    ))
+  ) {
+    return false;
+  }
+  try {
+    applyLoadedProject(deserializeProject(ex.project));
+    resetViewAfterProjectLoad();
+    const ci = labCurriculumIndex(id);
+    if (ci >= 0) {
+      labCourseIndex = ci;
+      // Keep the checklist panel in sync when the same example is opened from
+      // Help tutorials / File → Examples (not only Lab course Next/Prev).
+      if (labCoursePanel.win.visible) labCoursePanel.showStep(ci);
+    }
+    return true;
+  } catch (err) {
+    await showAlert(`Could not load example: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+let labCourseIndex = -1;
+const labCoursePanel = new LabCoursePanel();
+labCoursePanel.onNavigate = (index) => {
+  void openLabCourse(index);
+};
+const labManual = new LabManual();
+labManual.onOpenLabCourse = () => {
+  const idx = labCourseIndex >= 0 ? labCourseIndex : 0;
+  void openLabCourse(idx);
+};
+
+async function openLabCourse(startIndex = 0): Promise<void> {
+  const step = labCurriculumStep(startIndex);
+  if (!step) return;
+  if (!(await loadExampleById(step.id, true))) return;
+  labCourseIndex = startIndex;
+  labCoursePanel.showStep(startIndex);
+}
+
 async function openExampleProject(): Promise<void> {
   const pick = await showChoice(
     'Open example',
     EXAMPLE_PROJECTS.map((ex) => ({
       value: ex.id,
       label: ex.title,
-      detail: ex.detail,
+      detail: `${ex.detail} · #e=${ex.id}`,
     })),
   );
   if (!pick || pick.action === 'delete') return;
-  const ex = EXAMPLE_PROJECTS.find((e) => e.id === pick.value);
-  if (!ex) return;
-  if (
-    !(await showConfirm(
-      `Load “${ex.title}”? This replaces the current circuit and chip library in this session.`,
-    ))
-  ) {
-    return;
-  }
-  try {
-    applyLoadedProject(deserializeProject(ex.project));
-    resetViewAfterProjectLoad();
-    if (ex.id === 'd-latch') {
-      await showAlert(
-        'Latch walkthrough:\n\n' +
-          '1. Toggle D (data) with the select tool.\n' +
-          '2. Pulse or hold Enable so Q follows D.\n' +
-          '3. Release Enable — Q holds the last value.\n' +
-          '4. Double-click the chip to dive into its gates.\n\n' +
-          'Press ? for keyboard shortcuts.',
-      );
-    }
-  } catch (err) {
-    await showAlert(`Could not load example: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-async function openLatchTutorial(): Promise<void> {
-  const ex = EXAMPLE_PROJECTS.find((e) => e.id === 'd-latch');
-  if (!ex) {
-    await showAlert('Latch tutorial example is missing.');
-    return;
-  }
-  if (
-    !(await showConfirm(
-      `Load “${ex.title}”? This replaces the current circuit and chip library in this session.`,
-    ))
-  ) {
-    return;
-  }
-  try {
-    applyLoadedProject(deserializeProject(ex.project));
-    resetViewAfterProjectLoad();
+  const ok = await loadExampleById(pick.value, true);
+  if (ok && pick.value === 'd-latch') {
     await showAlert(
       'Latch walkthrough:\n\n' +
         '1. Toggle D (data) with the select tool.\n' +
@@ -1545,19 +1685,87 @@ async function openLatchTutorial(): Promise<void> {
         '4. Double-click the chip to dive into its gates.\n\n' +
         'Press ? for keyboard shortcuts.',
     );
-  } catch (err) {
-    await showAlert(`Could not load tutorial: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
-document.getElementById('open-examples')?.addEventListener('click', () => void openExampleProject());
-document.getElementById('help-tutorial')?.addEventListener('click', () => {
-  tutorial.start();
+async function openLatchTutorial(): Promise<void> {
+  if (!(await loadExampleById('d-latch', true))) return;
+  await showAlert(
+    'Latch walkthrough:\n\n' +
+      '1. Toggle D (data) with the select tool.\n' +
+      '2. Pulse or hold Enable so Q follows D.\n' +
+      '3. Release Enable — Q holds the last value.\n' +
+      '4. Double-click the chip to dive into its gates.\n\n' +
+      'Press ? for keyboard shortcuts.',
+  );
+}
+
+async function openLabCounterTutorial(): Promise<void> {
+  const id = EXAMPLE_PROJECTS.some((e) => e.id === 'lab-counter-7seg')
+    ? 'lab-counter-7seg'
+    : 'lab-shift-counter';
+  if (!(await loadExampleById(id, true))) return;
+  setSoftLabEnabled(true);
+  document.getElementById('sim-soft-lab')?.classList.toggle('active', true);
+  await showAlert(
+    'Lab counter walkthrough:\n\n' +
+      '1. Soft Lab is on — COUNTER4 / BCD_7SEG run as fast behavioral chips.\n' +
+      '2. Toggle Clear off so the counter can leave 0.\n' +
+      '3. Watch the 7-seg count with the free-running pulse.\n' +
+      '4. Turn Soft Lab off to expand chips into transistors (slower).\n' +
+      '5. Library → Lab filter lists REG/SHIFT/COUNTER packs.\n\n' +
+      'Press ? for keyboard shortcuts.',
+  );
+}
+
+async function startButtonLedTutorial(): Promise<void> {
+  if (
+    topCircuit.components.size > 0 &&
+    !(await showConfirm(
+      'Start the button→LED tutorial? This clears the canvas (current circuit is replaced).',
+    ))
+  ) {
+    return;
+  }
+  if (topCircuit.components.size > 0) {
+    topCircuit.components.clear();
+    topCircuit.wires.clear();
+    bumpStructureVersion();
+    library.clear();
+    seedStandardCells(library);
+    resetViewAfterProjectLoad();
+  } else {
+    tutorial.stop();
+  }
+  tutorial.start(topCircuit);
   uiDirty = true;
+}
+
+document.getElementById('open-examples')?.addEventListener('click', () => void openExampleProject());
+document.getElementById('help-cheatsheet')?.addEventListener('click', () => toggleCheatSheet());
+document.getElementById('help-lab-manual')?.addEventListener('click', () => labManual.open());
+document.getElementById('help-tutorial')?.addEventListener('click', () => {
+  void startButtonLedTutorial();
 });
 document.getElementById('help-tutorial-latch')?.addEventListener('click', () => void openLatchTutorial());
+document.getElementById('help-tutorial-lab')?.addEventListener('click', () => void openLabCounterTutorial());
+document.getElementById('help-lab-course')?.addEventListener('click', () => {
+  const idx = labCourseIndex >= 0 ? labCourseIndex : 0;
+  void openLabCourse(idx);
+});
 
 async function bootFromUrlHash(): Promise<void> {
+  const exampleId = parseExampleHash(location.hash);
+  if (exampleId) {
+    const fresh = topCircuit.components.size === 0;
+    const ok = await loadExampleById(exampleId, !fresh);
+    if (ok) {
+      const ci = labCurriculumIndex(exampleId);
+      if (ci >= 0) labCourseIndex = ci;
+    }
+    history.replaceState(null, '', `${location.pathname}${location.search}`);
+    return;
+  }
   const demoId = parseDemoHash(location.hash);
   if (demoId) {
     try {
@@ -1597,6 +1805,7 @@ async function bootFromUrlHash(): Promise<void> {
   const shared = await decodeShareHash(location.hash);
   if (!shared) return;
   if (
+    topCircuit.components.size > 0 &&
     !(await showConfirm(
       'Load project from share link? This replaces the current circuit and chip library in this session.',
     ))
@@ -1630,12 +1839,19 @@ function showDemoTeachOverlay(kind: string): void {
   const title = el.querySelector('[data-teach-title]');
   const body = el.querySelector('[data-teach-body]');
   const tapish = kind !== 'sna' && kind !== 'rainbow';
-  if (title) title.textContent = tapish ? 'TAP demo loading' : 'Spectrum demo ready';
-  if (body) {
-    body.textContent = tapish
-      ? 'Spectrum tab · wait for auto LOAD "" · on “Press any key” / PAUSE, hold Space briefly (quick taps can miss a frame).'
-      : 'Open the Spectrum tab · click the screen · Enter for K · type or use the on-screen keys.';
-  }
+  void import('./ui/spectrumDemoHints.js').then(({ spectrumDemoHint }) => {
+    const hint = spectrumDemoHint(kind);
+    if (title) title.textContent = tapish ? 'TAP demo loading' : 'Spectrum demo ready';
+    if (body) {
+      const base = tapish
+        ? 'Spectrum tab · wait for auto LOAD "" · click the screen so keys go to Spectrum (not the editor).'
+        : 'Open the Spectrum tab · click the screen · Enter for K · type or use the on-screen keys.';
+      const pause = tapish
+        ? ' On “Press any key” / PAUSE, hold Space briefly (quick taps can miss a frame).'
+        : '';
+      body.textContent = `${base}${pause}${hint.teachExtra ? ` ${hint.teachExtra}` : ''} Pad: ${hint.padHint}`;
+    }
+  });
   el.dataset.demo = kind;
   el.hidden = false;
 }
@@ -1873,6 +2089,12 @@ function exportSchematicSvg(): void {
         );
         break;
       }
+      case 'junction': {
+        parts.push(
+          `<rect x="${x - 3.5}" y="${y - 3.5}" width="7" height="7" fill="#4da3ff" stroke="#1a1c22" stroke-width="1"/>`,
+        );
+        break;
+      }
       case 'port': {
         const s = 8;
         parts.push(
@@ -1911,9 +2133,18 @@ function exportSchematicSvg(): void {
       case 'clock':
       case 'analyzer':
       case 'busprobe':
+      case 'busswitch':
       case 'tty': {
         const label =
-          c.kind === 'clock' ? 'CLK' : c.kind === 'analyzer' ? 'LA' : c.kind === 'busprobe' ? 'BUS' : 'TTY';
+          c.kind === 'clock'
+            ? 'CLK'
+            : c.kind === 'analyzer'
+              ? 'LA'
+              : c.kind === 'busprobe'
+                ? 'BUS'
+                : c.kind === 'busswitch'
+                  ? 'DIP'
+                  : 'TTY';
         parts.push(
           `<rect x="${x - 28}" y="${y - 18}" width="56" height="36" rx="6" fill="#191c25" stroke="#f5c518" stroke-width="1.3"/>`,
         );
@@ -2071,6 +2302,21 @@ function openCanvasContextMenu(ev: MouseEvent): void {
       if (editor.tidySelectedWires() > 0) uiDirty = true;
     },
   });
+  if (editor.canRibbonBusSwitch()) {
+    items.push({
+      label: 'Ribbon bus switch → chip',
+      run: () => {
+        if (editor.wireBusSwitchToHost() > 0) uiDirty = true;
+      },
+    });
+  } else if (editor.canWireMatchingPorts()) {
+    items.push({
+      label: 'Wire matching / bus pins',
+      run: () => {
+        if (editor.wireMatchingPorts() > 0) uiDirty = true;
+      },
+    });
+  }
   items.push({
     label: 'Delete',
     kbd: 'Del',
@@ -2109,6 +2355,15 @@ function openCanvasContextMenu(ev: MouseEvent): void {
         }
       },
     });
+    items.push({
+      label: 'Remove LA channel',
+      run: () => {
+        if (editor.removeAnalyzerChannel(analyzerSel.id)) {
+          uiDirty = true;
+          objectInspector.refresh();
+        }
+      },
+    });
   }
   if (editor.hoveredPinId) {
     const pid = editor.hoveredPinId;
@@ -2125,6 +2380,21 @@ function openCanvasContextMenu(ev: MouseEvent): void {
         }
       },
     });
+    const pin = editor.circuit.allPins().find((p) => p.id === pid);
+    const host = pin ? editor.circuit.components.get(pin.componentId) : undefined;
+    if (host && (host.kind === 'chip' || host.kind === 'busprobe' || host.kind === 'ram' || host.kind === 'rom')) {
+      const busPins = consecutiveBusPins(host.pins as Record<string, { id: string }>, pin!.name);
+      if (busPins.length >= 2) {
+        items.push({
+          label: 'Watch as bus',
+          run: () => {
+            if (watchList.addBus(busPins, `${host.id}:${pin!.name.replace(/\d+$/, '')}[${busPins.length - 1}:0]`)) {
+              watchList.setVisible(true);
+            }
+          },
+        });
+      }
+    }
   }
   if (pin && hitComp?.kind === 'chip') {
     const pinName = pin.name;
@@ -2459,6 +2729,9 @@ function updateSimModeBadge(softTop: boolean): void {
   } else if (softTop || (machineRunner.running && machineRunner.isSoft)) {
     simModeBadge.dataset.mode = 'soft';
     simModeBadge.textContent = 'Soft';
+  } else if (isSoftLabEnabled()) {
+    simModeBadge.dataset.mode = 'soft';
+    simModeBadge.textContent = 'Soft Lab';
   } else {
     simModeBadge.dataset.mode = 'gates';
     simModeBadge.textContent = 'Gates';
@@ -2555,6 +2828,19 @@ document.getElementById('sim-pause')?.addEventListener('click', () => {
   updateSimChrome();
   uiDirty = true;
 });
+document.getElementById('sim-soft-lab')?.addEventListener('click', () => {
+  const wasOn = isSoftLabEnabled();
+  setSoftLabEnabled(!wasOn);
+  if (!wasOn && isSoftLabEnabled()) {
+    // Off → on: clear soft sequential state so chips start clean.
+    clearSoftLabState(topCircuit);
+  }
+  persistSoftLabPreference();
+  document.getElementById('sim-soft-lab')?.classList.toggle('active', isSoftLabEnabled());
+  uiDirty = true;
+  objectInspector.refresh();
+});
+document.getElementById('sim-soft-lab')?.classList.toggle('active', isSoftLabEnabled());
 document.getElementById('sim-step')?.addEventListener('click', () => {
   if (machineRunner.attached) {
     machineRunner.setRunning(false);
@@ -2757,6 +3043,36 @@ function frame(): void {
         }
         simStepOnce = false;
         if (labActive) {
+          let clkPeriod: number | null = null;
+          const nets = flatNetMap;
+          // Prefer a free-running clock that shares a net with an analyzer channel.
+          for (const la of topCircuit.components.values()) {
+            if (la.kind !== 'analyzer') continue;
+            for (let ch = 0; ch < la.channelCount; ch++) {
+              const chPin = la.pins[`ch${ch}`];
+              if (!chPin) continue;
+              const chNet = nets.netOf.get(chPin.id);
+              if (!chNet) continue;
+              for (const c of topCircuit.components.values()) {
+                if (c.kind !== 'clock' || c.mode !== 'continuous' || !c.running) continue;
+                if (nets.netOf.get(c.pins.out.id) === chNet) {
+                  clkPeriod = c.periodFrames;
+                  break;
+                }
+              }
+              if (clkPeriod != null) break;
+            }
+            if (clkPeriod != null) break;
+          }
+          if (clkPeriod == null) {
+            for (const c of topCircuit.components.values()) {
+              if (c.kind === 'clock' && c.mode === 'continuous' && c.running) {
+                clkPeriod = c.periodFrames;
+                break;
+              }
+            }
+          }
+          logicAnalyzer.setTimebaseFrames(clkPeriod);
           logicAnalyzer.sampleCircuit(topCircuit, flatNetMap, simState.levelOf);
         }
 

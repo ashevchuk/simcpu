@@ -1,12 +1,12 @@
 /**
- * On-screen Kempston / Cursor / Sinclair joystick pad for soft Spectrum games.
+ * On-screen Kempston / Cursor / Sinclair / WASD joystick pad for soft Spectrum games.
  */
 
-export type JoyMode = 'kempston' | 'cursor' | 'sinclair';
+export type JoyMode = 'kempston' | 'cursor' | 'sinclair' | 'wasd';
 
 export type SpectrumJoystickHandlers = {
   kempston: (bit: 0 | 1 | 2 | 3 | 4, down: boolean) => void;
-  /** Matrix key label press/release (Cursor / Sinclair). */
+  /** Matrix key label press/release (Cursor / Sinclair / WASD). */
   cursorKey: (label: string, down: boolean) => void;
 };
 
@@ -27,17 +27,37 @@ const SINCLAIR_KEYS: Record<0 | 1 | 2 | 3 | 4, string> = {
   4: '0', // fire
 };
 
-const MODE_CYCLE: JoyMode[] = ['kempston', 'cursor', 'sinclair'];
+/** GLAZX / many homebrew defaults: W A S D + F */
+const WASD_KEYS: Record<0 | 1 | 2 | 3 | 4, string> = {
+  0: 'D', // right
+  1: 'A', // left
+  2: 'S', // down
+  3: 'W', // up
+  4: 'F', // fire
+};
+
+/** Matrix keys for a pad mode (bit → label). Kempston returns null. */
+export function joyMatrixKeys(mode: JoyMode): Record<0 | 1 | 2 | 3 | 4, string> | null {
+  if (mode === 'kempston') return null;
+  if (mode === 'cursor') return CURSOR_KEYS;
+  if (mode === 'sinclair') return SINCLAIR_KEYS;
+  return WASD_KEYS;
+}
+
+const MODE_CYCLE: JoyMode[] = ['kempston', 'cursor', 'sinclair', 'wasd'];
 const MODE_LABEL: Record<JoyMode, string> = {
   kempston: 'Kempston',
   cursor: 'Cursor',
   sinclair: 'Sinclair',
+  wasd: 'WASD',
 };
 
 export class SpectrumJoystick {
   readonly root: HTMLElement;
   private pressed = new Set<0 | 1 | 2 | 3 | 4>();
   private handlers: SpectrumJoystickHandlers;
+  private hintEl: HTMLElement;
+  private modeBtn: HTMLButtonElement;
   mode: JoyMode = 'kempston';
 
   constructor(handlers: SpectrumJoystickHandlers) {
@@ -46,7 +66,7 @@ export class SpectrumJoystick {
     this.root.className = 'spec-joy';
     this.root.innerHTML = `
       <div class="spec-joy-title">
-        <button type="button" data-act="mode" class="spec-joy-mode" title="Cycle Kempston / Cursor / Sinclair">Kempston</button>
+        <button type="button" data-act="mode" class="spec-joy-mode" title="Cycle Kempston / Cursor / Sinclair / WASD">Kempston</button>
       </div>
       <div class="spec-joy-pad">
         <button type="button" data-bit="3" class="spec-joy-btn spec-joy-up" title="Up">▲</button>
@@ -55,15 +75,16 @@ export class SpectrumJoystick {
         <button type="button" data-bit="0" class="spec-joy-btn spec-joy-right" title="Right">▶</button>
         <button type="button" data-bit="2" class="spec-joy-btn spec-joy-down" title="Down">▼</button>
       </div>
-      <div class="spec-joy-hint">Arrows + Space/Z · cycle mode above</div>
+      <div class="spec-joy-hint">Arrows + Space/Z · cycle pad mode above</div>
     `;
+    this.hintEl = this.root.querySelector('.spec-joy-hint')!;
+    this.modeBtn = this.root.querySelector('[data-act="mode"]')!;
     this.root.addEventListener('mousedown', (e) => e.preventDefault());
-    this.root.querySelector('[data-act="mode"]')!.addEventListener('click', (e) => {
+    this.modeBtn.addEventListener('click', (e) => {
       e.preventDefault();
       this.clear();
       const i = MODE_CYCLE.indexOf(this.mode);
-      this.mode = MODE_CYCLE[(i + 1) % MODE_CYCLE.length]!;
-      (e.currentTarget as HTMLButtonElement).textContent = MODE_LABEL[this.mode];
+      this.setMode(MODE_CYCLE[(i + 1) % MODE_CYCLE.length]!);
     });
     for (const btn of Array.from(this.root.querySelectorAll<HTMLButtonElement>('[data-bit]'))) {
       const bit = Number(btn.dataset.bit) as 0 | 1 | 2 | 3 | 4;
@@ -80,10 +101,21 @@ export class SpectrumJoystick {
     }
   }
 
+  setMode(mode: JoyMode): void {
+    this.clear();
+    this.mode = mode;
+    this.modeBtn.textContent = MODE_LABEL[mode];
+  }
+
+  setHint(text: string): void {
+    this.hintEl.textContent = text;
+  }
+
   private apply(bit: 0 | 1 | 2 | 3 | 4, down: boolean): void {
     if (this.mode === 'kempston') this.handlers.kempston(bit, down);
     else if (this.mode === 'cursor') this.handlers.cursorKey(CURSOR_KEYS[bit]!, down);
-    else this.handlers.cursorKey(SINCLAIR_KEYS[bit]!, down);
+    else if (this.mode === 'sinclair') this.handlers.cursorKey(SINCLAIR_KEYS[bit]!, down);
+    else this.handlers.cursorKey(WASD_KEYS[bit]!, down);
   }
 
   private down(bit: 0 | 1 | 2 | 3 | 4): void {

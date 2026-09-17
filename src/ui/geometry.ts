@@ -1,6 +1,6 @@
-import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from '../sim/library.js';
+import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, BUS_SWITCH_BODY_W, ramPortCount, romPortCount } from '../sim/library.js';
 import type { Circuit } from '../sim/Circuit.js';
-import type { Component, Pin, Point, Wire } from '../sim/types.js';
+import type { BusSwitchComponent, Component, Pin, Point, Wire } from '../sim/types.js';
 
 export const GRID = 10;
 
@@ -654,15 +654,20 @@ function boundsHalfSize(c: Component): [number, number] {
       case 'clock':
         return [22, 16];
       case 'analyzer':
-        return [32, Math.max(20, (c.channelCount * 16) / 2 + 8)];
+        return [32, Math.max(20, ((c.channelCount - 1) * 20 + 28) / 2)];
       case 'busprobe':
-        return [42, Math.max(20, (c.bitWidth * 16) / 2 + 12)];
+        return [42, Math.max(20, ((c.bitWidth - 1) * 20 + 28) / 2)];
+      case 'busswitch':
+        return [52, Math.max(20, ((c.bitWidth - 1) * 20 + 28) / 2)];
       case 'tty':
         return [36, 22];
-      case 'led':
       case 'probe':
+      case 'led':
       case 'port':
+      case 'junction':
         return [12, 12];
+      case 'label':
+        return [28, 14];
       case 'sevenseg':
         return [22, 30];
       default:
@@ -679,6 +684,67 @@ export function findComponentNear(circuit: Circuit, p: Point) {
     if (Math.abs(c.pos.x - p.x) <= hw && Math.abs(c.pos.y - p.y) <= hh) return c;
   }
   return undefined;
+}
+
+/** How far inward from each pin the DIP paddle sits (along the pin-side axis). */
+export const BUS_SWITCH_PADDLE_INSET = 20;
+
+export { BUS_SWITCH_BODY_W };
+
+/**
+ * Average outward direction of the pin bank (body center → pins).
+ * Used so paddles stay on each pin's row under rotate/mirror.
+ */
+export function busSwitchSideUnit(c: BusSwitchComponent): Point {
+  let sx = 0;
+  let sy = 0;
+  let n = 0;
+  for (let i = 0; i < c.bitWidth; i++) {
+    const p = c.pins[`b${i}`];
+    if (!p) continue;
+    sx += p.pos.x - c.pos.x;
+    sy += p.pos.y - c.pos.y;
+    n++;
+  }
+  if (n === 0) return { x: 1, y: 0 };
+  sx /= n;
+  sy /= n;
+  const len = Math.hypot(sx, sy) || 1;
+  return { x: sx / len, y: sy / len };
+}
+
+/**
+ * World-space center of DIP paddle for bit `i` — same stack row as the pin,
+ * inset toward the package (not lerped toward body center, which used to
+ * squash all paddles into the middle).
+ */
+export function busSwitchPaddleCenter(c: BusSwitchComponent, bit: number): Point | null {
+  const pin = c.pins[`b${bit}`];
+  if (!pin) return null;
+  const u = busSwitchSideUnit(c);
+  return {
+    x: pin.pos.x - u.x * BUS_SWITCH_PADDLE_INSET,
+    y: pin.pos.y - u.y * BUS_SWITCH_PADDLE_INSET,
+  };
+}
+
+/**
+ * Which DIP bit paddle contains `p`, or null if the click is on the readout /
+ * package body but not a paddle.
+ */
+export function busSwitchBitAt(c: BusSwitchComponent, p: Point, radius = 10): number | null {
+  let best: number | null = null;
+  let bestD = radius;
+  for (let i = 0; i < c.bitWidth; i++) {
+    const center = busSwitchPaddleCenter(c, i);
+    if (!center) continue;
+    const d = dist(p, center);
+    if (d <= bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
 }
 
 /** Stored wire polyline (pin → waypoints → pin), before orthogonal expansion. */
@@ -705,6 +771,45 @@ export function distanceToSegment(p: Point, a: Point, b: Point): number {
   if (lengthSq === 0) return dist(p, a);
   const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq));
   return dist(p, { x: a.x + t * dx, y: a.y + t * dy });
+}
+
+/** Project `p` onto segment a–b; returns point + param t∈[0,1]. */
+export function projectOntoSegment(p: Point, a: Point, b: Point): { point: Point; t: number } {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq === 0) return { point: { x: a.x, y: a.y }, t: 0 };
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq));
+  return { point: { x: a.x + t * dx, y: a.y + t * dy }, t };
+}
+
+/** Nearest point on a polyline within `maxDist`, or null. */
+export function nearestOnPolyline(
+  poly: Point[],
+  p: Point,
+  maxDist: number,
+): { point: Point; segIndex: number } | null {
+  let best: { point: Point; segIndex: number; d: number } | null = null;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const { point, t: _t } = projectOntoSegment(p, poly[i]!, poly[i + 1]!);
+    const d = dist(p, point);
+    if (d <= maxDist && (!best || d < best.d)) best = { point, segIndex: i, d };
+  }
+  return best ? { point: best.point, segIndex: best.segIndex } : null;
+}
+
+/** Drop consecutive near-duplicates; return interior points (exclude endpoints). */
+export function interiorWaypoints(poly: Point[]): Point[] {
+  if (poly.length <= 2) return [];
+  const cleaned: Point[] = [{ ...poly[0]! }];
+  for (let i = 1; i < poly.length; i++) {
+    const p = poly[i]!;
+    const prev = cleaned[cleaned.length - 1]!;
+    if (Math.abs(p.x - prev.x) < 0.5 && Math.abs(p.y - prev.y) < 0.5) continue;
+    cleaned.push({ x: p.x, y: p.y });
+  }
+  if (cleaned.length <= 2) return [];
+  return cleaned.slice(1, -1).map((q) => ({ x: q.x, y: q.y }));
 }
 
 /** Nearest *existing* bend point to `p` (a pin endpoint never counts), for grabbing one to drag. */

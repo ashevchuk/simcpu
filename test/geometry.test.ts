@@ -166,4 +166,5 @@ describe('routeWirePoints obstacles', () => {
     });
     expect(hits).toBe(false);
   });
+
 });

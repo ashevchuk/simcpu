@@ -120,10 +120,11 @@ export class Circuit {
     bumpStructureVersion();
   }
 
-  addWire(a: string, b: string, waypoints?: Point[]): Wire {
+  addWire(a: string, b: string, waypoints?: Point[], bundleId?: string): Wire {
     const id = nextId('w');
     const w: Wire =
       waypoints !== undefined && waypoints.length > 0 ? { id, a, b, waypoints } : { id, a, b };
+    if (bundleId) w.bundleId = bundleId;
     this.wires.set(id, w);
     if (this.batchDepth === 0) bumpStructureVersion();
     return w;

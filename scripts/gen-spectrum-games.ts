@@ -13,6 +13,13 @@ const outPath = join(root, 'src/machine/spectrum/gamesData.ts');
 type Meta = { id: string; title: string; kind: 'sna' | 'tap'; note: string; model?: '48' | '128' };
 
 const META: Record<string, Meta> = {
+  'ay-beep128.sna': {
+    id: 'ay-beep',
+    title: 'AY beep demo (128K SNA)',
+    kind: 'sna',
+    note: 'Project smoke — AY tone + border',
+    model: '128',
+  },
   'rainbow-demo.sna': {
     id: 'rainbow',
     title: 'Rainbow demo (SNA)',

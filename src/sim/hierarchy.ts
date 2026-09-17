@@ -7,6 +7,7 @@ import { importChipDef, serializeChipDef } from './serialize.js';
 import { applyPinLayout } from './orientation.js';
 import type {
   ButtonComponent,
+  BusSwitchComponent,
   ChipInstanceComponent,
   ClockComponent,
   Component,
@@ -16,6 +17,13 @@ import type {
   PortComponent,
   SourceComponent,
 } from './types.js';
+import {
+  ensureSoftState,
+  hasSoftLabModel,
+  isSoftExpandForced,
+  isSoftLabEnabled,
+  softLabModelKey,
+} from './softLab.js';
 
 export interface FoldResult {
   def: ChipDef;
@@ -32,9 +40,11 @@ const UNFOLD_ID_PREFIX: Record<Component['kind'], string> = {
   clock: 'clk',
   analyzer: 'la',
   busprobe: 'bus',
+  busswitch: 'bsw',
   tty: 'tty',
   probe: 'probe',
   label: 'lbl',
+  junction: 'junc',
   port: 'port',
   chip: 'chip',
   ram: 'ram',
@@ -605,8 +615,8 @@ interface FlatLevel {
  * rather than serving a stale toggle forever.
  */
 interface LiveValuePair {
-  original: SourceComponent | InputComponent | ButtonComponent | ClockComponent;
-  clone: SourceComponent | InputComponent | ButtonComponent | ClockComponent;
+  original: SourceComponent | InputComponent | ButtonComponent | ClockComponent | BusSwitchComponent;
+  clone: SourceComponent | InputComponent | ButtonComponent | ClockComponent | BusSwitchComponent;
 }
 
 /**
@@ -646,7 +656,10 @@ interface LiveValuePair {
  * addRawComponent()/addRawWire(), which don't bump the counter at all,
  * exactly the reason those two exist.
  */
-const flattenCache = new WeakMap<Circuit, { version: number; result: Circuit; liveValuePairs: LiveValuePair[] }>();
+const flattenCache = new WeakMap<
+  Circuit,
+  { version: number; softLab: boolean; result: Circuit; liveValuePairs: LiveValuePair[] }
+>();
 
 /**
  * Fully-expanded ChipDef flatten at prefix `''`, keyed by the def's own
@@ -654,14 +667,15 @@ const flattenCache = new WeakMap<Circuit, { version: number; result: Circuit; li
  * common case inside a folded Z80: thousands of identical gate chips)
  * rebase this template with `nsPrefix` instead of re-walking nested chips.
  */
-const chipDefFlatCache = new WeakMap<Circuit, { version: number; flat: FlatLevel }>();
+const chipDefFlatCache = new WeakMap<Circuit, { version: number; softLab: boolean; flat: FlatLevel }>();
 /** How many times flattenChipDef has been asked to expand this def.circuit. */
 const chipDefFlatRequestCount = new WeakMap<Circuit, number>();
 
 export function flatten(top: Circuit, library: ChipLibrary): Circuit {
   const version = currentStructureVersion();
+  const softLab = isSoftLabEnabled();
   const cached = flattenCache.get(top);
-  if (cached && cached.version === version) {
+  if (cached && cached.version === version && cached.softLab === softLab) {
     // The netlist itself hasn't changed, but a toggleable input's own
     // `.value` — the one piece of state this version check can't see (see
     // LiveValuePair's own doc comment) — might have, since the caller's
@@ -690,7 +704,7 @@ export function flatten(top: Circuit, library: ChipLibrary): Circuit {
   for (const c of components) out.addRawComponent(c);
   for (const w of wires) out.addRawWire(w);
 
-  flattenCache.set(top, { version, result: out, liveValuePairs });
+  flattenCache.set(top, { version, softLab, result: out, liveValuePairs });
   return out;
 }
 
@@ -819,6 +833,10 @@ function cloneComponent(c: Component): Component {
         kind: 'analyzer',
         channelCount: c.channelCount,
         armed: c.armed,
+        ...(c.channelLabels ? { channelLabels: [...c.channelLabels] } : {}),
+        triggerChannel: c.triggerChannel ?? null,
+        triggerEdge: c.triggerEdge ?? 'rise',
+        ...(c.lastSample ? { lastSample: [...c.lastSample] } : {}),
         pos,
         rotation: c.rotation,
         mirrorX: c.mirrorX,
@@ -834,6 +852,24 @@ function cloneComponent(c: Component): Component {
         id: c.id,
         kind: 'busprobe',
         bitWidth: c.bitWidth,
+        radix: c.radix,
+        ...(c.label !== undefined ? { label: c.label } : {}),
+        pos,
+        rotation: c.rotation,
+        mirrorX: c.mirrorX,
+        mirrorY: c.mirrorY,
+        pinOrder: [...c.pinOrder],
+        pins,
+      };
+    }
+    case 'busswitch': {
+      const pins: Record<string, Pin> = {};
+      for (const [name, p] of Object.entries(c.pins)) pins[name] = clonePin(p);
+      return {
+        id: c.id,
+        kind: 'busswitch',
+        bitWidth: c.bitWidth,
+        value: c.value,
         radix: c.radix,
         ...(c.label !== undefined ? { label: c.label } : {}),
         pos,
@@ -865,6 +901,8 @@ function cloneComponent(c: Component): Component {
       };
     case 'label':
       return { id: c.id, kind: 'label', name: c.name, pos, pins: { net: clonePin(c.pins.net) } };
+    case 'junction':
+      return { id: c.id, kind: 'junction', pos, pins: { net: clonePin(c.pins.net) } };
     case 'port':
       return {
         id: c.id,
@@ -917,6 +955,9 @@ function cloneComponent(c: Component): Component {
         ...(c.boxWidth !== undefined ? { boxWidth: c.boxWidth } : {}),
         ...(c.marking !== undefined ? { marking: c.marking } : {}),
         ...(c.defRevision !== undefined ? { defRevision: c.defRevision } : {}),
+        // Alias Soft Lab state like RAM `.bytes` so edges survive re-flatten.
+        ...(c.softState ? { softState: c.softState } : {}),
+        ...(c.softModel ? { softModel: c.softModel } : {}),
         pins: clonePinsRecord(c.pins),
       };
   }
@@ -1004,8 +1045,9 @@ function rebaseFlatCopy(src: FlatLevel): FlatLevel {
  */
 function flattenChipDef(def: ChipDef, library: ChipLibrary, prefix: string): FlatLevel {
   const version = currentStructureVersion();
+  const softLab = isSoftLabEnabled();
   const hit = chipDefFlatCache.get(def.circuit);
-  if (hit && hit.version === version) {
+  if (hit && hit.version === version && hit.softLab === softLab) {
     return rebaseFlat(hit.flat, prefix);
   }
 
@@ -1015,7 +1057,7 @@ function flattenChipDef(def: ChipDef, library: ChipLibrary, prefix: string): Fla
 
   if (next >= 2) {
     const template = flattenLevel(def.circuit, library, '');
-    chipDefFlatCache.set(def.circuit, { version, flat: template });
+    chipDefFlatCache.set(def.circuit, { version, softLab, flat: template });
     return rebaseFlat(template, prefix);
   }
   return flattenLevel(def.circuit, library, prefix);
@@ -1040,10 +1082,10 @@ function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string):
     // RAM `.bytes` is already aliased by cloneComponent. Writes during
     // step() must remain visible after the next flatten — see ARCHITECTURE.md
     // "Real RAM". StructuredClone used to copy the Uint8Array; we never do.
-    if (c.kind === 'source' || c.kind === 'input' || c.kind === 'button' || c.kind === 'clock') {
+    if (c.kind === 'source' || c.kind === 'input' || c.kind === 'button' || c.kind === 'clock' || c.kind === 'busswitch') {
       outLiveValuePairs.push({
         original: c,
-        clone: clone as SourceComponent | InputComponent | ButtonComponent | ClockComponent,
+        clone: clone as SourceComponent | InputComponent | ButtonComponent | ClockComponent | BusSwitchComponent,
       });
     }
     clone.id = nsPrefix + c.id;
@@ -1067,6 +1109,22 @@ function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string):
   for (const c of circuit.components.values()) {
     if (c.kind !== 'chip') continue;
     const def = library.get(c.defId);
+    const model = isSoftLabEnabled() ? softLabModelKey(def.name) : null;
+    if (model && hasSoftLabModel(def.name) && !isSoftExpandForced(def.name)) {
+      // Soft Lab: keep the instance opaque and evaluate in the solver.
+      const clone = cloneComponent(c) as ChipInstanceComponent;
+      clone.id = nsPrefix + c.id;
+      for (const p of Object.values(clone.pins)) {
+        p.id = idMap.get(p.id) ?? p.id;
+        p.componentId = clone.id;
+      }
+      const state = ensureSoftState(c, model);
+      clone.softState = state;
+      clone.softModel = model;
+      outComponents.push(clone);
+      continue;
+    }
+
     const child = flattenChipDef(def, library, `${nsPrefix}${c.id}/`);
 
     const portAlias = new Map<string, string>();

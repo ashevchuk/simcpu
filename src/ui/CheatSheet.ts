@@ -9,7 +9,10 @@ const SECTIONS: { title: string; rows: [string, string][] }[] = [
     title: 'Tools',
     rows: [
       ['1 / 2 / 3', 'Select / Pan / Wire'],
-      ['4–9, B, E, K, O', 'Place devices'],
+      ['Wire · smart route', 'Pin→pin auto-orthos (like Tidy)'],
+      ['Wire · node / branch', 'Click wire or bend → T-junction'],
+      ['Esc (wire)', 'Undo last bend / cancel wire'],
+      ['4–9, B, E, K, O, L, S', 'Place devices (S = 7-seg)'],
       ['Space + drag', 'Pan'],
       ['Wheel', 'Zoom'],
       ['F / 0', 'Fit / 1:1'],
@@ -37,12 +40,27 @@ const SECTIONS: { title: string; rows: [string, string][] }[] = [
   {
     title: 'Hierarchy & nets',
     rows: [
-      ['Ctrl+G / Shift+G', 'Fold / Unfold'],
+      ['Ctrl+G / Ctrl+Shift+G', 'Fold / Unfold'],
       ['Ctrl+F', 'Find'],
       ['Ctrl+R', 'Rename net'],
       ['Dblclick chip', 'Dive in'],
       ['Esc', 'Cancel wire · select tool · dive out'],
       ['?', 'This cheat sheet'],
+    ],
+  },
+  {
+    title: 'Lab & simulate',
+    rows: [
+      ['Soft Lab', 'Behavioral COUNTER/BCD/REG (toolbar)'],
+      ['Wire matching / bus pins', 'Context · shared names + q↔d/b'],
+      ['Ribbon bus switch → chip', 'Select hex switch + chip · context'],
+      ['DIP bus switch', 'Paddle = toggle bit · value = +1'],
+      ['Lab course checklist', 'Help → Lab course… · checkboxes + Next'],
+      ['Run / Pause / Step', 'Solver ticks (toolbar)'],
+      ['K · Pulse', 'Click canvas or Inspector Run/Fire'],
+      ['Analyzer', 'Dblclick → Arm; edge trig in LA window'],
+      ['Library tags', 'Gates / Lab / 74xx / User'],
+      ['Help → Tutorial…', 'Button→LED; latch; lab counter'],
     ],
   },
 ];

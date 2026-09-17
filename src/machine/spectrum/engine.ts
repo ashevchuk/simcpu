@@ -26,7 +26,13 @@ import {
   spectrumFlashPhase,
 } from './video.js';
 
-export const SPECTRUM_OPS_PER_FRAME = 48000;
+export const SPECTRUM_TSTATES_PER_FRAME = 69888;
+/**
+ * Soft ops per display frame at turbo×1.
+ * Tuned ≈ 69888 T / ~2.5 T-per-soft-op so timers/IRQ cadence track real-time
+ * better than the old 48k “always plenty” budget, while still booting BASIC.
+ */
+export const SPECTRUM_OPS_PER_FRAME = Math.floor(SPECTRUM_TSTATES_PER_FRAME / 2.5);
 
 export type SpectrumTurbo = 0.5 | 1 | 2 | 4 | 8;
 
@@ -321,7 +327,10 @@ export class SpectrumEngine {
     if (this.breakWriteHit) this.running = false;
 
     this.frameCounter++;
-    const tStates = Math.min(200_000, 69888 * Math.max(1, this.turbo));
+    const tStates = Math.min(
+      200_000,
+      SPECTRUM_TSTATES_PER_FRAME * Math.max(1, this.turbo),
+    );
     const beeper = this.ula.beeperSegments();
     const transitions = beeper.transitions.map((t) => ({ frac: t.frac, bit: t.bit }));
 

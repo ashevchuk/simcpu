@@ -1,0 +1,288 @@
+{
+  "format": "z80-sim-project",
+  "version": 1,
+  "topCircuit": {
+    "components": [
+      {
+        "id": "btn115658",
+        "kind": "button",
+        "mode": "toggle",
+        "value": 0,
+        "holdFrames": 0,
+        "pulseFrames": 8,
+        "pos": {
+          "x": 100,
+          "y": 60
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "btn115658:out",
+            "componentId": "btn115658",
+            "name": "out",
+            "pos": {
+              "x": 116,
+              "y": 60
+            }
+          }
+        }
+      },
+      {
+        "id": "clk115659",
+        "kind": "clock",
+        "mode": "continuous",
+        "value": 0,
+        "running": true,
+        "periodFrames": 20,
+        "dutyFrames": 10,
+        "phase": 0,
+        "holdFrames": 0,
+        "lastTrig": 0,
+        "pos": {
+          "x": 100,
+          "y": 160
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "out": {
+            "id": "clk115659:out",
+            "componentId": "clk115659",
+            "name": "out",
+            "pos": {
+              "x": 118,
+              "y": 160
+            }
+          },
+          "trig": {
+            "id": "clk115659:trig",
+            "componentId": "clk115659",
+            "name": "trig",
+            "pos": {
+              "x": 82,
+              "y": 160
+            }
+          }
+        }
+      },
+      {
+        "id": "chip115660",
+        "kind": "chip",
+        "defId": "chipdef106404",
+        "pos": {
+          "x": 280,
+          "y": 140
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pinOrder": [
+          "sin",
+          "clk",
+          "q0",
+          "q1",
+          "q2",
+          "q3"
+        ],
+        "pinSide": {
+          "sin": -1,
+          "clk": -1,
+          "q0": 1,
+          "q1": 1,
+          "q2": 1,
+          "q3": 1
+        },
+        "defRevision": 0,
+        "pins": {
+          "sin": {
+            "id": "chip115660:sin",
+            "componentId": "chip115660",
+            "name": "sin",
+            "pos": {
+              "x": 240,
+              "y": 130
+            }
+          },
+          "clk": {
+            "id": "chip115660:clk",
+            "componentId": "chip115660",
+            "name": "clk",
+            "pos": {
+              "x": 240,
+              "y": 150
+            }
+          },
+          "q0": {
+            "id": "chip115660:q0",
+            "componentId": "chip115660",
+            "name": "q0",
+            "pos": {
+              "x": 320,
+              "y": 110
+            }
+          },
+          "q1": {
+            "id": "chip115660:q1",
+            "componentId": "chip115660",
+            "name": "q1",
+            "pos": {
+              "x": 320,
+              "y": 130
+            }
+          },
+          "q2": {
+            "id": "chip115660:q2",
+            "componentId": "chip115660",
+            "name": "q2",
+            "pos": {
+              "x": 320,
+              "y": 150
+            }
+          },
+          "q3": {
+            "id": "chip115660:q3",
+            "componentId": "chip115660",
+            "name": "q3",
+            "pos": {
+              "x": 320,
+              "y": 170
+            }
+          }
+        },
+        "defName": "SHIFT4_SIPO"
+      },
+      {
+        "id": "led115663",
+        "kind": "led",
+        "label": "q0",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 480,
+          "y": 60
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led115663:in",
+            "componentId": "led115663",
+            "name": "in",
+            "pos": {
+              "x": 466,
+              "y": 60
+            }
+          }
+        }
+      },
+      {
+        "id": "led115665",
+        "kind": "led",
+        "label": "q1",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 480,
+          "y": 110
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led115665:in",
+            "componentId": "led115665",
+            "name": "in",
+            "pos": {
+              "x": 466,
+              "y": 110
+            }
+          }
+        }
+      },
+      {
+        "id": "led115667",
+        "kind": "led",
+        "label": "q2",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 480,
+          "y": 160
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led115667:in",
+            "componentId": "led115667",
+            "name": "in",
+            "pos": {
+              "x": 466,
+              "y": 160
+            }
+          }
+        }
+      },
+      {
+        "id": "led115669",
+        "kind": "led",
+        "label": "q3",
+        "color": "#ff4d4d",
+        "pos": {
+          "x": 480,
+          "y": 210
+        },
+        "rotation": 0,
+        "mirrorX": false,
+        "mirrorY": false,
+        "pins": {
+          "in": {
+            "id": "led115669:in",
+            "componentId": "led115669",
+            "name": "in",
+            "pos": {
+              "x": 466,
+              "y": 210
+            }
+          }
+        }
+      }
+    ],
+    "wires": [
+      {
+        "id": "w115661",
+        "a": "btn115658:out",
+        "b": "chip115660:sin"
+      },
+      {
+        "id": "w115662",
+        "a": "clk115659:out",
+        "b": "chip115660:clk"
+      },
+      {
+        "id": "w115664",
+        "a": "chip115660:q0",
+        "b": "led115663:in"
+      },
+      {
+        "id": "w115666",
+        "a": "chip115660:q1",
+        "b": "led115665:in"
+      },
+      {
+        "id": "w115668",
+        "a": "chip115660:q2",
+        "b": "led115667:in"
+      },
+      {
+        "id": "w115670",
+        "a": "chip115660:q3",
+        "b": "led115669:in"
+      }
+    ]
+  },
+  "chipDefs": []
+}

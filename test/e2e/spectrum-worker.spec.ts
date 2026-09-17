@@ -143,6 +143,41 @@ test.describe('Spectrum Worker (http)', () => {
       .toBe(beforePc);
   });
 
+  test('Z80 round-trip save/load keeps PC', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto(`${base}/`);
+    await waitMenubar(page);
+    await placeSpectrum48(page);
+    await loadBundledDemo(page, 'rainbow');
+    await expect.poll(() => spectrumScreenActive(page), { timeout: 20_000 }).toBe(true);
+    await page.locator('.float-win.machine-panel [data-act="pause"]').first().click();
+    await expect.poll(async () => page.locator('[data-spec-regs]').innerText()).toMatch(/PC=8/i);
+    const beforePc = (await page.locator('[data-spec-regs]').innerText()).match(/PC=([0-9a-f]+)/i)?.[1];
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.locator('[data-act="save-z80-tab"]').click(),
+    ]);
+    const tmp = await download.path();
+    expect(tmp).toBeTruthy();
+    const buf = fs.readFileSync(tmp!);
+    expect(buf.length).toBeGreaterThan(30);
+    await page.locator('[data-act="reboot"]').first().click();
+    await expect.poll(async () => panelLog(page)).toMatch(/reboot/i);
+    await page.setInputFiles('input[data-file="z80"]', {
+      name: 'roundtrip.z80',
+      mimeType: 'application/octet-stream',
+      buffer: buf,
+    });
+    await expect.poll(() => spectrumScreenActive(page), { timeout: 20_000 }).toBe(true);
+    await page.locator('.float-win.machine-panel [data-act="pause"]').first().click();
+    await expect
+      .poll(async () => {
+        const regs = await page.locator('[data-spec-regs]').innerText();
+        return regs.match(/PC=([0-9a-f]+)/i)?.[1];
+      }, { timeout: 5_000 })
+      .toBe(beforePc);
+  });
+
   test('128K TAP via 48 BASIC auto-LOAD paints', async ({ page }) => {
     test.setTimeout(120_000);
     await page.goto(`${base}/`);

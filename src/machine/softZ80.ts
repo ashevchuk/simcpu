@@ -80,8 +80,13 @@ export interface SoftMemHooks {
   irqPending?: () => boolean;
   /** Optional progress callback (step index, max steps) — used for Spectrum beeper timing. */
   onStep?: (step: number, max: number) => void;
-  /** Clear IRQ after IM1 vector taken. */
+  /** Clear IRQ after IM1/IM2 vector taken. */
   clearIrq?: () => void;
+  /**
+   * Byte placed on the data bus during INTACK (IM 0 / IM 2 low vector byte).
+   * Spectrum ULA floats 0xFF — default when unset.
+   */
+  irqBusByte?: () => number;
 }
 
 const FLAG_C = 0x01;
@@ -1156,18 +1161,28 @@ function execOpcode(
 }
 
 /**
- * Accept a pending maskable IRQ in IM 1 (RST 38H). Returns true if taken.
- * Leaves pending uncleared when IFF1 is off or still in EI delay.
+ * Accept a pending maskable IRQ.
+ * IM 1 → RST 38H; IM 2 → word at (I<<8 | busByte), Spectrum bus defaults to 0xFF.
+ * IM 0 is not implemented (returns false, leaves pending).
+ * Leaves pending uncleared when IFF1 is off, EI delay, or unsupported mode.
  */
 export function softAcceptIrq(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): boolean {
   if (!hooks?.irqPending?.()) return false;
   if (!cpu.iff1 || cpu.eiDelay > 0) return false;
-  if (cpu.im !== 1) return false;
+  if (cpu.im !== 1 && cpu.im !== 2) return false;
   cpu.halted = false;
   cpu.iff1 = false;
   cpu.iff2 = false;
   pushReturn(cpu, ram, cpu.pc, hooks);
-  cpu.pc = uAddr(0x0038, hooks);
+  if (cpu.im === 1) {
+    cpu.pc = uAddr(0x0038, hooks);
+  } else {
+    const bus = (hooks.irqBusByte?.() ?? 0xff) & 0xff;
+    const vec = uAddr(((cpu.i & 0xff) << 8) | bus, hooks);
+    const lo = memRead(ram, vec, hooks);
+    const hi = memRead(ram, (vec + 1) & 0xffff, hooks);
+    cpu.pc = uAddr(lo | (hi << 8), hooks);
+  }
   hooks.clearIrq?.();
   return true;
 }
