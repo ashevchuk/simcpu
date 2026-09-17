@@ -82,14 +82,20 @@ export interface InputComponent {
   pins: { out: Pin };
 }
 
-/** Lab pushbutton. Momentary: click drives 1 for `pulseFrames` ticks then 0. Toggle: click flips `value`. */
+/**
+ * Lab pushbutton.
+ * Momentary: stays 1 while the mouse button is held (Editor); optional
+ * `holdFrames` decay remains for scripted/legacy pulses.
+ * Toggle: click flips `value`.
+ */
 export interface ButtonComponent {
   id: string;
   kind: 'button';
   mode: 'momentary' | 'toggle';
   value: 0 | 1;
-  /** Remaining high frames while pulsing (momentary). */
+  /** Remaining high frames while auto-pulsing (legacy / scripted). */
   holdFrames: number;
+  /** Legacy auto-pulse length when `holdFrames` is set without pointer hold. */
   pulseFrames: number;
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
@@ -101,10 +107,12 @@ export interface ButtonComponent {
 /**
  * SPST pass-through switch. When `closed`, `in` and `out` share one net
  * (Circuit.computeNets unions them). Open = electrically separate. Not a driver.
+ * `toggle` (default): click flips closed. `momentary`: closed while mouse held.
  */
 export interface SwitchComponent {
   id: string;
   kind: 'switch';
+  mode: 'momentary' | 'toggle';
   closed: boolean;
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
@@ -210,12 +218,14 @@ export interface BusProbeComponent {
 
 /**
  * Writable multi-bit DIP bus switch — drives `b0` (LSB) … `b{n-1}` from
- * `value` like a bank of Inputs. Click a paddle to toggle that bit; click the
- * readout to step the whole value. Inspector edits hex/bin/dec.
+ * `value` like a bank of Inputs.
+ * `toggle` (default): paddle click flips that bit; readout click steps value.
+ * `momentary`: paddle held drives that bit high until release.
  */
 export interface BusSwitchComponent {
   id: string;
   kind: 'busswitch';
+  mode: 'momentary' | 'toggle';
   bitWidth: number;
   /** Unsigned value; only the low `bitWidth` bits are driven. */
   value: number;
@@ -233,10 +243,12 @@ export interface BusSwitchComponent {
 /**
  * Bank of SPST pass switches. Bit *i* of `closed` merges pins `a{i}` ↔ `b{i}`
  * into one net when set. Not a driver (unlike `busswitch`).
+ * `toggle` (default): paddle click flips that bit. `momentary`: bit closed while held.
  */
 export interface BusPassComponent {
   id: string;
   kind: 'buspass';
+  mode: 'momentary' | 'toggle';
   bitWidth: number;
   /** Bitmask: bit i closed ⇒ aᵢ connected to bᵢ. */
   closed: number;

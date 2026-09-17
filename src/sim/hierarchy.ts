@@ -788,6 +788,7 @@ function cloneComponent(c: Component): Component {
       return {
         id: c.id,
         kind: 'switch',
+        mode: c.mode,
         closed: c.closed,
         pos,
         rotation: c.rotation,
@@ -881,6 +882,7 @@ function cloneComponent(c: Component): Component {
       return {
         id: c.id,
         kind: 'busswitch',
+        mode: c.mode,
         bitWidth: c.bitWidth,
         value: c.value,
         radix: c.radix,
@@ -899,6 +901,7 @@ function cloneComponent(c: Component): Component {
       return {
         id: c.id,
         kind: 'buspass',
+        mode: c.mode,
         bitWidth: c.bitWidth,
         closed: c.closed,
         ...(c.label !== undefined ? { label: c.label } : {}),

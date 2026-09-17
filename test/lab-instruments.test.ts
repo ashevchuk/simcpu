@@ -39,7 +39,7 @@ describe('lab instruments', () => {
     expect(crosses).toEqual([{ x: 10, y: 10 }]);
   });
 
-  it('momentary button pulses then releases', () => {
+  it('scripted momentary holdFrames decay then release', () => {
     const c = new Circuit();
     const btn = makeButton(c, { x: 0, y: 0 }, 'momentary');
     btn.pulseFrames = 3;
@@ -51,6 +51,34 @@ describe('lab instruments', () => {
     tickLabInstruments(c);
     expect(btn.value).toBe(0);
     expect(btn.holdFrames).toBe(0);
+  });
+
+  it('momentary button stays high while mouse is held', async () => {
+    const { Editor } = await import('../src/ui/Editor.js');
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const btn = makeButton(c, { x: 0, y: 0 }, 'momentary');
+    ed.handleMouseDown({ x: 0, y: 0 });
+    expect(btn.value).toBe(1);
+    ed.handleMouseDrag({ x: 1, y: 0 }); // under drag threshold
+    expect(btn.value).toBe(1);
+    ed.handleMouseUp({ x: 1, y: 0 }, false);
+    expect(btn.value).toBe(0);
+  });
+
+  it('momentary button releases when drag-moved', async () => {
+    const { Editor } = await import('../src/ui/Editor.js');
+    const lib = new ChipLibrary();
+    const c = new Circuit();
+    const ed = new Editor(c, lib);
+    const btn = makeButton(c, { x: 0, y: 0 }, 'momentary');
+    ed.handleMouseDown({ x: 0, y: 0 });
+    expect(btn.value).toBe(1);
+    ed.handleMouseDrag({ x: 40, y: 0 });
+    expect(btn.value).toBe(0);
+    ed.handleMouseUp({ x: 40, y: 0 }, false);
+    expect(btn.value).toBe(0);
   });
 
   it('clock toggles when running', () => {

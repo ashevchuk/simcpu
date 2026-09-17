@@ -1,7 +1,9 @@
 /**
- * Pure helpers for lab instruments — tick pulse generators / release momentary buttons.
+ * Pure helpers for lab instruments — tick pulse generators / release scripted
+ * momentary button holds. Pointer-held momentaries are owned by Editor
+ * (mousedown → 1, mouseup → 0) and do not use holdFrames.
  * Called from main.ts whenever the frame already simulates, and every frame while
- * `circuitNeedsLabTick` (running clocks, held buttons, armed analyzers).
+ * `circuitNeedsLabTick` (running clocks, decaying holds, armed analyzers).
  */
 
 import type { Circuit } from './Circuit.js';
@@ -21,7 +23,7 @@ function pinLevel(
 /**
  * True when instruments need wall-clock frames (not only opportunistic ticks
  * during an already-scheduled sim draw): a running/oneshot pulse gen, a
- * decaying momentary button, or an armed analyzer.
+ * decaying scripted momentary button hold, or an armed analyzer.
  */
 export function circuitNeedsLabTick(circuit: Circuit, analyzerArmed = false): boolean {
   if (analyzerArmed) return true;

@@ -39,9 +39,32 @@ async function main(): Promise<void> {
   await page.goto(base + '/');
   await page.waitForSelector('#canvas');
 
+  // Overview / chrome / wire / lab-course all sit on the default CMOS inverter bench.
   await loadExample(page, 'cmos-inverter');
+  await shot(page, '01-chrome-soft-lab');
   await shot(page, '03-cmos-inverter');
   await shot(page, 'help-lab-course-cmos');
+
+  await page.locator('[data-tool="wire"]').click();
+  await page.waitForTimeout(200);
+  await prep(page);
+  await shot(page, '21-wire-tool-ready');
+  await page.locator('[data-tool="select"]').click();
+  await page.waitForTimeout(100);
+
+  await page.locator('.menu[data-menu="help"] .menu-trigger').click();
+  await page.waitForTimeout(200);
+  await page.locator('#help-lab-course').click();
+  await page.waitForTimeout(400);
+  await dismissDialogs(page);
+  await shot(page, '23-lab-course-panel');
+  await scrubFloats(page);
+
+  await page.locator('.menu[data-menu="place"] .menu-trigger').click();
+  await page.waitForTimeout(250);
+  await shot(page, '24-place-menu');
+  await page.keyboard.press('Escape');
+  await prep(page);
 
   await loadExample(page, 'and-gate');
   await page.evaluate(() => {

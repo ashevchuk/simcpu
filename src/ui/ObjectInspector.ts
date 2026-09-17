@@ -5,6 +5,7 @@
  */
 
 import type { Circuit } from '../sim/Circuit.js';
+import { bumpStructureVersion } from '../sim/Circuit.js';
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import { renamePort } from '../sim/hierarchy.js';
 import {
@@ -468,7 +469,7 @@ export class ObjectInspector {
         select(
           c.mode,
           [
-            { value: 'momentary', label: 'momentary' },
+            { value: 'momentary', label: 'momentary (hold)' },
             { value: 'toggle', label: 'toggle' },
           ],
           (v) => {
@@ -480,22 +481,26 @@ export class ObjectInspector {
           },
         ),
       );
-      addRow(
-        'pulse fr',
-        numInput(
-          c.pulseFrames,
-          (n) => {
-            this.noteEdit();
-            c.pulseFrames = Math.max(1, n);
-            this.changed();
-          },
-          1,
-          600,
-        ),
-      );
     }
 
     if (c.kind === 'switch') {
+      addRow(
+        'mode',
+        select(
+          c.mode,
+          [
+            { value: 'toggle', label: 'toggle' },
+            { value: 'momentary', label: 'momentary (hold)' },
+          ],
+          (v) => {
+            this.noteEdit();
+            c.mode = v === 'momentary' ? 'momentary' : 'toggle';
+            c.closed = false;
+            bumpStructureVersion();
+            this.changed();
+          },
+        ),
+      );
       addRow(
         'closed',
         select(
@@ -512,7 +517,10 @@ export class ObjectInspector {
       );
       const note = document.createElement('div');
       note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
-      note.textContent = 'Pass: closed merges in↔out into one net';
+      note.textContent =
+        c.mode === 'momentary'
+          ? 'Pass: hold to close in↔out; release opens'
+          : 'Pass: click toggles closed; merges in↔out into one net';
       body.appendChild(note);
     }
 
@@ -983,6 +991,22 @@ export class ObjectInspector {
 
     if (c.kind === 'busswitch') {
       addRow(
+        'mode',
+        select(
+          c.mode,
+          [
+            { value: 'toggle', label: 'toggle' },
+            { value: 'momentary', label: 'momentary (hold)' },
+          ],
+          (v) => {
+            this.noteEdit();
+            c.mode = v === 'momentary' ? 'momentary' : 'toggle';
+            c.value = 0;
+            this.changed();
+          },
+        ),
+      );
+      addRow(
         'width',
         (() => {
           const inp = document.createElement('input');
@@ -1046,11 +1070,31 @@ export class ObjectInspector {
       );
       const note = document.createElement('div');
       note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
-      note.textContent = 'DIP: paddle = toggle bit · readout = +1 · b0 = LSB';
+      note.textContent =
+        c.mode === 'momentary'
+          ? 'DIP: hold paddle to drive bit high · b0 = LSB'
+          : 'DIP: paddle = toggle bit · readout = +1 · b0 = LSB';
       body.appendChild(note);
     }
 
     if (c.kind === 'buspass') {
+      addRow(
+        'mode',
+        select(
+          c.mode,
+          [
+            { value: 'toggle', label: 'toggle' },
+            { value: 'momentary', label: 'momentary (hold)' },
+          ],
+          (v) => {
+            this.noteEdit();
+            c.mode = v === 'momentary' ? 'momentary' : 'toggle';
+            c.closed = 0;
+            bumpStructureVersion();
+            this.changed();
+          },
+        ),
+      );
       addRow(
         'width',
         (() => {
@@ -1090,7 +1134,10 @@ export class ObjectInspector {
       );
       const note = document.createElement('div');
       note.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin-top:4px';
-      note.textContent = 'Pass bank: paddle = toggle pole · closed merges aᵢ↔bᵢ';
+      note.textContent =
+        c.mode === 'momentary'
+          ? 'Pass bank: hold paddle to close aᵢ↔bᵢ; release opens'
+          : 'Pass bank: paddle = toggle pole · closed merges aᵢ↔bᵢ';
       body.appendChild(note);
     }
   }
