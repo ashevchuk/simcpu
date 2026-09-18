@@ -353,13 +353,22 @@ function seedShiftPiso(library: ChipLibrary, bits: number, name: string): void {
       }
       prevQ = ff.pins.q!;
     }
+    // `sout` must be a distinct pin from `q{n-1}`: foldExposing collapses
+    // two exposures of the same net into one port name. Soft Lab drives both
+    // `sout` and `q*`; UI wiring also expects a real `sout` pin.
+    const soutBuf = place(circuit, library, 'TRI_BUF', {
+      x: 560,
+      y: (bits - 1) * row,
+    });
+    wire(circuit, qPins[bits - 1]!, soutBuf.pins.a!);
+    wire(circuit, railPin(circuit, 'VCC', { x: 520, y: (bits - 1) * row }), soutBuf.pins.en!);
     const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [
       { pin: load, isOutput: false, portName: 'load' },
       { pin: clk, isOutput: false, portName: 'clk' },
     ];
     for (let i = 0; i < bits; i++) ports.push({ pin: dPins[i]!, isOutput: false, portName: `d${i}` });
-    ports.push({ pin: qPins[bits - 1]!, isOutput: true, portName: 'sout' });
     for (let i = 0; i < bits; i++) ports.push({ pin: qPins[i]!, isOutput: true, portName: `q${i}` });
+    ports.push({ pin: soutBuf.pins.out!, isOutput: true, portName: 'sout' });
     return { circuit, ports };
   });
 }

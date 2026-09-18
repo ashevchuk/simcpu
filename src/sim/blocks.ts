@@ -49,11 +49,11 @@ function makeRegisterBitChip(library: ChipLibrary): ChipDef {
   makeSource(scratch, 0);
   const bit = buildRegisterBit(scratch);
   return foldExposing(scratch, 'REG_BIT', library, [
-    { pin: bit.d, isOutput: false },
-    { pin: bit.we, isOutput: false },
-    { pin: bit.clk, isOutput: false },
-    { pin: bit.q, isOutput: true },
-    { pin: bit.qn, isOutput: true },
+    { pin: bit.d, isOutput: false, portName: 'd' },
+    { pin: bit.we, isOutput: false, portName: 'we' },
+    { pin: bit.clk, isOutput: false, portName: 'clk' },
+    { pin: bit.q, isOutput: true, portName: 'q' },
+    { pin: bit.qn, isOutput: true, portName: 'qn' },
   ]);
 }
 
@@ -164,13 +164,13 @@ function makeAluSliceChip(library: ChipLibrary): ChipDef {
   makeSource(scratch, 0);
   const slice = buildAluSlice(scratch);
   return foldExposing(scratch, 'ALU_SLICE', library, [
-    { pin: slice.a, isOutput: false },
-    { pin: slice.b, isOutput: false },
-    { pin: slice.cin, isOutput: false },
-    { pin: slice.op0, isOutput: false },
-    { pin: slice.op1, isOutput: false },
-    { pin: slice.out, isOutput: true },
-    { pin: slice.cout, isOutput: true },
+    { pin: slice.a, isOutput: false, portName: 'a' },
+    { pin: slice.b, isOutput: false, portName: 'b' },
+    { pin: slice.cin, isOutput: false, portName: 'cin' },
+    { pin: slice.op0, isOutput: false, portName: 'op0' },
+    { pin: slice.op1, isOutput: false, portName: 'op1' },
+    { pin: slice.out, isOutput: true, portName: 'out' },
+    { pin: slice.cout, isOutput: true, portName: 'cout' },
   ]);
 }
 
@@ -275,11 +275,13 @@ function makeMux2Chip(library: ChipLibrary): ChipDef {
   makeSource(scratch, 1); // rail driver
   makeSource(scratch, 0);
   const m = buildMux2(scratch);
+  // Names must match seedStandardCells / Soft Lab 74157_1 (sel/in0/in1/out).
+  // Default fold would yield a/b/c/out and break aliasChip('74157_1','MUX2').
   return foldExposing(scratch, 'MUX2', library, [
-    { pin: m.sel, isOutput: false },
-    { pin: m.in0, isOutput: false },
-    { pin: m.in1, isOutput: false },
-    { pin: m.out, isOutput: true },
+    { pin: m.sel, isOutput: false, portName: 'sel' },
+    { pin: m.in0, isOutput: false, portName: 'in0' },
+    { pin: m.in1, isOutput: false, portName: 'in1' },
+    { pin: m.out, isOutput: true, portName: 'out' },
   ]);
 }
 
@@ -724,10 +726,11 @@ function makeTriBufChip(library: ChipLibrary): ChipDef {
   makeSource(scratch, 1); // rail driver
   makeSource(scratch, 0);
   const buf = buildTriStateBuffer(scratch);
+  // Match seedStandardCells TRI_BUF (a/en/out); default fold would name en as b.
   return foldExposing(scratch, 'TRI_BUF', library, [
-    { pin: buf.a, isOutput: false },
-    { pin: buf.en, isOutput: false },
-    { pin: buf.out, isOutput: true },
+    { pin: buf.a, isOutput: false, portName: 'a' },
+    { pin: buf.en, isOutput: false, portName: 'en' },
+    { pin: buf.out, isOutput: true, portName: 'out' },
   ]);
 }
 

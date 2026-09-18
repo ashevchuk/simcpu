@@ -104,6 +104,11 @@ describe('seedLabCells', () => {
       expect(isStdcellName(name)).toBe(true);
       expect(LABCELL_NAMES.has(name)).toBe(true);
     }
+    // Distinct sout + q{n-1} (fold must not collapse Soft Lab / UI sout).
+    expect(getDef(library, 'SHIFT4_PISO').ports).toContain('sout');
+    expect(getDef(library, 'SHIFT4_PISO').ports).toContain('q3');
+    expect(getDef(library, 'PISO8').ports).toContain('sout');
+    expect(getDef(library, 'PISO8').ports).toContain('q7');
   });
 
 
