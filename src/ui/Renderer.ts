@@ -327,7 +327,7 @@ export function draw(
     if (!isComponentVisible(c, visible)) continue;
     const selected = editor.selectedIds.has(c.id);
     const hovered = !selected && editor.hoveredComponentId === c.id && editor.tool.kind === 'select';
-    drawComponent(ctx, c, resolve, selected, hovered, library);
+    drawComponent(ctx, c, resolve, selected, hovered, library, opts?.softMode === true);
   }
 
   // Tutorial target rings (button / LED / wire endpoints / toggle target).
@@ -895,6 +895,8 @@ function drawBodyPinLabel(
  * three thick channel bars, narrow gate gap, substrate stub from the
  * middle bar (arrow N→in / P→out) then L-bend into the source-side
  * channel rectangle (not into the D/S stem wire).
+ * When `conducting`, the three bars merge into one continuous D–S channel
+ * (same gate rule as the solver: N@G=1, P@G=0).
  */
 function drawMosfetSymbol(
   ctx: CanvasRenderingContext2D,
@@ -902,6 +904,7 @@ function drawMosfetSymbol(
   color: string,
   selected: boolean,
   hovered: boolean,
+  conducting = false,
 ): void {
   const { rotation, mirrorX, mirrorY } = getOrientation(c);
   const isN = c.type === 'N';
@@ -957,9 +960,18 @@ function drawMosfetSymbol(
   ctx.lineTo(gatePlateX, botBarBot + 1);
   ctx.stroke();
 
-  // Three thick channel bars.
-  for (const cy of bars) {
-    ctx.fillRect(chanX - barW / 2, cy - barH / 2, barW, barH);
+  // Channel: three separate bars when off; solid D–S slab when conducting.
+  if (conducting) {
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6;
+    ctx.fillRect(chanX - barW / 2, topBarTop, barW, botBarBot - topBarTop);
+    ctx.restore();
+    ctx.fillRect(chanX - barW / 2, topBarTop, barW, botBarBot - topBarTop);
+  } else {
+    for (const cy of bars) {
+      ctx.fillRect(chanX - barW / 2, cy - barH / 2, barW, barH);
+    }
   }
 
   // Drain / source stems (same vertical as the bars).
@@ -1050,6 +1062,7 @@ function drawComponent(
   selected: boolean,
   hovered: boolean,
   library: ChipLibrary,
+  softMode = false,
 ): void {
   ctx.font = '10px ui-monospace, "SF Mono", monospace';
   ctx.textAlign = 'center';
@@ -1076,7 +1089,11 @@ function drawComponent(
   switch (c.kind) {
     case 'transistor': {
       const stroke = c.type === 'N' ? COLOR.strokeN : COLOR.strokeP;
-      drawMosfetSymbol(ctx, c, bodyStroke(stroke), selected, hovered);
+      // Match solver: N conducts at G=1, P at G=0. Soft Run mutes like live wires.
+      const gateLevel = resolve(c.pins.gate.id).level;
+      const conducting =
+        !softMode && (c.type === 'N' ? gateLevel === 1 : gateLevel === 0);
+      drawMosfetSymbol(ctx, c, bodyStroke(stroke), selected, hovered, conducting);
       drawPinDot(ctx, c.pins.gate, resolve);
       drawPinDot(ctx, c.pins.drain, resolve);
       drawPinDot(ctx, c.pins.source, resolve);
