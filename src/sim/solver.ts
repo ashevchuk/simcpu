@@ -4,6 +4,8 @@ import {
   ensureSoftState,
   softLabCommitEdges,
   softLabDriveOutputs,
+  fillSoftLabPorMasks,
+  tickSoftLabPor,
 } from './softLab.js';
 import type { SoftLabState } from './softLab.js';
 import type {
@@ -120,6 +122,9 @@ type StepStructureCache = {
   ramMask: Uint8Array;
   softMask: Uint8Array;
   driverMask: Uint8Array;
+  /** Soft Lab → Gates POR overrides (1 = force this net index). */
+  porLow: Uint8Array;
+  porHigh: Uint8Array;
   hist: Level[];
   histLen: Uint8Array;
   histStart: Uint8Array;
@@ -275,6 +280,8 @@ function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache 
     ramMask: new Uint8Array(n),
     softMask: new Uint8Array(n),
     driverMask: new Uint8Array(n),
+    porLow: new Uint8Array(n),
+    porHigh: new Uint8Array(n),
     hist: new Array<Level>(n * HISTORY_WINDOW),
     histLen: new Uint8Array(n),
     histStart: new Uint8Array(n),
@@ -343,6 +350,11 @@ export function step(
     if (id === 'VCC') driverMask[i]! |= 2;
     else if (id === 'GND') driverMask[i]! |= 1;
   }
+
+  // Soft Lab → Gates POR: dense override masks (by net index).
+  const porLow = cache.porLow;
+  const porHigh = cache.porHigh;
+  fillSoftLabPorMasks(netMap.netOf, cache.indexOf, porLow, porHigh);
 
   // Oscillation bookkeeping is per-step (same semantics as a fresh buffer).
   histLen.fill(0);
@@ -515,6 +527,15 @@ export function step(
         }
       }
 
+      // Soft→Gates POR wins over drivers/hold so FF Q nets leave Z without
+      // pulsing the user's CLR button (which would contend if forced as a driver).
+      let por: Level | undefined;
+      for (let x = m; x >= 0; x = link[x]!) {
+        if (porLow[x]) por = 0;
+        else if (porHigh[x]) por = 1;
+      }
+      if (por !== undefined) value = por;
+
       for (let x = m; x >= 0; x = link[x]!) nxt[x] = value;
     }
 
@@ -545,6 +566,7 @@ export function step(
   applyRamWrites(rams, netMap, prev.levelOf, levelOf);
   applyRamKeyClearOnRead(rams, netMap, levelOf);
   applySoftLabEdges(softChips, cur);
+  tickSoftLabPor();
 
   return { levelOf, contended, settled: !changed, iterations };
 }

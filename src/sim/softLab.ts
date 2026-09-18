@@ -3,7 +3,9 @@
  *
  * When enabled, flatten() leaves matching chip instances opaque and solver.ts
  * drives their ports from truth tables / edge-triggered state (same idea as
- * RAM). Dive-in / Soft Lab off still expands the hierarchical transistor defs.
+ * RAM). Soft Lab off expands all hierarchical transistor defs. Dive-in while
+ * Soft Lab is on auto force-expands ChipDefs on the nav path (see
+ * syncSoftExpandForDivePath) so internals show live levels.
  */
 
 import { bumpStructureVersion } from './Circuit.js';
@@ -22,6 +24,8 @@ let softLabEnabled = true;
 
 /** Def names forced to transistor-expand this session (Soft Lab still on). */
 const softExpandForced = new Set<string>();
+/** Subset of softExpandForced that dive-in armed automatically (released on leave). */
+const softExpandAutoDive = new Set<string>();
 
 export function isSoftLabEnabled(): boolean {
   return softLabEnabled;
@@ -33,11 +37,142 @@ export function setSoftLabEnabled(on: boolean): void {
   bumpStructureVersion();
 }
 
+/**
+ * Soft Lab → Gates hand-off: sequential soft chips power up floating (Z) in
+ * silicon, and with Clear already released they never leave Z. For a few
+ * solver steps after Soft Lab turns off (or a cold load with Soft Lab already
+ * off), force each such chip's `q*` low (and `qn*` high) so capacitive hold
+ * seeds a legal power-on state — without touching the user's CLR/WE toggles
+ * or machine RAM/ROM.
+ *
+ * Skips combinatorial soft models (`q.length === 0`) and SOFT_RAM16 (no
+ * silicon body). Does not affect Soft Run / buildZ80Cpu / RamComponent.
+ *
+ * Arm via {@link armSoftLabToGatesPor} (needs {@link softLabNeedsGatesPor}).
+ */
+const porLowPinIds = new Set<string>();
+const porHighPinIds = new Set<string>();
+let porStepsLeft = 0;
+
+const POR_STEPS = 8;
+
+function isPorQPin(name: string): boolean {
+  return name === 'q' || name === 'sout' || /^q\d+$/.test(name);
+}
+
+function isPorQnPin(name: string): boolean {
+  return name === 'qn' || /^qn\d+$/.test(name);
+}
+
+/**
+ * Arm one-shot POR for top-level Soft Lab sequential instances.
+ * Prefer existing `softState`; with a `library`, also match by ChipDef name
+ * (cold reload with Soft Lab already off — no softState yet).
+ * If `onlyDefNames` is set, only chips whose def name is in that set are armed
+ * (dive-in auto-expand of one ChipDef).
+ */
+export function armSoftLabToGatesPor(
+  circuit: {
+    components: Map<
+      string,
+      {
+        kind: string;
+        defId?: string;
+        softState?: SoftLabState;
+        pins?: Record<string, { id: string }>;
+      }
+    >;
+  },
+  library?: { has(id: string): boolean; get(id: string): { name: string } },
+  onlyDefNames?: ReadonlySet<string> | null,
+): void {
+  porLowPinIds.clear();
+  porHighPinIds.clear();
+  for (const c of circuit.components.values()) {
+    if (c.kind !== 'chip' || !c.pins) continue;
+    const defName =
+      library && c.defId && library.has(c.defId) ? library.get(c.defId).name : undefined;
+    if (onlyDefNames && (!defName || !onlyDefNames.has(defName))) continue;
+    let eligible = false;
+    if (c.softState && c.softState.q.length > 0 && c.softState.model !== 'SOFT_RAM16') {
+      eligible = true;
+      c.softState.q.fill(0);
+    } else if (defName) {
+      eligible = softLabNeedsGatesPor(defName);
+    }
+    if (!eligible) continue;
+    for (const [name, pin] of Object.entries(c.pins)) {
+      if (isPorQPin(name)) porLowPinIds.add(pin.id);
+      else if (isPorQnPin(name)) porHighPinIds.add(pin.id);
+    }
+  }
+  porStepsLeft = porLowPinIds.size > 0 || porHighPinIds.size > 0 ? POR_STEPS : 0;
+}
+
+export function softLabPorActive(): boolean {
+  return porStepsLeft > 0;
+}
+
+/** Pin id → forced level while POR is active; null if this pin is not forced. */
+export function softLabPorPinLevel(pinId: string): 0 | 1 | null {
+  if (porStepsLeft <= 0) return null;
+  if (porLowPinIds.has(pinId)) return 0;
+  if (porHighPinIds.has(pinId)) return 1;
+  return null;
+}
+
+/**
+ * Fill dense POR override masks (parallel to solver net indices).
+ * Only walks the small POR pin sets — not the whole netlist.
+ */
+export function fillSoftLabPorMasks(
+  netOf: Map<string, string>,
+  indexOf: Map<string, number>,
+  porLow: Uint8Array,
+  porHigh: Uint8Array,
+): void {
+  porLow.fill(0);
+  porHigh.fill(0);
+  if (porStepsLeft <= 0) return;
+  for (const pinId of porLowPinIds) {
+    const net = netOf.get(pinId);
+    if (!net) continue;
+    const idx = indexOf.get(net);
+    if (idx !== undefined) porLow[idx] = 1;
+  }
+  for (const pinId of porHighPinIds) {
+    const net = netOf.get(pinId);
+    if (!net) continue;
+    const idx = indexOf.get(net);
+    if (idx !== undefined) porHigh[idx] = 1;
+  }
+}
+
+/** Call once at the end of each solver `step` while POR may be active. */
+export function tickSoftLabPor(): void {
+  if (porStepsLeft <= 0) return;
+  porStepsLeft -= 1;
+  if (porStepsLeft <= 0) {
+    porLowPinIds.clear();
+    porHighPinIds.clear();
+  }
+}
+
+/** Test helper — drop any in-flight Soft→Gates POR. */
+export function clearSoftLabPor(): void {
+  porStepsLeft = 0;
+  porLowPinIds.clear();
+  porHighPinIds.clear();
+}
+
 /** When Soft Lab is on, force this ChipDef.name to expand to transistors. */
 export function setSoftExpandForced(defName: string, forced: boolean): void {
   const before = softExpandForced.has(defName);
   if (forced) softExpandForced.add(defName);
-  else softExpandForced.delete(defName);
+  else {
+    softExpandForced.delete(defName);
+    softExpandAutoDive.delete(defName);
+  }
   if (before !== forced) bumpStructureVersion();
 }
 
@@ -46,9 +181,47 @@ export function isSoftExpandForced(defName: string): boolean {
 }
 
 export function clearSoftExpandForced(): void {
-  if (softExpandForced.size === 0) return;
+  if (softExpandForced.size === 0 && softExpandAutoDive.size === 0) return;
   softExpandForced.clear();
+  softExpandAutoDive.clear();
   bumpStructureVersion();
+}
+
+/**
+ * Keep Soft Lab chip defs on the dive path transistor-expanded so internals
+ * show live levels; release auto-forced defs when leaving those levels.
+ * Manual force-expand (inspector) is preserved.
+ * @returns def names newly auto-forced this call (for POR seeding)
+ */
+export function syncSoftExpandForDivePath(defNamesOnPath: readonly string[]): string[] {
+  const newly: string[] = [];
+  if (!softLabEnabled) {
+    // Soft Lab off expands everything; drop auto markers only.
+    softExpandAutoDive.clear();
+    return newly;
+  }
+
+  const onPath = new Set<string>();
+  for (const name of defNamesOnPath) {
+    if (softLabModelKey(name)) onPath.add(name);
+  }
+
+  let released = false;
+  for (const name of [...softExpandAutoDive]) {
+    if (onPath.has(name)) continue;
+    softExpandAutoDive.delete(name);
+    if (softExpandForced.delete(name)) released = true;
+  }
+
+  for (const name of onPath) {
+    if (softExpandForced.has(name)) continue;
+    softExpandForced.add(name);
+    softExpandAutoDive.add(name);
+    newly.push(name);
+  }
+
+  if (released || newly.length > 0) bumpStructureVersion();
+  return newly;
 }
 
 export function loadSoftLabPreference(): boolean {
@@ -144,6 +317,13 @@ export function softLabModelKey(chipName: string): string | null {
 
 export function hasSoftLabModel(chipName: string): boolean {
   return softLabModelKey(chipName) != null;
+}
+
+/** True for Soft Lab models that hold sequential bits (eligible for Gates POR). */
+export function softLabNeedsGatesPor(chipName: string): boolean {
+  const key = softLabModelKey(chipName);
+  if (!key || key === 'SOFT_RAM16') return false;
+  return (MODEL_BITS[key] ?? 0) > 0;
 }
 
 export function ensureSoftState(chip: ChipInstanceComponent, model: string): SoftLabState {

@@ -34,12 +34,14 @@ import { initialState, step } from './sim/solver.js';
 import { pruneDuplicateChipNames, seedStandardCells, isStdcellName, STDCELL_NAMES } from './sim/stdcells.js';
 import { isLabcellName } from './sim/labcells.js';
 import {
+  armSoftLabToGatesPor,
   clearSoftExpandForced,
   clearSoftLabState,
   isSoftLabEnabled,
   loadSoftLabPreference,
   persistSoftLabPreference,
   setSoftLabEnabled,
+  syncSoftExpandForDivePath,
 } from './sim/softLab.js';
 import { decodeShareHash, encodeShareHash } from './sim/shareLink.js';
 import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
@@ -156,6 +158,9 @@ function applyLoadedProject(loaded: { topCircuit: Circuit; library: ChipLibrary 
   seedStandardCells(library);
   resolveStdcellInstances(topCircuit, library);
   pruneDuplicateChipNames(library, [topCircuit, ...library.list().map((d) => d.circuit)]);
+  // Soft Lab off (e.g. localStorage after reload): seed sequential Q nets so
+  // COUNTER/REG don't sit at Z when Clear is already released.
+  if (!isSoftLabEnabled()) armSoftLabToGatesPor(topCircuit, library);
 }
 
 const restoredSync = bootDemoId || bootSnaPending || bootExampleId ? null : loadAutosaveSync();
@@ -564,6 +569,15 @@ function diveTo(index: number): void {
 
 function enterLevel(): void {
   const view = navStack[navStack.length - 1]!;
+  // Soft Lab: auto force-expand ChipDefs on the dive path so internals are live;
+  // release auto-expand when leaving (manual inspector force-expand is kept).
+  const pathDefNames = navStack
+    .filter((f) => f.defId)
+    .map((f) => library.get(f.defId!).name);
+  const newlyExpanded = syncSoftExpandForDivePath(pathDefNames);
+  if (newlyExpanded.length > 0) {
+    armSoftLabToGatesPor(topCircuit, library, new Set(newlyExpanded));
+  }
   editor.circuit = view.circuit;
   editor.clearSelection();
   editor.cancelWire();
@@ -579,6 +593,7 @@ function enterLevel(): void {
   camera.centerOn(centroid(circuitBounds(view.circuit)), 1);
   renderBreadcrumb();
   refreshWatchStrip();
+  uiDirty = true;
 }
 
 const breadcrumbEl = document.getElementById('breadcrumb') as HTMLDivElement;
@@ -2869,7 +2884,12 @@ document.getElementById('sim-pause')?.addEventListener('click', () => {
 document.getElementById('sim-soft-lab')?.addEventListener('click', () => {
   const wasOn = isSoftLabEnabled();
   setSoftLabEnabled(!wasOn);
-  if (!wasOn && isSoftLabEnabled()) {
+  if (wasOn && !isSoftLabEnabled()) {
+    // Soft → Gates: seed silicon Q nets so sequential chips leave Z without
+    // requiring the user to pulse Clear (see armSoftLabToGatesPor).
+    armSoftLabToGatesPor(topCircuit, library);
+    simState = initialState();
+  } else if (!wasOn && isSoftLabEnabled()) {
     // Off → on: clear soft sequential state so chips start clean.
     clearSoftLabState(topCircuit);
   }
