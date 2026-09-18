@@ -64,19 +64,31 @@ export function buildMinimalTrd(label = 'TESTDISK'): Uint8Array {
 /**
  * Soft contended-memory: count accesses and accumulate wait units that drain
  * the soft-run instruction budget (approximate ULA contention, not T-state exact).
+ *
+ * Calibration: one soft-op ≈ 2.5 T. Real ULA contention averages ~1–2 T per
+ * contended access and only applies while the ULA fetches the display
+ * (~192 of 312 lines). Charging one soft-op per access inside that window
+ * keeps games that live in $4000–$7FFF within ~10–15 % of the others instead
+ * of the ~2× slowdown the old 4-op/always-on charge produced.
  */
 export class ContendedStub {
   hits = 0;
   /** Extra soft-ops burned this frame from contended accesses / FE port. */
   waitUnits = 0;
-  /**
-   * Soft-ops charged per contended mem access ($4000–$7FFF).
-   * Tuned ≈ late-ULA contention (real machine ~5–6 T) mapped onto soft-op budget.
-   */
-  memCost = 4;
+  /** Soft-ops charged per contended mem access ($4000–$7FFF) inside the display window. */
+  memCost = 1;
   /** Soft-ops charged per FE port access (border/EAR/mic). */
-  portCost = 3;
+  portCost = 1;
   enabled = true;
+  /**
+   * Optional intra-frame position (shared with the CPU loop). When set, only
+   * accesses that fall while the ULA is drawing the paper area are charged.
+   * Without it every access counts (unit tests / legacy callers).
+   */
+  progress: { n: number; max: number } | null = null;
+  /** Display window as a fraction of the frame: top border ends ≈ line 64/312. */
+  static readonly WINDOW_START = 64 / 312;
+  static readonly WINDOW_END = 256 / 312;
 
   reset(): void {
     this.hits = 0;
@@ -88,19 +100,26 @@ export class ContendedStub {
     this.waitUnits = 0;
   }
 
+  private inDisplayWindow(): boolean {
+    const p = this.progress;
+    if (!p) return true;
+    const frac = p.n / p.max;
+    return frac >= ContendedStub.WINDOW_START && frac < ContendedStub.WINDOW_END;
+  }
+
   /** Contended if address in $4000–$7FFF (ULA contended) on 48/128. */
   noteAccess(addr: number): void {
     if (!this.enabled) return;
     addr &= 0xffff;
     if (addr >= 0x4000 && addr < 0x8000) {
       this.hits++;
-      this.waitUnits += this.memCost;
+      if (this.inDisplayWindow()) this.waitUnits += this.memCost;
     }
   }
 
   noteFePort(): void {
     if (!this.enabled) return;
-    this.waitUnits += this.portCost;
+    if (this.inDisplayWindow()) this.waitUnits += this.portCost;
   }
 
   /**

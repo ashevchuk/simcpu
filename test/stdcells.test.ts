@@ -93,6 +93,14 @@ describe('seedStandardCells — placed chip instances behave like the raw gates 
     const state = tick(flat, netMap, initialState());
     expect(levelAt(state, netMap, inst.pins[def.ports[2]!]!.id)).toBe(0); // sum(1,1) = 0
     expect(levelAt(state, netMap, inst.pins[def.ports[3]!]!.id)).toBe(1); // cout(1,1) = 1
+
+    a.value = 0;
+    b.value = 1;
+    const flat2 = flatten(parent, library);
+    const netMap2 = flat2.computeNets();
+    const state2 = tick(flat2, netMap2, initialState());
+    expect(levelAt(state2, netMap2, inst.pins[def.ports[2]!]!.id)).toBe(1); // sum(0,1) = 1
+    expect(levelAt(state2, netMap2, inst.pins[def.ports[3]!]!.id)).toBe(0); // cout(0,1) = 0
   });
 
   it('MUX2', () => {

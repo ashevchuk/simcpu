@@ -54,48 +54,72 @@ export function renderSpectrumFrame(
   const pixBase = flat ? SCREEN_BASE : SCREEN_BANK_PIXELS;
   const attrBase = flat ? ATTR_BASE : SCREEN_BANK_ATTRS;
   const bw = SPEC_FRAME_W;
-  const bh = SPEC_FRAME_H;
-  const bord = SPECTRUM_COLORS[border & 7] ?? SPECTRUM_COLORS[7]!;
+  const px = pixelView(out);
+  const pal = PALETTE32;
 
-  for (let y = 0; y < bh; y++) {
-    for (let x = 0; x < bw; x++) {
-      const o = (y * bw + x) * 4;
-      out[o] = bord[0];
-      out[o + 1] = bord[1];
-      out[o + 2] = bord[2];
-      out[o + 3] = 255;
-    }
-  }
+  // Border: top band, bottom band, then left/right strips per paper line.
+  const bord = pal[border & 7]!;
+  const topEnd = SPEC_BORDER * bw;
+  px.fill(bord, 0, topEnd);
+  px.fill(bord, (SPEC_BORDER + SPEC_SCREEN_H) * bw, SPEC_FRAME_H * bw);
 
   for (let y = 0; y < SPEC_SCREEN_H; y++) {
+    const rowBase = (SPEC_BORDER + y) * bw;
+    px.fill(bord, rowBase, rowBase + SPEC_BORDER);
+    px.fill(bord, rowBase + SPEC_BORDER + SPEC_SCREEN_W, rowBase + bw);
+    const lineAddr = pixBase + ((y & 0xc0) << 5) + ((y & 0x07) << 8) + ((y & 0x38) << 2);
+    const attrRow = attrBase + (y >> 3) * 32;
+    let o = rowBase + SPEC_BORDER;
     for (let col = 0; col < 32; col++) {
-      const addr = pixBase + spectrumPixelAddress(col * 8, y);
-      const bits = screen[addr] ?? 0;
-      const attr = screen[attrBase + ((y >> 3) * 32 + col)] ?? 0x38;
+      const bits = screen[lineAddr + col]!;
+      const attr = screen[attrRow + col]!;
       let ink = attr & 7;
       let paper = (attr >> 3) & 7;
-      const bright = (attr & 0x40) !== 0;
-      const flash = (attr & 0x80) !== 0;
-      if (flash && flashPhase) {
+      if (flashPhase && attr & 0x80) {
         const t = ink;
         ink = paper;
         paper = t;
       }
-      const inkRgb = (bright ? SPECTRUM_BRIGHT : SPECTRUM_COLORS)[ink]!;
-      const paperRgb = (bright ? SPECTRUM_BRIGHT : SPECTRUM_COLORS)[paper]!;
-      for (let b = 0; b < 8; b++) {
-        const on = (bits & (0x80 >> b)) !== 0;
-        const rgb = on ? inkRgb : paperRgb;
-        const x = SPEC_BORDER + col * 8 + b;
-        const yy = SPEC_BORDER + y;
-        const o = (yy * bw + x) * 4;
-        out[o] = rgb[0];
-        out[o + 1] = rgb[1];
-        out[o + 2] = rgb[2];
-        out[o + 3] = 255;
-      }
+      const bright = attr & 0x40 ? 8 : 0;
+      const inkC = pal[ink | bright]!;
+      const paperC = pal[paper | bright]!;
+      px[o++] = bits & 0x80 ? inkC : paperC;
+      px[o++] = bits & 0x40 ? inkC : paperC;
+      px[o++] = bits & 0x20 ? inkC : paperC;
+      px[o++] = bits & 0x10 ? inkC : paperC;
+      px[o++] = bits & 0x08 ? inkC : paperC;
+      px[o++] = bits & 0x04 ? inkC : paperC;
+      px[o++] = bits & 0x02 ? inkC : paperC;
+      px[o++] = bits & 0x01 ? inkC : paperC;
     }
   }
+}
+
+/** Little-endian check once — Uint32 RGBA packing depends on it. */
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([0x0a0b0c0d]).buffer)[0] === 0x0d;
+
+function packRgba(r: number, g: number, b: number): number {
+  return LITTLE_ENDIAN
+    ? ((0xff << 24) | (b << 16) | (g << 8) | r) >>> 0
+    : ((r << 24) | (g << 16) | (b << 8) | 0xff) >>> 0;
+}
+
+/** 16 packed colours: 0–7 normal, 8–15 bright. */
+const PALETTE32: Uint32Array = (() => {
+  const t = new Uint32Array(16);
+  for (let i = 0; i < 8; i++) {
+    const n = SPECTRUM_COLORS[i]!;
+    const b = SPECTRUM_BRIGHT[i]!;
+    t[i] = packRgba(n[0], n[1], n[2]);
+    t[i + 8] = packRgba(b[0], b[1], b[2]);
+  }
+  return t;
+})();
+
+/** Uint32 view over an RGBA byte buffer (requires 4-byte alignment; callers allocate whole buffers). */
+function pixelView(out: Uint8Array | Uint8ClampedArray): Uint32Array {
+  if (out.byteOffset & 3) throw new Error('renderSpectrumFrame: RGBA buffer must be 4-byte aligned');
+  return new Uint32Array(out.buffer, out.byteOffset, out.byteLength >> 2);
 }
 
 /** True if pixel area looks non-blank (bank or flat). */

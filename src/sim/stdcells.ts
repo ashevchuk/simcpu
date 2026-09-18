@@ -149,7 +149,7 @@ export function seedStandardCells(library: ChipLibrary): void {
       { pin: m.in2, isOutput: false, portName: 'in2' },
       { pin: m.in3, isOutput: false, portName: 'in3' },
       { pin: m.out, isOutput: true, portName: 'out' },
-    ]);
+    ], { labelize: false });
   }
 
   if (!library.findByName('HALF_ADDER')) {
@@ -160,7 +160,7 @@ export function seedStandardCells(library: ChipLibrary): void {
       { pin: h.b, isOutput: false, portName: 'b' },
       { pin: h.sum, isOutput: true, portName: 'sum' },
       { pin: h.cout, isOutput: true, portName: 'cout' },
-    ]);
+    ], { labelize: false });
   }
 
   if (!library.findByName('FULL_ADDER')) {
@@ -172,7 +172,7 @@ export function seedStandardCells(library: ChipLibrary): void {
       { pin: f.cin, isOutput: false, portName: 'cin' },
       { pin: f.sum, isOutput: true, portName: 'sum' },
       { pin: f.cout, isOutput: true, portName: 'cout' },
-    ]);
+    ], { labelize: false });
   }
 
   if (!library.findByName('D_LATCH')) {

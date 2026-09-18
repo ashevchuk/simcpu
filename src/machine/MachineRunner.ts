@@ -175,11 +175,22 @@ export class MachineRunner {
   setSpectrumMode(on: boolean, model: SpectrumModel = '48'): void {
     if (on) {
       if (!this.spectrumHost) {
-        this.spectrumHost = new SpectrumWorkerHost();
-        this.spectrumHost.start();
-        this.spectrumHost.onError = (m) => {
+        const host = new SpectrumWorkerHost();
+        this.spectrumHost = host;
+        host.start();
+        host.onError = (m) => {
           this.softError = m;
         };
+        // Frames arrive on the Worker's 50 Hz clock; audio is queued the
+        // moment a frame exists so a slow/absent rAF never starves the sink.
+        host.onFrame = (frame) => {
+          if (frame.rgbaChanged && frame.rgba.length) this.lastSpectrumRgba = frame.rgba;
+          if (frame.breakpointHit || frame.breakWriteHit || !frame.running) this.running = false;
+          if (frame.audio) this.ayAudio.playSamples(frame.audio);
+        };
+        host.setAudioSampleRate(this.ayAudio.sampleRate);
+        host.setAudioEnabled(!this.ayAudio.isMuted);
+        this.ayAudio.onSampleRate = (rate) => this.spectrumHost?.setAudioSampleRate(rate);
       }
       this.spectrumHost.boot(model);
       this.spectrum = this.spectrumHost.engine.ula;
@@ -192,6 +203,7 @@ export class MachineRunner {
     } else {
       this.spectrumHost?.stop();
       this.spectrumHost = null;
+      this.ayAudio.onSampleRate = null;
       this.spectrum = null;
       this.spectrumMmu = null;
       this.spectrumTape = null;
@@ -266,7 +278,7 @@ export class MachineRunner {
     this.soft = this.spectrumHost!.engine.cpu;
     this.spectrum = this.spectrumHost!.engine.ula;
     this.spectrumMmu = this.spectrumHost!.engine.mmu;
-    this.ayAudio.chip.loadRegs(this.spectrumHost!.engine.ay.regs, this.spectrumHost!.engine.ay.selected);
+    this.spectrumHost!.syncAyTo(this.ayAudio.chip);
     this.softDesynced = true;
     this.softError = null;
     this.running = true;
@@ -298,7 +310,30 @@ export class MachineRunner {
   /** True if the UI should redraw the Spectrum screen this animation frame. */
   shouldDrawSpectrumFrame(): boolean {
     if (!this.isSpectrum) return true;
-    return this.spectrumFrameCounter % Math.max(1, this.spectrumFrameSkip) === 0;
+    return this.spectrumRgbaSeq !== this.spectrumDrawnSeq;
+  }
+
+  /** Bumps whenever a new Spectrum picture is available (frame skip / static screens keep it flat). */
+  get spectrumRgbaSeq(): number {
+    return this.spectrumHost?.rgbaSeq ?? 0;
+  }
+
+  /** UI reports it has blitted `spectrumRgbaSeq`. */
+  markSpectrumDrawn(): void {
+    this.spectrumDrawnSeq = this.spectrumRgbaSeq;
+  }
+
+  private spectrumDrawnSeq = -1;
+
+  /** Mute/unmute AY + beeper; also stops audio synthesis in the Worker while muted. */
+  setSpectrumMuted(muted: boolean): void {
+    this.ayAudio.setMuted(muted);
+    this.spectrumHost?.setAudioEnabled(!muted);
+  }
+
+  /** Tell the engine whether anyone is looking at the picture (skips RGBA renders when hidden). */
+  setSpectrumVideoEnabled(on: boolean): void {
+    this.spectrumHost?.setVideoEnabled(on);
   }
 
   /** Mount a .TAP for BASIC `LOAD ""` (flash-load via LD-BYTES trap). */
@@ -771,22 +806,20 @@ export class MachineRunner {
     if (!this.running || !this.booted) return false;
     if (this.isSoft && this.spectrumHost && this.spectrum) {
       try {
-        this.spectrumHost.setRunning(true);
-        const wantRgba = this.shouldDrawSpectrumFrame();
-        const frame = this.spectrumHost.tick(wantRgba);
+        // Worker path: frames are produced on the Worker's own 50 Hz clock and
+        // consumed here (latest picture only). Fallback path: the host paces
+        // the in-page engine from wall-clock time. Audio and run-state are
+        // handled per frame in `host.onFrame`, not per rAF.
+        const frame = this.spectrumHost.tick(true);
         this.spectrumFrameCounter++;
         this.soft = this.spectrumHost.engine.cpu;
         this.spectrum = this.spectrumHost.engine.ula;
         this.spectrumMmu = this.spectrumHost.engine.mmu;
         this.spectrumTape = this.spectrumHost.engine.tape;
         this.softDesynced = true;
-        if (frame) {
-          if (frame.rgba.length) this.lastSpectrumRgba = frame.rgba;
-          this.running = frame.running;
-          if (frame.breakpointHit || frame.breakWriteHit) this.running = false;
-          this.spectrumHost.syncAyTo(this.ayAudio.chip);
-          this.ayAudio.playFrame(frame.tStates, frame.beeper);
-        }
+        const rgba = this.spectrumHost.lastFrameRgba;
+        if (rgba && rgba.length) this.lastSpectrumRgba = rgba;
+        if (frame) this.spectrumHost.syncAyTo(this.ayAudio.chip);
         const softErr = this.spectrumHost.lastSoftError ?? this.spectrumHost.engine.softError;
         if (softErr) this.softError = softErr;
       } catch (e) {
@@ -814,11 +847,7 @@ export class MachineRunner {
         }
         if (this.spectrum) {
           this.spectrumFrameCounter++;
-          const tStates = Math.min(
-            200_000,
-            Math.floor(69888 * Math.max(1, this.spectrumTurbo)),
-          );
-          this.ayAudio.playFrame(tStates, this.spectrum.beeperSegments());
+          this.ayAudio.playFrame(69888, this.spectrum.beeperSegments());
         }
         if (this.soft.halted && !this.spectrum) this.running = false;
       } catch (e) {

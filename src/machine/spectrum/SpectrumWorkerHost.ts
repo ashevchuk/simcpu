@@ -29,7 +29,22 @@ export class SpectrumWorkerHost {
   private useWorker = false;
   private pendingFrame: SpectrumHostFrame | null = null;
   private lastRgba: Uint8Array | null = null;
-  /** Last 64-byte watch dump from worker (UI hex). */
+  /** Bumps whenever a new picture arrives — UI skips redundant blits. */
+  rgbaSeq = 0;
+  /**
+   * Invoked for every emulated frame as soon as it exists (Worker message or
+   * fallback tick) — independent of the display's rAF cadence. The runner
+   * queues audio and mirrors run-state from here.
+   */
+  onFrame: ((frame: SpectrumHostFrame) => void) | null = null;
+  /** Main-thread fallback pacing (50 Hz from wall-clock, not from rAF rate). */
+  private fbLastMs = 0;
+  private fbAccMs = 0;
+  private fbFramesSinceRgba = 0;
+  private static readonly FRAME_MS = 20;
+  private static readonly FB_MAX_CATCHUP = 3;
+  /** Last time a Worker frame arrived — used to restart a stalled 50 Hz loop. */
+  private lastFrameAt = 0;
   lastWatchBytes: Uint8Array | null = null;
   /** Soft-error string from the live engine (Worker frame or main tick). */
   lastSoftError: string | null = null;
@@ -127,8 +142,19 @@ export class SpectrumWorkerHost {
       return;
     }
     if (msg.type === 'frame') {
-      const rgba = msg.rgba ? new Uint8Array(msg.rgba) : this.lastRgba;
-      if (rgba) this.lastRgba = rgba;
+      let rgba = this.lastRgba;
+      let recycle: ArrayBuffer | null = null;
+      if (msg.rgba) {
+        // Recycle the previous picture *after* onFrame so the runner can
+        // snapshot it; transferring first would detach lastSpectrumRgba.
+        const prev = this.lastRgba;
+        rgba = new Uint8Array(msg.rgba);
+        this.lastRgba = rgba;
+        this.rgbaSeq++;
+        if (prev && prev.byteLength === msg.rgba.byteLength && prev.buffer !== msg.rgba) {
+          recycle = prev.buffer as ArrayBuffer;
+        }
+      }
       const cpu = this.engine.cpu;
       cpu.pc = msg.pc;
       cpu.sp = msg.sp;
@@ -155,7 +181,7 @@ export class SpectrumWorkerHost {
       this.engine.mmu.trdosPaged = msg.trdosPaged;
       this.engine.contended.waitUnits = msg.contendedWaits;
       this.engine.contended.hits = msg.contendedHits;
-      this.engine.ay.loadRegs(new Uint8Array(msg.ayRegs), msg.aySelected);
+      this.engine.ay.loadRegs(new Uint8Array(msg.ayRegs), msg.aySelected, msg.ayEnvWrites);
       this.engine.watchAddr = msg.watchAddr;
       this.lastWatchBytes = new Uint8Array(msg.watchBytes);
       this.engine.ula.border = msg.border & 7;
@@ -165,11 +191,15 @@ export class SpectrumWorkerHost {
       if (this.engine.tape && typeof msg.tapePos === 'number') {
         this.engine.tape.seek(msg.tapePos);
       }
-      this.pendingFrame = {
+      const frame: SpectrumHostFrame = {
         rgba: rgba ?? new Uint8Array(0),
+        rgbaChanged: !!msg.rgba,
+        audio: msg.audio ? new Float32Array(msg.audio) : null,
+        frameSeq: msg.frameSeq ?? 0,
         beeper: { startEar: msg.beeperStart, transitions: msg.beeperTransitions },
         ayRegs: new Uint8Array(msg.ayRegs),
         aySelected: msg.aySelected,
+        ayEnvWrites: msg.ayEnvWrites ?? 0,
         tStates: msg.tStates,
         breakpointHit: msg.breakpointHit,
         breakWriteHit: msg.breakWriteHit,
@@ -180,6 +210,10 @@ export class SpectrumWorkerHost {
         contendedHits: msg.contendedHits,
         fromWorker: true,
       };
+      this.pendingFrame = frame;
+      this.lastFrameAt = performance.now();
+      this.onFrame?.(frame);
+      if (recycle) this.post({ type: 'recycleRgba', buf: recycle }, [recycle]);
     }
   }
 
@@ -196,7 +230,27 @@ export class SpectrumWorkerHost {
 
   setRunning(on: boolean): void {
     this.engine.running = on;
+    this.fbLastMs = 0;
+    this.fbAccMs = 0;
     this.post({ type: 'setRunning', on });
+  }
+
+  /** Output rate of the audio sink; frames are synthesized at this rate. */
+  setAudioSampleRate(rate: number): void {
+    if (!(rate > 0) || !Number.isFinite(rate)) return;
+    this.engine.audioSampleRate = rate;
+    this.post({ type: 'setAudioSampleRate', rate });
+  }
+
+  setAudioEnabled(on: boolean): void {
+    this.engine.audioEnabled = on;
+    this.post({ type: 'setAudioEnabled', on });
+  }
+
+  /** Stop rendering pictures while the Spectrum pane is hidden. */
+  setVideoEnabled(on: boolean): void {
+    if (on) this.engine.invalidateRender();
+    this.post({ type: 'setVideoEnabled', on });
   }
 
   setTurbo(t: SpectrumTurbo): void {
@@ -294,20 +348,60 @@ export class SpectrumWorkerHost {
   }
 
   /**
-   * Drive one frame. Worker path posts async; returns last completed frame or
-   * sync engine result. Caller should play audio from the returned frame.
+   * Called once per display frame (rAF). Worker path: the Worker clocks itself
+   * at 50 Hz and frames arrive via `onFrame`; this just hands the newest one to
+   * the caller for display (or null when none arrived since the last call).
+   * Fallback path: advance the in-page engine by however many 20 ms frames of
+   * wall-clock elapsed (capped), so a 144 Hz display does not run the machine
+   * at 288 %.
    */
   tick(wantRgba: boolean): SpectrumHostFrame | null {
     if (this.usingWorker) {
-      this.post({ type: 'tick', wantRgba });
+      // Recover if the Worker loop never started (e.g. setRunning raced the
+      // Worker script load, or the tab resumed with running=true).
+      if (this.engine.running && this.lastFrameAt !== 0 && performance.now() - this.lastFrameAt > 400) {
+        this.post({ type: 'setRunning', on: true });
+        this.lastFrameAt = performance.now();
+      } else if (this.engine.running && this.lastFrameAt === 0) {
+        this.post({ type: 'setRunning', on: true });
+        this.lastFrameAt = performance.now();
+      }
       const f = this.pendingFrame;
       this.pendingFrame = null;
       return f;
     }
-    const r = this.engine.tickFrame(wantRgba);
-    this.lastSoftError = this.engine.softError;
-    if (wantRgba && r.rgba.length) this.lastRgba = r.rgba;
-    return { ...r, fromWorker: false };
+    const now = performance.now();
+    if (this.fbLastMs === 0) this.fbLastMs = now - SpectrumWorkerHost.FRAME_MS;
+    let dt = now - this.fbLastMs;
+    this.fbLastMs = now;
+    if (dt > SpectrumWorkerHost.FRAME_MS * 6) dt = SpectrumWorkerHost.FRAME_MS; // long stall: drop time
+    this.fbAccMs += dt;
+    let frames = Math.floor(this.fbAccMs / SpectrumWorkerHost.FRAME_MS);
+    if (frames > SpectrumWorkerHost.FB_MAX_CATCHUP) {
+      frames = SpectrumWorkerHost.FB_MAX_CATCHUP;
+      this.fbAccMs = 0;
+    } else {
+      this.fbAccMs -= frames * SpectrumWorkerHost.FRAME_MS;
+    }
+    let last: SpectrumHostFrame | null = null;
+    for (let i = 0; i < frames; i++) {
+      this.fbFramesSinceRgba++;
+      const render =
+        wantRgba && i === frames - 1 && this.fbFramesSinceRgba >= Math.max(1, this.engine.frameSkip);
+      const r = this.engine.tickFrame(render);
+      this.lastSoftError = this.engine.softError;
+      if (render) {
+        this.fbFramesSinceRgba = 0;
+        if (r.rgbaChanged) {
+          this.lastRgba = r.rgba;
+          this.rgbaSeq++;
+        }
+      }
+      last = { ...r, fromWorker: false };
+      this.onFrame?.(last);
+      if (!r.running) break;
+    }
+    return last;
   }
 
   mountTap(data: Uint8Array, cold = false) {
@@ -382,8 +476,8 @@ export class SpectrumWorkerHost {
     });
   }
 
-  /** Apply worker AY regs onto a main-thread chip for audio (optional). */
+  /** Mirror the live AY registers onto a display chip (envelope retriggers via write counter). */
   syncAyTo(chip: Ay8912): void {
-    chip.loadRegs(this.engine.ay.regs, this.engine.ay.selected);
+    chip.loadRegs(this.engine.ay.regs, this.engine.ay.selected, this.engine.ay.envWrites);
   }
 }

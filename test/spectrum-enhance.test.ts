@@ -11,15 +11,18 @@ describe('ULA beeper segments', () => {
   it('records EAR transitions at soft-step progress', () => {
     const ula = new SpectrumUla();
     ula.beginBeeperFrame();
-    ula.setBeeperProgress(0.1);
+    ula.progress.max = 100;
+    ula.progress.n = 10;
     ula.portOut(0xfe, 0x10); // ear on
-    ula.setBeeperProgress(0.5);
+    ula.progress.n = 50;
     ula.portOut(0xfe, 0x00); // ear off
     const seg = ula.beeperSegments();
     expect(seg.startEar).toBe(false);
     expect(seg.transitions.length).toBe(2);
     expect(seg.transitions[0]!.bit).toBe(true);
+    expect(seg.transitions[0]!.frac).toBeCloseTo(0.1);
     expect(seg.transitions[1]!.bit).toBe(false);
+    expect(seg.transitions[1]!.frac).toBeCloseTo(0.5);
   });
 
   it('mixes square-wave beeper into audio buffer', async () => {
@@ -401,10 +404,11 @@ describe('TZX / SCR / NMI / stubs', () => {
     eng.boot('48');
     eng.running = true;
     eng.ula.beginBeeperFrame();
+    eng.ula.progress.max = 100;
     eng.ula.portOut(0x00fe, 0x10);
-    eng.ula.setBeeperProgress(0.25);
+    eng.ula.progress.n = 25;
     eng.ula.portOut(0x00fe, 0x00);
-    eng.ula.setBeeperProgress(0.5);
+    eng.ula.progress.n = 50;
     eng.ula.portOut(0x00fe, 0x10);
     const seg = eng.ula.beeperSegments();
     expect(seg.transitions.length).toBeGreaterThan(0);
@@ -491,7 +495,6 @@ describe('Spectrum reboot', () => {
 
     const runner = new MachineRunner();
     runner.spectrumHost = host;
-    runner.soft = host.engine.cpu;
     runner.spectrum = host.engine.ula;
     runner.spectrumMmu = host.engine.mmu;
     runner.spectrumTape = host.engine.tape;

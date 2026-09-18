@@ -32,6 +32,13 @@ export class Ay8912 {
   private envShape = 0;
   private envVol = 0;
   private ticks = 0;
+  /**
+   * Count of R13 (envelope shape) writes — every write retriggers the
+   * envelope on real hardware, even with an unchanged value. Mirrors
+   * (main-thread display chip, audio chip fed from a Worker) compare this
+   * instead of resetting the envelope on every register sync.
+   */
+  envWrites = 0;
 
   reset(): void {
     this.regs.fill(0);
@@ -46,6 +53,7 @@ export class Ay8912 {
     this.envHolding = false;
     this.envVol = 0;
     this.ticks = 0;
+    this.envWrites = 0;
     this.recalc();
   }
 
@@ -62,18 +70,31 @@ export class Ay8912 {
     if (r === 13) v &= 0x0f;
     this.regs[r] = v;
     if (r <= 6 || r === 11 || r === 12) this.recalc();
-    if (r === 13) this.resetEnvelope();
+    if (r === 13) {
+      this.envWrites++;
+      this.resetEnvelope();
+    }
   }
 
   readData(): number {
     return this.regs[this.selected]!;
   }
 
-  loadRegs(regs: Uint8Array, selected = 0): void {
+  /**
+   * Replace all registers (snapshot load / mirror sync).
+   * The envelope restarts only when the shape register changed or when
+   * `envWrites` reports a retrigger since the last sync — calling this every
+   * frame therefore no longer chops envelope sounds into 20 ms slices.
+   */
+  loadRegs(regs: Uint8Array, selected = 0, envWrites?: number): void {
+    const prevShape = this.regs[13];
     this.regs.set(regs.subarray(0, 16));
     this.selected = selected & 0x0f;
     this.recalc();
-    this.resetEnvelope();
+    const retrigger =
+      envWrites != null ? envWrites !== this.envWrites : this.regs[13] !== prevShape;
+    if (envWrites != null) this.envWrites = envWrites;
+    if (retrigger) this.resetEnvelope();
   }
 
   private recalc(): void {
@@ -187,15 +208,49 @@ export class Ay8912 {
   }
 }
 
+/** Nominal Spectrum frame length used to size one audio frame. */
+export const SPECTRUM_AUDIO_FRAME_TSTATES = 69888;
+/** Frame samples for a given output rate (one 50 Hz frame). */
+export function audioSamplesPerFrame(sampleRate: number): number {
+  return Math.max(64, Math.round((sampleRate * SPECTRUM_AUDIO_FRAME_TSTATES) / 3_500_000));
+}
+
 /**
- * Browser audio sink: ScriptProcessor/AudioWorklet-free pull via ScriptProcessor-like
- * AudioBufferSource scheduling each frame.
+ * Render one emulated frame (AY + ULA beeper) into a fresh Float32 buffer.
+ * Shared by the Worker engine and the main-thread fallback so the main
+ * thread never synthesizes audio itself when a Worker is active.
+ */
+export function renderAudioFrame(
+  chip: Ay8912,
+  sampleRate: number,
+  beeper?: { startEar: boolean; transitions: readonly { frac: number; bit: boolean }[] },
+): Float32Array {
+  const out = new Float32Array(audioSamplesPerFrame(sampleRate));
+  chip.render(SPECTRUM_AUDIO_FRAME_TSTATES, out);
+  if (beeper) mixBeeperSquare(out, beeper.startEar, beeper.transitions);
+  return out;
+}
+
+/**
+ * Browser audio sink. Frames are queued on a running `AudioContext` time
+ * cursor (`nextStartTime`) so consecutive 20 ms buffers abut exactly instead
+ * of being started "now" from whatever cadence the caller happens to have
+ * (rAF at 60/144 Hz used to overlap them → crackle). If the producer stalls
+ * the cursor is re-based; if it runs ahead (turbo) frames are dropped.
  */
 export class AyAudio {
   private ctx: AudioContext | null = null;
   private gain: GainNode | null = null;
   private muted = false;
+  /** Display / snapshot mirror of the live AY (audio is rendered by the engine). */
   readonly chip = new Ay8912();
+  private nextStartTime = 0;
+  /** Scheduling lead so a late rAF/worker frame still lands before playback. */
+  static readonly LEAD_S = 0.04;
+  /** Beyond this the producer is faster than real time — drop instead of piling up. */
+  static readonly MAX_AHEAD_S = 0.2;
+  /** Called after the context is created / resumed with the real output rate. */
+  onSampleRate: ((rate: number) => void) | null = null;
 
   async ensure(): Promise<void> {
     if (this.ctx) {
@@ -206,10 +261,17 @@ export class AyAudio {
     if (!AC) return;
     this.ctx = new AC({ sampleRate: SAMPLE_RATE_TARGET });
     this.gain = this.ctx.createGain();
-    this.gain.gain.value = 0.35;
+    this.gain.gain.value = this.muted ? 0 : 0.35;
     this.gain.connect(this.ctx.destination);
     this.chip.reset();
+    this.nextStartTime = 0;
+    this.onSampleRate?.(this.ctx.sampleRate);
     if (this.ctx.state === 'suspended') await this.ctx.resume();
+  }
+
+  /** Output sample rate once the context exists (else the requested target). */
+  get sampleRate(): number {
+    return this.ctx?.sampleRate ?? SAMPLE_RATE_TARGET;
   }
 
   setMuted(m: boolean): void {
@@ -221,27 +283,38 @@ export class AyAudio {
     return this.muted;
   }
 
-  /** Render one Spectrum frame (~20ms) of AY + optional ULA beeper (EAR edges). */
-  playFrame(
-    tStates = 69888,
-    beeper?: { startEar: boolean; transitions: readonly { frac: number; bit: boolean }[] },
-  ): void {
-    if (!this.ctx || !this.gain || this.muted) return;
-    const n = Math.max(64, Math.floor(this.ctx.sampleRate * (tStates / 3_500_000)));
-    // Frame length tracks soft Spectrum frame (48K ≈ 69888 T @ 3.5 MHz).
-    // AY chip clock is CPU/2 inside Ay8912; beeper edges are frac-accurate within the buffer.
-    const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    this.chip.render(tStates, data);
-    if (beeper) mixBeeperSquare(data, beeper.startEar, beeper.transitions);
+  /** Queue one pre-rendered mono frame at the running cursor. */
+  playSamples(samples: Float32Array): void {
+    if (!this.ctx || !this.gain || this.muted || samples.length === 0) return;
+    if (this.ctx.state !== 'running') return;
+    const now = this.ctx.currentTime;
+    if (this.nextStartTime < now + AyAudio.LEAD_S * 0.5) {
+      // Stalled (tab hidden / first frame): re-base with a small lead.
+      this.nextStartTime = now + AyAudio.LEAD_S;
+    } else if (this.nextStartTime > now + AyAudio.MAX_AHEAD_S) {
+      return; // producer ahead of real time — drop this frame
+    }
+    const buf = this.ctx.createBuffer(1, samples.length, this.ctx.sampleRate);
+    buf.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     src.connect(this.gain);
-    src.start();
+    src.start(this.nextStartTime);
+    this.nextStartTime += buf.duration;
+  }
+
+  /** Legacy: synthesize on the mirror chip and queue (main-thread paths without an engine). */
+  playFrame(
+    _tStates = SPECTRUM_AUDIO_FRAME_TSTATES,
+    beeper?: { startEar: boolean; transitions: readonly { frac: number; bit: boolean }[] },
+  ): void {
+    if (!this.ctx || this.muted) return;
+    this.playSamples(renderAudioFrame(this.chip, this.ctx.sampleRate, beeper));
   }
 
   reset(): void {
     this.chip.reset();
+    this.nextStartTime = 0;
   }
 }
 

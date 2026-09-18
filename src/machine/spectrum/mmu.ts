@@ -23,6 +23,12 @@ export class SpectrumMmu {
   model: SpectrumModel = '48';
   /** TR-DOS ROM paged at $0000–$3FFF (Beta Disk). */
   trdosPaged = false;
+  /**
+   * Set whenever bytes inside a display file (bank 5 or 7, offset < $1B00)
+   * change. The renderer clears it after drawing; a clean flag lets a
+   * static screen skip the RGBA pass entirely.
+   */
+  screenDirty = true;
 
   /** Install TR-DOS ROM image (call once at boot / attach). */
   setTrdosRom(rom: Uint8Array): void {
@@ -32,6 +38,7 @@ export class SpectrumMmu {
 
   resetBanks(): void {
     for (const b of this.banks) b.fill(0);
+    this.screenDirty = true;
   }
 
   /** 48K: single ROM in rom0, paging locked, bank 0 at $C000. */
@@ -100,14 +107,19 @@ export class SpectrumMmu {
     v &= 0xff;
     if (addr < 0x4000) return; // ROM
     if (addr < 0x8000) {
-      this.banks[5]![addr - 0x4000] = v;
+      const off = addr - 0x4000;
+      this.banks[5]![off] = v;
+      if (off < 0x1b00) this.screenDirty = true;
       return;
     }
     if (addr < 0xc000) {
       this.banks[2]![addr - 0x8000] = v;
       return;
     }
-    this.banks[this.pagedBank]![addr - 0xc000] = v;
+    const bank = this.port7ffd & 7;
+    const off = addr - 0xc000;
+    this.banks[bank]![off] = v;
+    if (off < 0x1b00 && (bank === 5 || bank === 7)) this.screenDirty = true;
   }
 
   /**

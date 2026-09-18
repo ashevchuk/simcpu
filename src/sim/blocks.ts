@@ -258,12 +258,15 @@ function makeHalfAdderChip(library: ChipLibrary): ChipDef {
   makeSource(scratch, 1); // rail driver
   makeSource(scratch, 0);
   const ha = buildHalfAdder(scratch);
+  // Port names must match seedStandardCells / Soft Lab (`sum`/`cout`). Default
+  // fold names `out0`/`out1` leave Soft Lab's HALF_ADDER model undriven, so PC
+  // never increments. labelize:false keeps transistor guts intact when expanded.
   return foldExposing(scratch, 'HALF_ADDER', library, [
-    { pin: ha.a, isOutput: false },
-    { pin: ha.b, isOutput: false },
-    { pin: ha.sum, isOutput: true },
-    { pin: ha.cout, isOutput: true },
-  ]);
+    { pin: ha.a, isOutput: false, portName: 'a' },
+    { pin: ha.b, isOutput: false, portName: 'b' },
+    { pin: ha.sum, isOutput: true, portName: 'sum' },
+    { pin: ha.cout, isOutput: true, portName: 'cout' },
+  ], { labelize: false });
 }
 
 /** Fold buildMux2() into a reusable chip. Ports, in order: sel, in0, in1, out. */

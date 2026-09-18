@@ -78,8 +78,12 @@ export interface SoftMemHooks {
   memWrite?: (addr: number, v: number) => void;
   /** Level-sensitive IRQ line (Spectrum ULA frame). Cleared when accepted. */
   irqPending?: () => boolean;
-  /** Optional progress callback (step index, max steps) — used for Spectrum beeper timing. */
-  onStep?: (step: number, max: number) => void;
+  /**
+   * Optional shared progress counter — `softRun` stores the current step index
+   * / budget here (one property store per instruction) so I/O hooks can derive
+   * an intra-frame position without a per-instruction callback.
+   */
+  progress?: { n: number; max: number };
   /** Clear IRQ after IM1/IM2 vector taken. */
   clearIrq?: () => void;
   /**
@@ -803,15 +807,21 @@ function execOpcode(
   }
 
   // Displacement for (IX+d)/(IY+d)
-  let disp = 0;
   let ea: number | null = null;
   if (idx && needsIndexDisp(op)) {
-    disp = s8(fetch(cpu, ram, hooks));
+    const disp = s8(fetch(cpu, ram, hooks));
     ea = u16(indexAddr(cpu, idx) + disp);
   }
 
-  // LD r,r' / LD r,(HL) / LD (HL),r — IXH/IXL remap only when neither side is (HL)
-  if ((op & 0xc0) === 0x40 && op !== 0x76) {
+  // Hot path: Z80 x-field jump table. LD (x=1) and ALU (x=2) are the bulk of
+  // Spectrum BASIC / game inner loops — two integer compares beat a 200-line if-chain.
+  const x = (op >> 6) & 3;
+  if (x === 1) {
+    if (op === 0x76) {
+      if (idx) throw new Error(`soft Z80: HALT after ${idx.toUpperCase()} prefix unsupported`);
+      cpu.halted = true;
+      return false;
+    }
     const y = (op >> 3) & 7;
     const z = op & 7;
     if (idx && (y === 6 || z === 6)) {
@@ -820,15 +830,12 @@ function execOpcode(
       else setR(cpu, y, val, null);
       return true;
     }
-    const regIdx = idx;
-    const val = z === 6 ? memRead(ram, hl(cpu), hooks) : getR(cpu, z, regIdx);
+    const val = z === 6 ? memRead(ram, hl(cpu), hooks) : getR(cpu, z, idx);
     if (y === 6) memWrite(ram, hl(cpu), val, hooks);
-    else setR(cpu, y, val, regIdx);
+    else setR(cpu, y, val, idx);
     return true;
   }
-
-  // ALU A,r / A,(HL)
-  if ((op & 0xc0) === 0x80) {
+  if (x === 2) {
     const y = (op >> 3) & 7;
     const z = op & 7;
     const val = z === 6 ? memRead(ram, idx ? ea! : hl(cpu), hooks) : getR(cpu, z, idx);
@@ -1267,10 +1274,16 @@ export function softRun(
   breakPc?: number | null,
 ): number {
   let n = 0;
+  const prog = hooks?.progress;
+  if (prog) {
+    prog.n = 0;
+    prog.max = Math.max(1, max);
+  }
+  const irqPending = hooks?.irqPending;
   while (n < max) {
     if (breakPc != null && (cpu.pc & 0xffff) === (breakPc & 0xffff)) break;
-    if (cpu.halted && !(hooks?.irqPending?.() && cpu.iff1 && cpu.eiDelay === 0)) break;
-    hooks?.onStep?.(n, max);
+    if (cpu.halted && !(irqPending?.() && cpu.iff1 && cpu.eiDelay === 0)) break;
+    if (prog) prog.n = n;
     softStep(cpu, ram, hooks);
     n++;
   }

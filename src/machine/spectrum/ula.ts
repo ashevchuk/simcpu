@@ -52,8 +52,12 @@ export class SpectrumUla {
   irqPending = false;
   /** Last EAR bit for soft beeper. */
   earBit = false;
-  /** Progress within current audio frame (0..1) for beeper edge timing. */
-  beeperProgress = 0;
+  /**
+   * Intra-frame position shared with `softRun` (`SoftMemHooks.progress`):
+   * `n` = current soft-op index, `max` = frame budget. Read lazily on OUT FE
+   * so the CPU loop pays one store per instruction instead of a callback.
+   */
+  readonly progress = { n: 0, max: 1 };
   /** EAR at frame start + transitions for square-wave beeper mix. */
   private earAtFrameStart = false;
   readonly earTransitions: { frac: number; bit: boolean }[] = [];
@@ -64,7 +68,7 @@ export class SpectrumUla {
     this.kempston = 0;
     this.irqPending = false;
     this.earBit = false;
-    this.beeperProgress = 0;
+    this.progress.n = 0;
     this.earAtFrameStart = false;
     this.earTransitions.length = 0;
   }
@@ -73,11 +77,13 @@ export class SpectrumUla {
   beginBeeperFrame(): void {
     this.earAtFrameStart = this.earBit;
     this.earTransitions.length = 0;
-    this.beeperProgress = 0;
+    this.progress.n = 0;
   }
 
-  setBeeperProgress(frac: number): void {
-    this.beeperProgress = Math.min(1, Math.max(0, frac));
+  /** Current position within the frame, 0..1. */
+  frameFrac(): number {
+    const p = this.progress;
+    return p.max > 0 ? Math.min(1, p.n / p.max) : 0;
   }
 
   /** Beeper waveform segments for Web Audio (start + edges sorted by frac). */
@@ -128,7 +134,7 @@ export class SpectrumUla {
     this.border = val & 7;
     const newEar = (val & 0x10) !== 0;
     if (newEar !== this.earBit) {
-      this.earTransitions.push({ frac: this.beeperProgress, bit: newEar });
+      this.earTransitions.push({ frac: this.frameFrac(), bit: newEar });
       this.earBit = newEar;
     }
   }

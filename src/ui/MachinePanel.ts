@@ -84,8 +84,26 @@ export class MachinePanel {
   private readonly bmpTmp: HTMLCanvasElement = document.createElement('canvas');
   private bmpTmpCtx!: CanvasRenderingContext2D;
   private resizeObserver: ResizeObserver | null = null;
+  /** Main-thread render target when no engine picture is available (legacy path). */
   private readonly specRgba = new Uint8ClampedArray(SPEC_FRAME_W * SPEC_FRAME_H * 4);
   private specImage: ImageData | null = null;
+  /** Dedicated 320×256 staging canvas so the console bitmap and Spectrum never resize each other. */
+  private readonly specTmp: HTMLCanvasElement = document.createElement('canvas');
+  private specTmpCtx!: CanvasRenderingContext2D;
+  private drawnSpecSeq = -1;
+  private specPlaceholderDrawn = false;
+  /** Backing-store bookkeeping: reassigning canvas.width/height clears + reallocates. */
+  private consoleBackW = 0;
+  private consoleBackH = 0;
+  private specBackW = 0;
+  private specBackH = 0;
+  private consoleDpr = 0;
+  private specDpr = 0;
+  /** What the console canvas currently shows in Spectrum mode (static banner drawn once). */
+  private consoleBannerShown = false;
+  /** Text (regs/health/status/tape) is refreshed at most every TEXT_INTERVAL_MS while running. */
+  private lastTextMs = 0;
+  private static readonly TEXT_INTERVAL_MS = 200;
   private bmpImage: ImageData | null = null;
   private keyUpHandler: ((e: KeyboardEvent) => void) | null = null;
   private readonly specKbd: SpectrumKeyboard;
@@ -377,6 +395,11 @@ JR spin</textarea>
     const bmpCtx = this.bmpTmp.getContext('2d');
     if (!bmpCtx) throw new Error('2D canvas context is not available for bitmap blit');
     this.bmpTmpCtx = bmpCtx;
+    this.specTmp.width = SPEC_FRAME_W;
+    this.specTmp.height = SPEC_FRAME_H;
+    const specTmpCtx = this.specTmp.getContext('2d');
+    if (!specTmpCtx) throw new Error('2D canvas context is not available for Spectrum blit');
+    this.specTmpCtx = specTmpCtx;
     this.resizeBackingStore();
 
     this.canvas.addEventListener('click', () => this.canvas.focus());
@@ -385,7 +408,11 @@ JR spin</textarea>
       btn.addEventListener('click', () => this.setTab(btn.dataset.tab === 'spectrum' ? 'spectrum' : 'console'));
     }
     this.resizeObserver = new ResizeObserver(() => {
-      if (this.ram) this.draw();
+      // Layout changed (window resize, tab switch): force a full repaint.
+      this.consoleBannerShown = false;
+      this.drawnSpecSeq = -1;
+      this.specPlaceholderDrawn = false;
+      if (this.ram) this.draw(true);
     });
     this.resizeObserver.observe(this.win.root);
     this.resizeObserver.observe(this.canvasWrap);
@@ -622,10 +649,10 @@ JR spin</textarea>
       this.refreshControls();
     });
     this.root.querySelector('[data-act="mute"]')!.addEventListener('click', () => {
-      const audio = this.runner?.ayAudio;
-      if (!audio) return;
-      void audio.ensure().then(() => {
-        audio.setMuted(!audio.isMuted);
+      const runner = this.runner;
+      if (!runner) return;
+      void runner.ayAudio.ensure().then(() => {
+        runner.setSpectrumMuted(!runner.ayAudio.isMuted);
         this.refreshControls();
       });
     });
@@ -682,20 +709,44 @@ JR spin</textarea>
   }
 
   private resizeBackingStore(): void {
+    this.ensureConsoleBacking();
+    this.ensureSpecBacking();
+  }
+
+  /**
+   * Size the console canvas from the *intended* CSS size, not from
+   * `clientWidth` — a hidden pane reports 0 there, which used to trigger a
+   * reallocation (and clear) of both canvases on every frame.
+   */
+  private ensureConsoleBacking(): void {
     const dpr = window.devicePixelRatio || 1;
     const { cssW, cssH } = this.panelCssSize();
+    if (cssW === this.consoleBackW && cssH === this.consoleBackH && dpr === this.consoleDpr) return;
+    this.consoleBackW = cssW;
+    this.consoleBackH = cssH;
+    this.consoleDpr = dpr;
     this.canvas.style.width = `${cssW}px`;
     this.canvas.style.height = `${cssH}px`;
     this.canvas.width = Math.round(cssW * dpr);
     this.canvas.height = Math.round(cssH * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.consoleBannerShown = false;
+  }
 
-    const spec = this.spectrumCssSize();
-    this.specCanvas.style.width = `${spec.cssW}px`;
-    this.specCanvas.style.height = `${spec.cssH}px`;
-    this.specCanvas.width = Math.round(spec.cssW * dpr);
-    this.specCanvas.height = Math.round(spec.cssH * dpr);
+  private ensureSpecBacking(): void {
+    const dpr = window.devicePixelRatio || 1;
+    const { cssW, cssH } = this.spectrumCssSize();
+    if (cssW === this.specBackW && cssH === this.specBackH && dpr === this.specDpr) return;
+    this.specBackW = cssW;
+    this.specBackH = cssH;
+    this.specDpr = dpr;
+    this.specCanvas.style.width = `${cssW}px`;
+    this.specCanvas.style.height = `${cssH}px`;
+    this.specCanvas.width = Math.round(cssW * dpr);
+    this.specCanvas.height = Math.round(cssH * dpr);
     this.specCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.drawnSpecSeq = -1;
+    this.specPlaceholderDrawn = false;
   }
 
   private setTab(tab: 'console' | 'spectrum'): void {
@@ -708,10 +759,12 @@ JR spin</textarea>
     for (const pane of Array.from(this.root.querySelectorAll<HTMLElement>('[data-pane]'))) {
       pane.hidden = pane.dataset.pane !== tab;
     }
-    if (tab === 'spectrum') {
-      this.specCanvas.focus();
-      this.draw();
-    }
+    this.consoleBannerShown = false;
+    this.drawnSpecSeq = -1;
+    this.specPlaceholderDrawn = false;
+    this.runner?.setSpectrumVideoEnabled(tab === 'spectrum');
+    if (tab === 'spectrum') this.specCanvas.focus();
+    this.draw(true);
   }
 
   private log(msg: string): void {
@@ -1197,7 +1250,7 @@ JR spin</textarea>
       return;
     }
     try {
-      this.drawSpectrum();
+      this.drawSpectrum(true);
       const w = SPEC_FRAME_W;
       const h = SPEC_FRAME_H;
       const c = document.createElement('canvas');
@@ -1205,9 +1258,8 @@ JR spin</textarea>
       c.height = h;
       const ctx = c.getContext('2d');
       if (!ctx) throw new Error('2D context unavailable');
-      const img = ctx.createImageData(w, h);
-      img.data.set(this.specRgba);
-      ctx.putImageData(img, 0, 0);
+      // specTmp holds the last blit — never a Worker buffer that may have been transferred.
+      ctx.drawImage(this.specTmp, 0, 0);
       const url = c.toDataURL('image/png');
       const a = document.createElement('a');
       a.href = url;
@@ -1564,14 +1616,21 @@ JR spin</textarea>
     this.statusEl.textContent = text;
   }
 
-  draw(): void {
+  /**
+   * Per-rAF refresh. Canvases only repaint when their pane is visible and
+   * their content changed; the text readouts (regs, health, tape, status) are
+   * rebuilt at most every `TEXT_INTERVAL_MS` while the machine runs — each of
+   * those `textContent` writes costs a layout + paint of the whole panel.
+   * `force` bypasses the throttle (tab switch, pause, step).
+   */
+  draw(force = false): void {
     if (!this.ram) return;
-    this.drawConsole();
-    const drawSpec =
-      this.runner?.isSpectrum || this.activeTab === 'spectrum'
-        ? this.runner?.shouldDrawSpectrumFrame() !== false
-        : false;
-    if (drawSpec) this.drawSpectrum();
+    if (this.activeTab === 'console') this.drawConsole();
+    else this.drawSpectrum();
+    const now = performance.now();
+    const running = !!this.runner?.running;
+    if (running && !force && now - this.lastTextMs < MachinePanel.TEXT_INTERVAL_MS) return;
+    this.lastTextMs = now;
     this.refreshSpectrumRegs();
     this.updateFocusTip();
     this.updateHealthLine();
@@ -1592,14 +1651,16 @@ JR spin</textarea>
   }
 
   private drawConsole(): void {
-    const { ctx, canvas } = this;
-    const { cssW, cssH } = this.panelCssSize();
-    if (canvas.clientWidth !== cssW || canvas.clientHeight !== cssH) this.resizeBackingStore();
-
-    ctx.fillStyle = '#0a0c10';
-    ctx.fillRect(0, 0, cssW, cssH);
+    const { ctx } = this;
+    this.ensureConsoleBacking();
+    const cssW = this.consoleBackW;
+    const cssH = this.consoleBackH;
 
     if (this.runner?.isSpectrum) {
+      if (this.consoleBannerShown) return;
+      this.consoleBannerShown = true;
+      ctx.fillStyle = '#0a0c10';
+      ctx.fillRect(0, 0, cssW, cssH);
       ctx.fillStyle = '#1a1f2a';
       ctx.fillRect(PAD, PAD, cssW - PAD * 2, 40);
       ctx.fillStyle = '#8b93a7';
@@ -1608,6 +1669,9 @@ JR spin</textarea>
       ctx.fillText('Spectrum mode — switch to the Spectrum tab for screen + keys', PAD + 4, PAD + 12);
       return;
     }
+    this.consoleBannerShown = false;
+    ctx.fillStyle = '#0a0c10';
+    ctx.fillRect(0, 0, cssW, cssH);
 
     const { cols, rows, size } = this.textGeometry();
     ctx.font = `12px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
@@ -1791,41 +1855,61 @@ JR spin</textarea>
     this.healthEl.textContent = text;
   }
 
-  private drawSpectrum(): void {
-    const { cssW, cssH } = this.spectrumCssSize();
-    if (this.specCanvas.clientWidth !== cssW || this.specCanvas.clientHeight !== cssH) {
-      this.resizeBackingStore();
-    }
+  /**
+   * Blit the newest engine picture. Skipped when nothing new arrived since the
+   * last blit (`spectrumRgbaSeq`). The engine's RGBA buffer is wrapped in an
+   * `ImageData` without copying — `putImageData` is the only copy left.
+   */
+  private drawSpectrum(force = false): void {
+    this.ensureSpecBacking();
+    const cssW = this.specBackW;
+    const cssH = this.specBackH;
     const ctx = this.specCtx;
-    ctx.fillStyle = '#0a0c10';
-    ctx.fillRect(0, 0, cssW, cssH);
 
     if (!this.runner?.isSpectrum || !this.runner.spectrum || !this.ram) {
+      if (this.specPlaceholderDrawn && !force) return;
+      this.specPlaceholderDrawn = true;
+      this.drawnSpecSeq = -1;
+      ctx.fillStyle = '#0a0c10';
+      ctx.fillRect(0, 0, cssW, cssH);
       ctx.fillStyle = '#12151c';
       ctx.fillRect(PAD, PAD, SPEC_FRAME_W * SPEC_SCALE, SPEC_FRAME_H * SPEC_SCALE);
       return;
     }
+    this.specPlaceholderDrawn = false;
 
-    const tmp = this.bmpTmp;
-    if (tmp.width !== SPEC_FRAME_W || tmp.height !== SPEC_FRAME_H) {
-      tmp.width = SPEC_FRAME_W;
-      tmp.height = SPEC_FRAME_H;
-    }
-    const workerRgba = this.runner.lastSpectrumRgba;
-    if (workerRgba && workerRgba.length >= SPEC_FRAME_W * SPEC_FRAME_H * 4) {
-      this.specRgba.set(workerRgba.subarray(0, this.specRgba.length));
+    const n = SPEC_FRAME_W * SPEC_FRAME_H * 4;
+    const engineRgba = this.runner.lastSpectrumRgba;
+    const haveEngineRgba = !!engineRgba && engineRgba.length >= n;
+    const seq = this.runner.spectrumRgbaSeq;
+    if (haveEngineRgba && !force && seq === this.drawnSpecSeq) return;
+
+    let img: ImageData;
+    if (haveEngineRgba) {
+      const src = engineRgba!;
+      // Zero-copy view (the constructor requires an exact-length clamped array).
+      img = new ImageData(
+        new Uint8ClampedArray(src.buffer as ArrayBuffer, src.byteOffset, n),
+        SPEC_FRAME_W,
+        SPEC_FRAME_H,
+      );
     } else {
       const screen = this.runner.spectrumMmu?.displayBank() ?? this.ram.bytes;
       const flash = spectrumFlashPhase(performance.now());
       renderSpectrumFrame(screen, this.runner.spectrum.border, this.specRgba, flash);
+      if (!this.specImage) this.specImage = new ImageData(this.specRgba, SPEC_FRAME_W, SPEC_FRAME_H);
+      img = this.specImage;
     }
-    if (!this.specImage || this.specImage.width !== SPEC_FRAME_W || this.specImage.height !== SPEC_FRAME_H) {
-      this.specImage = this.bmpTmpCtx.createImageData(SPEC_FRAME_W, SPEC_FRAME_H);
+    if (this.drawnSpecSeq === -1) {
+      // First paint after (re)size: fill the frame around the picture once.
+      ctx.fillStyle = '#0a0c10';
+      ctx.fillRect(0, 0, cssW, cssH);
     }
-    this.specImage.data.set(this.specRgba);
-    this.bmpTmpCtx.putImageData(this.specImage, 0, 0);
+    this.specTmpCtx.putImageData(img, 0, 0);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(tmp, PAD, PAD, SPEC_FRAME_W * SPEC_SCALE, SPEC_FRAME_H * SPEC_SCALE);
+    ctx.drawImage(this.specTmp, PAD, PAD, SPEC_FRAME_W * SPEC_SCALE, SPEC_FRAME_H * SPEC_SCALE);
+    this.drawnSpecSeq = seq;
+    this.runner.markSpectrumDrawn();
   }
 
   private onKeyDown(e: KeyboardEvent): void {

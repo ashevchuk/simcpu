@@ -19,4 +19,5 @@ export function loadScr(mmu: SpectrumMmu, data: Uint8Array): void {
     throw new Error(`SCR must be ${SCR_SIZE} bytes (got ${data.length})`);
   }
   mmu.displayBank().set(data);
+  mmu.screenDirty = true;
 }

@@ -3,7 +3,7 @@
  */
 
 import { createSoftZ80, softNmi, softRun, softStep, type SoftMemHooks, type SoftZ80State } from '../softZ80.js';
-import { Ay8912 } from './ay8912.js';
+import { Ay8912, renderAudioFrame } from './ay8912.js';
 import { BetaDisk } from './betaDisk.js';
 import { bootSpectrum } from './boot.js';
 import {
@@ -39,10 +39,19 @@ export type SpectrumTurbo = 0.5 | 1 | 2 | 4 | 8;
 export type TapeQueueItem = { name: string; kind: 'tap' | 'tzx'; data: Uint8Array };
 
 export type SpectrumFrameResult = {
+  /** Last rendered frame (the `target` passed in, or the engine's own buffer). */
   rgba: Uint8Array;
+  /** False when the display file, border and flash phase were all unchanged (no render ran). */
+  rgbaChanged: boolean;
+  /** One 50 Hz frame of mixed AY + beeper mono samples at `audioSampleRate` (null when audio is off). */
+  audio: Float32Array | null;
+  /** Monotonic frame counter. */
+  frameSeq: number;
   beeper: { startEar: boolean; transitions: { frac: number; bit: boolean }[] };
   ayRegs: Uint8Array;
   aySelected: number;
+  /** R13 write counter for envelope retrigger sync on mirrors. */
+  ayEnvWrites: number;
   tStates: number;
   breakpointHit: boolean;
   breakWriteHit: boolean;
@@ -93,10 +102,25 @@ export class SpectrumEngine {
   softError: string | null = null;
   /** UI memory-watch base (also sent in worker frames). */
   watchAddr = 0x4000;
-  private rgba = new Uint8Array(SPEC_FRAME_W * SPEC_FRAME_H * 4);
+  /** Output rate for `SpectrumFrameResult.audio`; the host sets it from its AudioContext. */
+  audioSampleRate = 44100;
+  /** When false `tickFrame` skips audio synthesis (muted / headless). */
+  audioEnabled = true;
+  frameSeq = 0;
+  private rgba: Uint8Array = new Uint8Array(SPEC_FRAME_W * SPEC_FRAME_H * 4);
   private flat = new Uint8Array(0x10000);
   private lastLoadBlockOk = false;
   private prevWaitUnits = 0;
+  private hooksCache: SoftMemHooks | null = null;
+  private hooksTape: SpectrumTape | null = null;
+  /** State the last RGBA render reflected — used to skip redundant renders. */
+  private lastRenderBorder = -1;
+  private lastRenderFlash = false;
+  private lastRenderBank = -1;
+
+  constructor() {
+    this.contended.progress = this.ula.progress;
+  }
 
   boot(model: SpectrumModel): void {
     bootSpectrum(this.mmu, model, this.ula);
@@ -111,6 +135,13 @@ export class SpectrumEngine {
     this.breakWriteHit = false;
     this.softError = null;
     this.running = true;
+    this.invalidateRender();
+  }
+
+  /** Force the next `tickFrame` to re-render (after direct bank writes). */
+  invalidateRender(): void {
+    this.mmu.screenDirty = true;
+    this.lastRenderBorder = -1;
   }
 
   /** Page TR-DOS ROM and restart at $0000. */
@@ -133,20 +164,35 @@ export class SpectrumEngine {
     this.mmu.port7ffd = (this.mmu.port7ffd & ~0x10) | bit;
   }
 
+  /**
+   * CPU hooks. Cached — the closures only depend on the engine's fixed
+   * sub-objects plus the current tape, so a fresh object per frame was pure
+   * allocation churn. Rebuilt when the mounted tape changes.
+   */
   hooks(): SoftMemHooks {
+    if (this.hooksCache && this.hooksTape === this.tape) return this.hooksCache;
+    const h = this.buildHooks();
+    this.hooksCache = h;
+    this.hooksTape = this.tape;
+    return h;
+  }
+
+  private buildHooks(): SoftMemHooks {
     const ula = this.ula;
     const mmu = this.mmu;
     const tape = this.tape;
     const beta = this.beta;
+    const contended = this.contended;
     return {
       addrBits: 16,
       clearOnReadKeys: false,
+      progress: ula.progress,
       memRead: (addr) => {
-        this.contended.noteAccess(addr);
+        contended.noteAccess(addr);
         return mmu.read(addr);
       },
       memWrite: (addr, v) => {
-        this.contended.noteAccess(addr);
+        contended.noteAccess(addr);
         if (this.breakWriteAddr != null && (addr & 0xffff) === this.breakWriteAddr) {
           this.breakWriteHit = true;
           this.running = false;
@@ -162,7 +208,7 @@ export class SpectrumEngine {
           if (BetaDisk.isSystemPort(port)) return mmu.trdosPaged ? 0x01 : 0x00;
         }
         if (Ay8912.isSelectPort(port)) return this.ay.readData();
-        if ((port & 0xff) === 0xfe) this.contended.noteFePort();
+        if ((port & 0xff) === 0xfe) contended.noteFePort();
         return ula.portIn(port);
       },
       portOut: (port, val) => {
@@ -213,12 +259,11 @@ export class SpectrumEngine {
           this.ay.writeData(val);
           return;
         }
-        if ((port & 0xff) === 0xfe) this.contended.noteFePort();
+        if ((port & 0xff) === 0xfe) contended.noteFePort();
         ula.portOut(port, val);
       },
       irqPending: () => ula.irqPending,
       clearIrq: () => ula.clearIrq(),
-      onStep: (step, max) => ula.setBeeperProgress(step / Math.max(1, max)),
       hostTrap: tape
         ? (cpu, bytes) => {
             if (this.tapePaused) return true; // busy-wait at LD-BYTES
@@ -293,9 +338,15 @@ export class SpectrumEngine {
   }
 
   /**
-   * One display frame of soft Run. When `wantRgba` is false, skip render (turbo skip).
+   * One display frame of soft Run.
+   *
+   * `wantRgba` false → no render (turbo frame skip). Otherwise the frame is
+   * rendered only if the display file / border / flash phase changed since the
+   * last render (`rgbaChanged`). `target`, when given, receives the pixels
+   * instead of the engine's own buffer — the Worker passes a recyclable
+   * transfer buffer here so no per-frame copy is needed.
    */
-  tickFrame(wantRgba = true): SpectrumFrameResult {
+  tickFrame(wantRgba = true, target?: Uint8Array): SpectrumFrameResult {
     this.breakpointHit = false;
     this.breakWriteHit = false;
     this.lastLoadBlockOk = false;
@@ -333,21 +384,47 @@ export class SpectrumEngine {
     );
     const beeper = this.ula.beeperSegments();
     const transitions = beeper.transitions.map((t) => ({ frac: t.frac, bit: t.bit }));
+    const audio = this.audioEnabled
+      ? renderAudioFrame(this.ay, this.audioSampleRate, {
+          startEar: beeper.startEar,
+          transitions,
+        })
+      : null;
 
+    let rgba = this.rgba;
+    let rgbaChanged = false;
     if (wantRgba) {
-      renderSpectrumFrame(
-        this.mmu.displayBank(),
-        this.ula.border,
-        this.rgba,
-        spectrumFlashPhase(performance.now()),
-      );
+      const flash = spectrumFlashPhase(performance.now());
+      const bank = this.mmu.port7ffd & 0x08 ? 7 : 5;
+      const border = this.ula.border;
+      if (
+        this.mmu.screenDirty ||
+        border !== this.lastRenderBorder ||
+        flash !== this.lastRenderFlash ||
+        bank !== this.lastRenderBank
+      ) {
+        rgba = target ?? this.rgba;
+        renderSpectrumFrame(this.mmu.displayBank(), border, rgba, flash);
+        this.mmu.screenDirty = false;
+        this.lastRenderBorder = border;
+        this.lastRenderFlash = flash;
+        this.lastRenderBank = bank;
+        rgbaChanged = true;
+        // Never alias `this.rgba` to a Worker transfer buffer — after postMessage
+        // that ArrayBuffer is detached. Fallback ticks keep using the engine copy.
+        if (!target) this.rgba = rgba;
+      }
     }
 
     return {
-      rgba: this.rgba,
+      rgba,
+      rgbaChanged,
+      audio,
+      frameSeq: ++this.frameSeq,
       beeper: { startEar: beeper.startEar, transitions },
       ayRegs: this.ay.regs.slice(),
       aySelected: this.ay.selected,
+      ayEnvWrites: this.ay.envWrites,
       tStates,
       breakpointHit: this.breakpointHit,
       breakWriteHit: this.breakWriteHit,
@@ -362,13 +439,17 @@ export class SpectrumEngine {
   loadSna(data: Uint8Array) {
     const model: SpectrumModel = isSna128(data) ? '128' : '48';
     this.boot(model);
-    return applySna(this.mmu, this.cpu, this.ula, data);
+    const r = applySna(this.mmu, this.cpu, this.ula, data);
+    this.invalidateRender();
+    return r;
   }
 
   loadZ80(data: Uint8Array) {
     const model = peekZ80Model(data);
     this.boot(model);
-    return applyZ80(this.mmu, this.cpu, this.ula, data, this.ay);
+    const r = applyZ80(this.mmu, this.cpu, this.ula, data, this.ay);
+    this.invalidateRender();
+    return r;
   }
 
   saveSna(): Uint8Array {
@@ -385,6 +466,7 @@ export class SpectrumEngine {
 
   loadScr(data: Uint8Array): void {
     loadScr(this.mmu, data);
+    this.invalidateRender();
   }
 
   mountTap(data: Uint8Array, cold = false): { blocks: number; cold: boolean } {
