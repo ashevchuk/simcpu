@@ -514,13 +514,54 @@
       .hex-view {
         position: relative;
         flex: 1 1 auto;
-        min-height: 140px;
+        min-height: 100px;
         overflow-x: hidden;
         overflow-y: auto;
         background: #0e1016;
         border: 1px solid var(--border);
         border-radius: 6px;
         outline: none;
+      }
+      .memory-asm-split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        flex: 0 0 auto;
+        min-height: 0;
+      }
+      .memory-asm-pane, .memory-disasm-pane {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+      }
+      .memory-asm-label {
+        color: var(--text-dim);
+        font: 11px ui-monospace, monospace;
+        margin-bottom: 3px;
+      }
+      .memory-asm, .memory-disasm {
+        width: 100%;
+        box-sizing: border-box;
+        resize: vertical;
+        min-height: 88px;
+        max-height: 220px;
+        background: #0e1016;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+        font: 11px/1.35 ui-monospace, 'SF Mono', monospace;
+        padding: 6px 8px;
+      }
+      .memory-disasm { color: #b8c0d4; }
+      .memory-asm-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        flex: 0 0 auto;
+      }
+      @media (max-width: 640px) {
+        .memory-asm-split { grid-template-columns: 1fr; }
       }
       .hex-view:focus {
         border-color: #3d4658;
@@ -1430,6 +1471,9 @@
             </button>
             <button type="button" class="menu-item" id="add-z80cpu" title="Insert a Z80-opcode CPU (asks for RAM address bits, then program bytes)">
               Z80 CPU…<span class="item-desc">Real Z80 opcode subset</span>
+            </button>
+            <button type="button" class="menu-item" id="add-led-blink" title="Z80 + LED blink demo ROM (OUT port 0x40 → canvas LED)">
+              LED blink…<span class="item-desc">Soft port → lab LED</span>
             </button>
             <button type="button" class="menu-item" id="add-spectrum" title="Z80 + 64K RAM + soft Spectrum 48K (opens TTY, Spectrum tab)">
               Spectrum 48K…<span class="item-desc">One-click ZX machine</span>

@@ -1562,7 +1562,7 @@ function drawComponent(
     case 'led': {
       const { x, y } = c.pos;
       const { level, contended } = resolve(c.pins.in.id);
-      const on = level === 1 && !contended;
+      const on = c.forceOn === true || (level === 1 && !contended);
       if (ringColor) {
         ctx.save();
         ctx.globalAlpha = 0.35;

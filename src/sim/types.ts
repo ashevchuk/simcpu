@@ -127,6 +127,11 @@ export interface LedComponent {
   kind: 'led';
   label?: string;
   color: string; // CSS color for the "on" glow
+  /**
+   * Host override (soft machine PORT_LAB_LED). Soft Run draws pin levels as Z;
+   * when set, the LED glows from this flag instead of the net.
+   */
+  forceOn?: boolean;
   pos: Point;
   rotation: 0 | 90 | 180 | 270;
   mirrorX: boolean;

@@ -19,6 +19,7 @@
  *     0x20  PORT_BMP_ADDR_LO  OUT bitmap byte-index low
  *     0x21  PORT_BMP_ADDR_HI  OUT bitmap byte-index high
  *     0x22  PORT_BMP_DATA     OUT/IN bitmap[addr]
+ *     0x40  PORT_LAB_LED      OUT/IN bit0 → canvas LED (soft peripheral bridge)
  *   Bitmap framebuffer: BMP_WIDTH×BMP_HEIGHT / 8 bytes on SoftDevices.bitmap
  */
 
@@ -119,6 +120,8 @@ export const PORT_BMP_ADDR_HI = 0x21;
 export const PORT_BMP_DATA = 0x22;
 /** Soft CP/M disk: OUT 0=read/1=write using BIOS workspace; IN = status (0=OK). */
 export const PORT_DISK_OP = 0x30;
+/** Soft lab LED: OUT/IN bit0 drives an attached canvas LED (see MachineRunner.bindLabLed). */
+export const PORT_LAB_LED = 0x40;
 
 export function fbIndex(col: number, row: number, fbBase = FB_BASE): number {
   if (col < 0 || col >= FB_COLS || row < 0 || row >= FB_ROWS) {

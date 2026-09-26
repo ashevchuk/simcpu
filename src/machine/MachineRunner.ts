@@ -2,7 +2,7 @@ import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import type { Z80Cpu } from '../sim/blocks.js';
 import { makeInput, makeLabel, wire } from '../sim/library.js';
-import type { InputComponent, Pin, RamComponent } from '../sim/types.js';
+import type { InputComponent, LedComponent, Pin, RamComponent } from '../sim/types.js';
 import { createSoftDevices, type SoftDevices } from './softDevices.js';
 import { createSoftZ80, softRun, softStep, type SoftMemHooks, type SoftZ80State } from './softZ80.js';
 import { softIoLayoutForAddrBits } from './memoryMap.js';
@@ -161,6 +161,49 @@ export class MachineRunner {
 
   get softDevices(): SoftDevices {
     return this.devices;
+  }
+
+  /** Canvas LED driven by soft PORT_LAB_LED (bit0). */
+  private labLed: LedComponent | null = null;
+  /** Drive Input wired to labLed (Gates path); Soft uses forceOn. */
+  private labLedDrive: InputComponent | null = null;
+
+  /** True when a lab LED is bound (Soft Run should redraw canvas on OUT). */
+  get hasLabLed(): boolean {
+    return this.labLed !== null;
+  }
+
+  /**
+   * Bind a canvas LED (+ optional Input) to SoftDevices.labLed / PORT_LAB_LED.
+   * Soft Run sets `led.forceOn`; Gates also drives `drive` when provided.
+   */
+  bindLabLed(led: LedComponent, drive?: InputComponent | null): void {
+    if (this.labLed && this.labLed !== led) this.labLed.forceOn = false;
+    this.labLed = led;
+    this.labLedDrive = drive ?? null;
+    this.syncLabLed();
+  }
+
+  unbindLabLed(): void {
+    if (this.labLed) this.labLed.forceOn = false;
+    this.labLed = null;
+    this.labLedDrive = null;
+  }
+
+  /** Mirror SoftDevices.labLed → LED forceOn (+ Input). Returns true if visible state changed. */
+  syncLabLed(): boolean {
+    if (!this.labLed) return false;
+    const on = (this.devices.labLed & 1) === 1;
+    let changed = false;
+    if (this.labLed.forceOn !== on) {
+      this.labLed.forceOn = on;
+      changed = true;
+    }
+    if (this.labLedDrive && this.labLedDrive.value !== (on ? 1 : 0)) {
+      this.labLedDrive.value = on ? 1 : 0;
+      changed = true;
+    }
+    return changed;
   }
 
   get isSpectrum(): boolean {
@@ -673,6 +716,7 @@ export class MachineRunner {
     this.running = false;
     this.booted = false;
     this.soft = null;
+    this.unbindLabLed();
     this.devices = createSoftDevices();
     this.spectrum = null;
     this.spectrumMmu = null;
@@ -827,6 +871,7 @@ export class MachineRunner {
         if (this.spectrum) this.spectrum.pulseFrameIrq();
         softStep(this.soft, this.ram.bytes, this.softHooks());
         this.softDesynced = true;
+        this.syncLabLed();
         if (this.soft.halted && !this.spectrum) this.running = false;
       } catch (e) {
         this.running = false;
@@ -891,6 +936,7 @@ export class MachineRunner {
         }
         softRun(this.soft, this.ram.bytes, this.phasesPerFrame, this.softHooks(), this.breakpointPc);
         this.softDesynced = true;
+        this.syncLabLed();
         if (
           this.breakpointPc != null &&
           this.soft &&
@@ -904,6 +950,7 @@ export class MachineRunner {
           this.ayAudio.playFrame(69888, this.spectrum.beeperSegments());
         }
         if (this.soft.halted && !this.spectrum) this.running = false;
+        return true;
       } catch (e) {
         this.running = false;
         this.softError = e instanceof Error ? e.message : String(e);

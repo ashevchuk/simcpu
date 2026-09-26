@@ -9,6 +9,7 @@
  *   0x0A–0x10     z80pack FDC + DMA (drive/track/sector/cmd/status/dma)
  *   0x20–0x22     soft bitmap
  *   0x30          legacy soft BIOS disk op
+ *   0x40          lab LED (bit0 → SoftDevices.labLed / canvas LED)
  */
 
 import {
@@ -21,6 +22,7 @@ import {
   PORT_DISK_OP,
   PORT_KEY_DATA,
   PORT_KEY_STATUS,
+  PORT_LAB_LED,
   PORT_TTY_OUT,
   softIoLayoutForRam,
 } from './memoryMap.js';
@@ -38,6 +40,7 @@ export {
   PORT_DISK_OP,
   PORT_KEY_DATA,
   PORT_KEY_STATUS,
+  PORT_LAB_LED,
   PORT_TTY_OUT,
 };
 
@@ -71,6 +74,8 @@ export class SoftDevices {
   }
   /** True after at least one port TTY character was painted. */
   consoleTouched = false;
+  /** Soft lab LED (PORT_LAB_LED bit0) — mirrored to a canvas LED by MachineRunner. */
+  labLed = 0;
   /** Drives A:… — index 0 is always present. */
   disks: SoftDisk[];
   /** Drive A: (boot / SoftCpm). */
@@ -198,6 +203,9 @@ export class SoftDevices {
         }
         break;
       }
+      case PORT_LAB_LED:
+        this.labLed = v & 1;
+        break;
       default:
         break;
     }
@@ -242,6 +250,8 @@ export class SoftDevices {
         return this.bitmap[this.bmpIndex()]!;
       case PORT_DISK_OP:
         return this.diskStatus & 0xff;
+      case PORT_LAB_LED:
+        return this.labLed & 1;
       default:
         return 0xff;
     }

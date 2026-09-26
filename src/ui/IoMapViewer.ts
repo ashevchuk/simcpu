@@ -14,6 +14,7 @@ import {
   PORT_DISK_OP,
   PORT_KEY_DATA,
   PORT_KEY_STATUS,
+  PORT_LAB_LED,
   PORT_TTY_OUT,
   requiresMachineMap,
   softIoLayoutForAddrBits,
@@ -116,6 +117,7 @@ export class IoMapViewer {
         <tr><td>PORT_BMP_ADDR_LO/HI</td><td class="mono">${hexAddr(PORT_BMP_ADDR_LO)}/${hexAddr(PORT_BMP_ADDR_HI)}</td><td>bitmap index</td></tr>
         <tr><td>PORT_BMP_DATA</td><td class="mono">${hexAddr(PORT_BMP_DATA)}</td><td>bitmap R/W</td></tr>
         <tr><td>PORT_DISK_OP</td><td class="mono">${hexAddr(PORT_DISK_OP)}</td><td>CP/M disk R/W</td></tr>
+        <tr><td>PORT_LAB_LED</td><td class="mono">${hexAddr(PORT_LAB_LED)}</td><td>OUT/IN bit0 → lab LED</td></tr>
       </table>
     `;
     this.bodyEl.appendChild(ports);

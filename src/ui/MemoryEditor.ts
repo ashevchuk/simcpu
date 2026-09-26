@@ -1,14 +1,18 @@
 /**
  * Cell-based hex memory editor for RamComponent / RomComponent.
+ * Includes a bottom asm / disasm split for Z80 code at `@`.
  * Pure parse/format helpers stay exported for unit tests / file I/O.
  */
 
+import { assemble, bytesToHexPrompt } from '../machine/assembler.js';
+import { formatDisassembly } from '../machine/disassembler.js';
 import type { MemoryComponent } from '../sim/types.js';
 import { FloatingWindow } from './FloatingWindow.js';
 
 const COLS = 16;
 const ROW_H = 22;
 const OVERSCAN = 4;
+const DISASM_COUNT = 32;
 
 export function parseHexBlob(text: string): number[] {
   const cleaned = text.replace(/[^0-9a-fA-F]/g, '');
@@ -59,7 +63,11 @@ export class MemoryEditor {
   private readonly viewEl: HTMLElement;
   private readonly spacerEl: HTMLElement;
   private readonly rowsEl: HTMLElement;
+  private readonly asmEl: HTMLTextAreaElement;
+  private readonly disasmEl: HTMLTextAreaElement;
   private onChange: (() => void) | null = null;
+  /** Soft machine: JP @addr + reboot/run after Assemble+Go. */
+  private onGo: ((addr: number) => void) | null = null;
 
   private cursor = 0;
   /** After typing the high nibble, wait for the low one before advancing. */
@@ -87,11 +95,28 @@ export class MemoryEditor {
         <span class="hex-asc">ASCII</span>
       </div>
       <div class="hex-view" tabindex="0" role="grid" aria-label="Hex memory"></div>
+      <div class="memory-asm-split">
+        <div class="memory-asm-pane">
+          <div class="memory-asm-label">Assemble @ (origin = toolbar address)</div>
+          <textarea name="asm" class="memory-asm" rows="6" spellcheck="false" placeholder="; Z80 asm — Assemble loads at @"></textarea>
+        </div>
+        <div class="memory-disasm-pane">
+          <div class="memory-asm-label">Disassembly from cursor</div>
+          <textarea name="disasm" class="memory-disasm" rows="6" readonly spellcheck="false"></textarea>
+        </div>
+      </div>
+      <div class="memory-asm-actions">
+        <button type="button" data-act="asm">Assemble → @</button>
+        <button type="button" data-act="asm-go" title="Assemble, load, soft G @ + reboot">Assemble + Go</button>
+        <button type="button" data-act="disasm">Disasm from cursor</button>
+      </div>
       <div class="lab-panel-status">Select a RAM/ROM (dblclick) to edit.</div>
     `;
     this.addrEl = this.root.querySelector('input[name="addr"]')!;
     this.statusEl = this.root.querySelector('.lab-panel-status')!;
     this.viewEl = this.root.querySelector('.hex-view')!;
+    this.asmEl = this.root.querySelector('textarea[name="asm"]')!;
+    this.disasmEl = this.root.querySelector('textarea[name="disasm"]')!;
     this.spacerEl = document.createElement('div');
     this.spacerEl.className = 'hex-spacer';
     this.rowsEl = document.createElement('div');
@@ -111,6 +136,9 @@ export class MemoryEditor {
       input.value = '';
       if (file) void this.loadFile(file);
     });
+    this.root.querySelector('[data-act="asm"]')!.addEventListener('click', () => this.doAssemble(false));
+    this.root.querySelector('[data-act="asm-go"]')!.addEventListener('click', () => this.doAssemble(true));
+    this.root.querySelector('[data-act="disasm"]')!.addEventListener('click', () => this.refreshDisasm());
     this.addrEl.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') {
         ev.preventDefault();
@@ -127,6 +155,10 @@ export class MemoryEditor {
 
   setOnChange(fn: (() => void) | null): void {
     this.onChange = fn;
+  }
+
+  setOnGo(fn: ((addr: number) => void) | null): void {
+    this.onGo = fn;
   }
 
   get attached(): boolean {
@@ -147,6 +179,7 @@ export class MemoryEditor {
     this.mem = null;
     this.rowsEl.replaceChildren();
     this.spacerEl.style.height = '0';
+    this.disasmEl.value = '';
     this.statusEl.textContent = 'Select a RAM/ROM (dblclick) to edit.';
     this.win.setVisible(false);
   }
@@ -160,7 +193,8 @@ export class MemoryEditor {
     this.cursor = Math.min(this.cursor, this.mem.bytes.length - 1);
     this.pendingHi = null;
     this.render(true);
-    this.statusEl.textContent = `${this.mem.bytes.length} bytes · click a cell, type hex`;
+    this.refreshDisasm();
+    this.statusEl.textContent = `${this.mem.bytes.length} bytes · click a cell, type hex · asm/disasm below`;
   }
 
   private parseAddr(): number {
@@ -190,6 +224,40 @@ export class MemoryEditor {
       }
     }
     this.render();
+    this.refreshDisasm();
+  }
+
+  private refreshDisasm(): void {
+    if (!this.mem) {
+      this.disasmEl.value = '';
+      return;
+    }
+    this.disasmEl.value = formatDisassembly(this.mem.bytes, this.cursor, { count: DISASM_COUNT });
+  }
+
+  private doAssemble(go: boolean): void {
+    if (!this.mem) {
+      this.statusEl.textContent = 'No RAM/ROM attached.';
+      return;
+    }
+    const addr = Math.min(this.parseAddr(), this.mem.bytes.length - 1);
+    const result = assemble(this.asmEl.value, addr);
+    if (!result.ok) {
+      this.statusEl.textContent = result.errors[0] ?? 'assemble failed';
+      this.disasmEl.value = result.errors.join('\n');
+      return;
+    }
+    const n = applyBytes(this.mem, addr, [...result.bytes]);
+    this.pendingHi = null;
+    this.setCursor(addr, true);
+    this.render(true);
+    this.refreshDisasm();
+    this.statusEl.textContent = `assembled ${n} bytes @ ${addr.toString(16).padStart(4, '0')} (${bytesToHexPrompt(result.bytes).slice(0, 48)}${result.bytes.length > 16 ? '…' : ''})`;
+    this.onChange?.();
+    if (go) {
+      if (this.onGo) this.onGo(addr);
+      else this.statusEl.textContent += ' · no machine Go hook (bytes loaded)';
+    }
   }
 
   private scheduleRender(): void {
@@ -378,6 +446,7 @@ export class MemoryEditor {
         const cur = this.mem.bytes[this.cursor]!;
         this.mem.bytes[this.cursor] = ((nibble << 4) | (cur & 0x0f)) & 0xff;
         this.render();
+        this.refreshDisasm();
         this.onChange?.();
       } else {
         this.writeByte(this.cursor, ((this.pendingHi << 4) | nibble) & 0xff);
@@ -403,6 +472,7 @@ export class MemoryEditor {
   private writeByte(addr: number, value: number): void {
     if (!this.mem || addr < 0 || addr >= this.mem.bytes.length) return;
     this.mem.bytes[addr] = value & 0xff;
+    this.refreshDisasm();
     this.onChange?.();
   }
 
@@ -411,6 +481,7 @@ export class MemoryEditor {
     this.mem.bytes.fill(value & 0xff);
     this.pendingHi = null;
     this.render(true);
+    this.refreshDisasm();
     this.statusEl.textContent = `filled with ${value.toString(16).padStart(2, '0')}`;
     this.onChange?.();
   }

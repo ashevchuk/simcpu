@@ -27,12 +27,12 @@ function ensureStyles(): void {
       overflow: hidden;
     }
     .float-win.memory-editor {
-      max-width: min(96vw, 720px);
-      width: min(96vw, 640px);
-      height: min(70vh, 480px);
-      min-height: 280px;
-      max-height: min(92vh, 900px);
-      resize: vertical;
+      max-width: min(96vw, 780px);
+      width: min(96vw, 720px);
+      height: min(82vh, 640px);
+      min-height: 360px;
+      max-height: min(94vh, 960px);
+      resize: both;
     }
     .float-win.machine-panel {
       width: min(96vw, 860px);

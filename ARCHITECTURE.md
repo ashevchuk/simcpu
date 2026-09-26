@@ -1041,6 +1041,13 @@ Gate-path keyboard clear-on-read: when RAM OE samples `KEY_DATA` (0xF01),
 the solver clears `KEY_STATUS` (0xF00) — same contract as soft
 `SoftMemHooks`.
 
+**Lab LED peripheral (soft bridge MVP):** `PORT_LAB_LED` (`0x40`) bit0 on
+`SoftDevices.labLed`. `Insert → LED blink…` loads `ledBlinkRom.ts` (OUT
+loop), places a canvas LED, and `MachineRunner.bindLabLed` mirrors the
+port onto `LedComponent.forceOn` so Soft Run (which draws pin levels as Z)
+still shows the blink. Gates can also drive a wired Input. Not a FET IORQ
+bus yet — host port → Soft Lab indicator.
+
 Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
 pos?)`, etc.); power is always `tiePowerRail` (reuses the circuit's Source
 pins when present). Soft↔gate parity covers unprefixed/CB, ED/DD, and

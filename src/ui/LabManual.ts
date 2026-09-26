@@ -389,10 +389,11 @@ const SECTIONS: Section[] = [
     body:
       'Insert → ROM…\n' +
       '  Asks address bits (and optional init hex). Behavioral: while OE=1, data = bytes[addr].\n' +
-      '  Double-click / Memory panel to edit contents. Stub ROM… is a fixed transistor demo (not editable storage).\n\n' +
+      '  Double-click RAM/ROM to open the Memory editor (hex grid + asm/disasm).\n' +
+      '  Stub ROM… is a fixed transistor demo (not editable storage).\n\n' +
       'Insert → RAM…\n' +
       '  Real R/W array. Read: OE=1. Write: present data, WE=1 on rising CLK (check Inspector).\n' +
-      '  Open Memory editor from the machine/memory UI when attached.\n\n' +
+      '  Memory editor: Assemble → @ / Assemble + Go / live Disasm from cursor.\n\n' +
       'Soft Lab also has SOFT_RAM16 (Library → Lab) — Soft Lab ON only; see Buses / Soft RAM.\n\n' +
       'Example: File → Open examples… → ROM viewer, or #e=rom-viewer.',
     figures: [
@@ -408,6 +409,10 @@ const SECTIONS: Section[] = [
       '  1. Choose RAM address bits (16 = 64K for Spectrum/CP/M-class soft machines).\n' +
       '  2. Optional program bytes (comma hex). Default can seed the command ROM path.\n' +
       '  3. A Z80CPU chip + RAM appear; attach TTY / open machine panel.\n\n' +
+      'Insert → LED blink… places Z80 + ROM that OUT bit0 to port 0x40 (PORT_LAB_LED)\n' +
+      'and a canvas LED driven by the soft peripheral bridge (Soft speed).\n\n' +
+      'Dblclick machine RAM → Memory editor: write Z80 asm at @, Disasm from cursor,\n' +
+      'Assemble + Go (soft JP + reboot). Console asm box still works the same way.\n\n' +
       'Toolbar Speed: Soft (fast interpreter) vs Gates (transistor CPU — very slow).\n' +
       'Run / Pause / Step: Soft steps instructions; Gates steps solver ticks.\n\n' +
       'From the machine panel you can Boot BASIC / CP/M / stub, or boot Spectrum (see next).\n' +

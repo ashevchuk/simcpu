@@ -5,7 +5,7 @@ import { foldZ80CpuLeavingRam, newComponentIdSet, packFoldedMachine } from './si
 import { replaceLongWiresWithLabels } from './sim/labelWires.js';
 import { circuitHasPulseGen, circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
 import { flatten, fold, foldPortWarnings, forkChipInstance, unfold } from './sim/hierarchy.js';
-import { buildNot, makeButton, makeBusProbe, makeLed, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
+import { buildNot, makeButton, makeBusProbe, makeInput, makeLed, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
 import { EXAMPLE_PROJECTS } from './examples/catalog.js';
 import {
   deserializeProject,
@@ -52,6 +52,8 @@ import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, SimSta
 import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
 import { commandRomHexPrompt } from './machine/commandRom.js';
+import { LED_BLINK_ROM_BYTES } from './machine/ledBlinkRom.js';
+import { runSoftCommand } from './machine/softConsole.js';
 import { Camera, type Bounds } from './ui/Camera.js';
 import { showAlert, showChoice, showConfirm, showPrompt } from './ui/Dialog.js';
 import { EditHistory } from './ui/EditHistory.js';
@@ -509,6 +511,17 @@ function syncInspector(): void {
 }
 memoryEditor.setOnChange(() => {
   uiDirty = true;
+});
+memoryEditor.setOnGo((addr) => {
+  const ram = machineRunner.machineRam;
+  if (!ram) return;
+  const g = runSoftCommand(ram.bytes, `G ${addr.toString(16)}`);
+  if (g.reboot) {
+    machineRunner.reboot();
+    machineRunner.setRunning(true);
+  }
+  machinePanel.draw();
+  machinePanel.refreshControls();
 });
 logicAnalyzer.setOnRunChange(() => {
   uiDirty = true;
@@ -1395,7 +1408,7 @@ const Z80_MONITOR_HEX = commandRomHexPrompt();
 /** Same shape as promptProgramBytes(), defaulted to the command ROM. */
 async function promptZ80ProgramBytes(): Promise<Uint8Array | null> {
   const raw = await showPrompt(
-    'Program bytes, comma-separated hex — default is the Z80 command ROM (TTY H/M/W/G; FB @ 0xE00; needs 12-bit RAM). Use 16-bit RAM + Boot CP/M for soft CP/M:',
+    'Program bytes, comma-separated hex — default is the Z80 command ROM (TTY H/M/W/G; FB @ 0xE00; needs 12-bit RAM). Or Insert → LED blink… for OUT 0x40 → canvas LED. Use 16-bit RAM + Boot CP/M for soft CP/M:',
     Z80_MONITOR_HEX,
   );
   if (!raw) return null;
@@ -1462,6 +1475,55 @@ document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
   const program = await promptZ80ProgramBytes();
   if (program === null) return;
   placeZ80Machine(addrBits, program);
+});
+
+/** Soft machine + canvas LED: OUT (0x40) bit0 blinks the LED. */
+function placeLedBlinkMachine(): void {
+  const pos = snap(camera.screenToWorld({ x: vw() / 2, y: vh() / 2 }, vw(), vh()));
+  machineRunner.detach();
+
+  const beforeIds = new Set(editor.circuit.components.keys());
+  const cpu = buildZ80Cpu(editor.circuit, library, MACHINE_ADDR_BITS, LED_BLINK_ROM_BYTES, pos);
+  const placedIds = newComponentIdSet(editor.circuit, beforeIds);
+
+  const ledDrive = makeInput(editor.circuit, 0, { x: pos.x + 160, y: pos.y - 40 });
+  const led = makeLed(editor.circuit, { x: pos.x + 220, y: pos.y - 40 }, 'LAB_LED');
+  wire(editor.circuit, ledDrive.pins.out, led.pins.in);
+
+  const simTick = () => {
+    const flat = flatten(topCircuit, library);
+    const flatNetMap = flat.computeNets();
+    lastFlatNetMap = flatNetMap;
+    simState = step(flat, flatNetMap, simState);
+  };
+  machinePanel.attach(cpu.ram);
+  machinePanel.bindRunner(machineRunner);
+  machineRunner.attach(editor.circuit, library, cpu, simTick, {
+    readPin: (pin) => {
+      if (!lastFlatNetMap) return 'Z';
+      const net = lastFlatNetMap.netOf.get(pin.id);
+      if (!net) return 'Z';
+      return simState.levelOf.get(net) ?? 'Z';
+    },
+  });
+  machineRunner.bindLabLed(led, ledDrive);
+  machineRunner.boot();
+  machineRunner.setSpeed('soft');
+  machineRunner.setRunning(true);
+  makeTty(editor.circuit, { x: pos.x + 120, y: pos.y - 80 }, cpu.ram.id);
+  machinePanel.refreshControls();
+  machinePanel.draw();
+
+  foldZ80CpuLeavingRam(editor.circuit, library, placedIds, pos);
+  packFoldedMachine(editor.circuit, pos);
+  replaceLongWiresWithLabels(editor.circuit, 24);
+  camera.fit(circuitBounds(editor.circuit), vw(), vh());
+  refreshChipPalette();
+  uiDirty = true;
+}
+
+document.getElementById('add-led-blink')?.addEventListener('click', () => {
+  placeLedBlinkMachine();
 });
 
 document.getElementById('add-spectrum')?.addEventListener('click', () => {
@@ -3110,7 +3172,13 @@ function frame(): void {
   let labChanged = false;
   const needSimDraw =
     softRun
-      ? uiDirty || labActive || labChanged || simStepOnce || statusNoticeActive() || porActive
+      ? uiDirty ||
+        labActive ||
+        labChanged ||
+        simStepOnce ||
+        statusNoticeActive() ||
+        porActive ||
+        (machineWorked && machineRunner.hasLabLed)
       : uiDirty ||
         labChanged ||
         (!simPaused && !simState.settled) ||
@@ -3130,7 +3198,8 @@ function frame(): void {
     // through flatten() — interactive TTY does not need pin levels. Dive-in
     // (navStack depth > 1) or any Gates path still flattens as before.
     const softTop = softRun && navStack.length === 1;
-    if (!softRun || uiDirty || labActive || labChanged || simStepOnce) {
+    const softLabLedPaint = softRun && machineRunner.hasLabLed && machineWorked;
+    if (!softRun || uiDirty || labActive || labChanged || simStepOnce || softLabLedPaint) {
       const view = navStack[navStack.length - 1]!;
       if (softTop && !simStepOnce) {
         // Soft machine HUD — no transistor step; still advance free-running instruments
