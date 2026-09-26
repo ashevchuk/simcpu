@@ -10,6 +10,8 @@
  *   0x20–0x22     soft bitmap
  *   0x30          legacy soft BIOS disk op
  *   0x40          lab LED (bit0 → SoftDevices.labLed / canvas LED)
+ *   0x41          lab REG q (SoftDevices.labReg)
+ *   0x42          lab COUNTER4 q (SoftDevices.labCounter)
  */
 
 import {
@@ -22,7 +24,9 @@ import {
   PORT_DISK_OP,
   PORT_KEY_DATA,
   PORT_KEY_STATUS,
+  PORT_LAB_COUNTER,
   PORT_LAB_LED,
+  PORT_LAB_REG,
   PORT_TTY_OUT,
   softIoLayoutForRam,
 } from './memoryMap.js';
@@ -40,7 +44,9 @@ export {
   PORT_DISK_OP,
   PORT_KEY_DATA,
   PORT_KEY_STATUS,
+  PORT_LAB_COUNTER,
   PORT_LAB_LED,
+  PORT_LAB_REG,
   PORT_TTY_OUT,
 };
 
@@ -76,6 +82,10 @@ export class SoftDevices {
   consoleTouched = false;
   /** Soft lab LED (PORT_LAB_LED bit0) — mirrored to a canvas LED by MachineRunner. */
   labLed = 0;
+  /** Soft lab REG (PORT_LAB_REG) — packed q bits for REG4/REG8. */
+  labReg = 0;
+  /** Soft lab COUNTER4 (PORT_LAB_COUNTER) — low 4 bits. */
+  labCounter = 0;
   /** Drives A:… — index 0 is always present. */
   disks: SoftDisk[];
   /** Drive A: (boot / SoftCpm). */
@@ -206,6 +216,12 @@ export class SoftDevices {
       case PORT_LAB_LED:
         this.labLed = v & 1;
         break;
+      case PORT_LAB_REG:
+        this.labReg = v & 0xff;
+        break;
+      case PORT_LAB_COUNTER:
+        this.labCounter = v & 0x0f;
+        break;
       default:
         break;
     }
@@ -252,6 +268,10 @@ export class SoftDevices {
         return this.diskStatus & 0xff;
       case PORT_LAB_LED:
         return this.labLed & 1;
+      case PORT_LAB_REG:
+        return this.labReg & 0xff;
+      case PORT_LAB_COUNTER:
+        return (this.labCounter & 0x0f) | ((this.labCounter & 0x0f) === 0x0f ? 0x10 : 0);
       default:
         return 0xff;
     }

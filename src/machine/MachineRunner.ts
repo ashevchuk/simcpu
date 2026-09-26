@@ -2,10 +2,11 @@ import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import type { Z80Cpu } from '../sim/blocks.js';
 import { makeInput, makeLabel, wire } from '../sim/library.js';
-import type { InputComponent, LedComponent, Pin, RamComponent } from '../sim/types.js';
+import type { InputComponent, LedComponent, ChipInstanceComponent, Pin, RamComponent } from '../sim/types.js';
 import { createSoftDevices, type SoftDevices } from './softDevices.js';
 import { createSoftZ80, softRun, softStep, type SoftMemHooks, type SoftZ80State } from './softZ80.js';
 import { softIoLayoutForAddrBits } from './memoryMap.js';
+import { ensureSoftState, softLabModelKey } from '../sim/softLab.js';
 import { SpectrumUla } from './spectrum/ula.js';
 import { isSna128 } from './spectrum/sna.js';
 import { peekZ80Model } from './spectrum/z80snap.js';
@@ -167,21 +168,27 @@ export class MachineRunner {
   private labLed: LedComponent | null = null;
   /** Drive Input wired to labLed (Gates path); Soft uses forceOn. */
   private labLedDrive: InputComponent | null = null;
+  /** Soft Lab REG4/REG8 bound to PORT_LAB_REG. */
+  private labReg: ChipInstanceComponent | null = null;
+  /** Soft Lab COUNTER4 bound to PORT_LAB_COUNTER. */
+  private labCounter: ChipInstanceComponent | null = null;
+  private library: ChipLibrary | null = null;
 
-  /** True when a lab LED is bound (Soft Run should redraw canvas on OUT). */
+  /** True when a lab LED or Soft Lab chip is bound (Soft Run may need canvas redraw). */
   get hasLabLed(): boolean {
-    return this.labLed !== null;
+    return this.labLed !== null || this.labReg !== null || this.labCounter !== null;
   }
 
   /**
    * Bind a canvas LED (+ optional Input) to SoftDevices.labLed / PORT_LAB_LED.
-   * Soft Run sets `led.forceOn`; Gates also drives `drive` when provided.
+   * Soft Run sets `led.forceOn` and `drive.value` so soft-canvas resolve
+   * paints the wire; Gates uses the Input through the transistor step.
    */
   bindLabLed(led: LedComponent, drive?: InputComponent | null): void {
     if (this.labLed && this.labLed !== led) this.labLed.forceOn = false;
     this.labLed = led;
     this.labLedDrive = drive ?? null;
-    this.syncLabLed();
+    this.syncLabPeripherals();
   }
 
   unbindLabLed(): void {
@@ -190,7 +197,46 @@ export class MachineRunner {
     this.labLedDrive = null;
   }
 
-  /** Mirror SoftDevices.labLed → LED forceOn (+ Input). Returns true if visible state changed. */
+  bindLabReg(chip: ChipInstanceComponent): void {
+    this.labReg = chip;
+    this.syncLabPeripherals();
+  }
+
+  bindLabCounter(chip: ChipInstanceComponent): void {
+    this.labCounter = chip;
+    this.syncLabPeripherals();
+  }
+
+  /**
+   * Bind the first top-level REG4/REG8 and COUNTER4 Soft Lab chips on the
+   * circuit (if any) to ports 0x41 / 0x42.
+   */
+  autoBindLabPeripherals(circuit: Circuit, library: ChipLibrary): void {
+    this.library = library;
+    for (const c of circuit.components.values()) {
+      if (c.kind !== 'chip' || !c.defId || !library.has(c.defId)) continue;
+      const key = softLabModelKey(library.get(c.defId).name);
+      if ((key === 'REG4' || key === 'REG8') && !this.labReg) this.labReg = c;
+      else if (key === 'COUNTER4' && !this.labCounter) this.labCounter = c;
+    }
+    this.syncLabPeripherals();
+  }
+
+  unbindLabPeripherals(): void {
+    this.unbindLabLed();
+    this.labReg = null;
+    this.labCounter = null;
+  }
+
+  /** Mirror SoftDevices → LED forceOn / Soft Lab softState.q. */
+  syncLabPeripherals(): boolean {
+    let changed = this.syncLabLed();
+    if (this.syncSoftLabQ(this.labReg, this.devices.labReg, ['REG4', 'REG8'])) changed = true;
+    if (this.syncSoftLabQ(this.labCounter, this.devices.labCounter & 0x0f, ['COUNTER4'])) changed = true;
+    return changed;
+  }
+
+  /** @deprecated use syncLabPeripherals */
   syncLabLed(): boolean {
     if (!this.labLed) return false;
     const on = (this.devices.labLed & 1) === 1;
@@ -202,6 +248,26 @@ export class MachineRunner {
     if (this.labLedDrive && this.labLedDrive.value !== (on ? 1 : 0)) {
       this.labLedDrive.value = on ? 1 : 0;
       changed = true;
+    }
+    return changed;
+  }
+
+  private syncSoftLabQ(
+    chip: ChipInstanceComponent | null,
+    value: number,
+    models: string[],
+  ): boolean {
+    if (!chip || !this.library || !chip.defId || !this.library.has(chip.defId)) return false;
+    const key = softLabModelKey(this.library.get(chip.defId).name);
+    if (!key || !models.includes(key)) return false;
+    const st = ensureSoftState(chip, key);
+    let changed = false;
+    for (let i = 0; i < st.q.length; i++) {
+      const b = ((value >> i) & 1) as 0 | 1;
+      if (st.q[i] !== b) {
+        st.q[i] = b;
+        changed = true;
+      }
     }
     return changed;
   }
@@ -635,13 +701,14 @@ export class MachineRunner {
    */
   attach(
     circuit: Circuit,
-    _library: ChipLibrary,
+    library: ChipLibrary,
     cpu: Z80Cpu,
     tick: TickFn,
     opts?: { readPin?: (pin: Pin) => 0 | 1 | 'Z' },
   ): void {
     this.detach();
     this.circuit = circuit;
+    this.library = library;
     this.cpu = cpu;
     this.ram = cpu.ram;
     this.tick = tick;
@@ -716,7 +783,7 @@ export class MachineRunner {
     this.running = false;
     this.booted = false;
     this.soft = null;
-    this.unbindLabLed();
+    this.unbindLabPeripherals();
     this.devices = createSoftDevices();
     this.spectrum = null;
     this.spectrumMmu = null;
@@ -736,6 +803,7 @@ export class MachineRunner {
     this.ram = null;
     this.tick = null;
     this.readPin = null;
+    this.library = null;
   }
 
   /** Gate-level boot (FSM seed, reset, first fetch) + soft CPU reset. */
@@ -871,7 +939,7 @@ export class MachineRunner {
         if (this.spectrum) this.spectrum.pulseFrameIrq();
         softStep(this.soft, this.ram.bytes, this.softHooks());
         this.softDesynced = true;
-        this.syncLabLed();
+        this.syncLabPeripherals();
         if (this.soft.halted && !this.spectrum) this.running = false;
       } catch (e) {
         this.running = false;
@@ -936,7 +1004,7 @@ export class MachineRunner {
         }
         softRun(this.soft, this.ram.bytes, this.phasesPerFrame, this.softHooks(), this.breakpointPc);
         this.softDesynced = true;
-        this.syncLabLed();
+        this.syncLabPeripherals();
         if (
           this.breakpointPc != null &&
           this.soft &&

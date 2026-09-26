@@ -42,19 +42,75 @@ import { buildRegisterBit } from './sequential.js';
 import { compactCircuitLayout, replaceLongWiresWithLabels, tiePinToNet, tidyLibraryCircuit } from './labelWires.js';
 import type { Pin, Point, RamComponent } from './types.js';
 
-/** Fold buildRegisterBit() into a reusable 1-bit register chip. Ports, in order: d, we, clk, q, qn. */
+/** Fold a 1-bit register as MUX2 + D_FF chips (dive shows gates, not FET soup). */
 function makeRegisterBitChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
   makeSource(scratch, 1); // rail driver
   makeSource(scratch, 0);
-  const bit = buildRegisterBit(scratch);
-  return foldExposing(scratch, 'REG_BIT', library, [
-    { pin: bit.d, isOutput: false, portName: 'd' },
-    { pin: bit.we, isOutput: false, portName: 'we' },
-    { pin: bit.clk, isOutput: false, portName: 'clk' },
-    { pin: bit.q, isOutput: true, portName: 'q' },
-    { pin: bit.qn, isOutput: true, portName: 'qn' },
-  ]);
+  const muxDef = getMux2Chip(library);
+  const dffDef = library.findByName('D_FF');
+
+  if (dffDef) {
+    const mux = makeChipInstance(scratch, muxDef, { x: 0, y: 0 });
+    const dff = makeChipInstance(scratch, dffDef, { x: 200, y: 0 });
+    const muxSel = mux.pins[muxDef.ports[0]!]!;
+    const muxIn0 = mux.pins[muxDef.ports[1]!]!;
+    const muxIn1 = mux.pins[muxDef.ports[2]!]!;
+    const muxOut = mux.pins[muxDef.ports[3]!]!;
+    const dffD = dff.pins[dffDef.ports[0]!]!;
+    const dffClk = dff.pins[dffDef.ports[1]!]!;
+    const dffQ = dff.pins[dffDef.ports[2]!]!;
+    const dffQn = dff.pins[dffDef.ports[3]!]!;
+    wire(scratch, muxOut, dffD);
+    wire(scratch, dffQ, muxIn0); // WE=0: hold
+    return foldExposing(scratch, 'REG_BIT', library, [
+      { pin: muxIn1, isOutput: false, portName: 'd' },
+      { pin: muxSel, isOutput: false, portName: 'we' },
+      { pin: dffClk, isOutput: false, portName: 'clk' },
+      { pin: dffQ, isOutput: true, portName: 'q' },
+      { pin: dffQn, isOutput: true, portName: 'qn' },
+    ], { labelize: false });
+  }
+
+  // Standalone library without seedStandardCells — place via gate placer.
+  const not = library.findByName('NOT') ?? makeNotChip(library);
+  const nand = getNamedGateChip(library, nandChipDefs, 'NAND', (lib) =>
+    makeTwoInputGateChip(lib, 'NAND', buildNand),
+  );
+  const and = getNamedGateChip(library, andChipDefs, 'AND', (lib) =>
+    makeTwoInputGateChip(lib, 'AND', buildAnd),
+  );
+  const nor = getNamedGateChip(library, norChipDefs, 'NOR', (lib) =>
+    makeTwoInputGateChip(lib, 'NOR', buildNor),
+  );
+  const or = getNamedGateChip(library, orChipDefs, 'OR', (lib) =>
+    makeTwoInputGateChip(lib, 'OR', buildOr),
+  );
+  const dLatch = library.findByName('D_LATCH');
+  setCircuitGatePlacer(
+    scratch,
+    makeChipGatePlacer({
+      not,
+      nand,
+      and,
+      nor,
+      or,
+      mux2: muxDef,
+      ...(dLatch ? { dLatch } : {}),
+    }),
+  );
+  try {
+    const bit = buildRegisterBit(scratch);
+    return foldExposing(scratch, 'REG_BIT', library, [
+      { pin: bit.d, isOutput: false, portName: 'd' },
+      { pin: bit.we, isOutput: false, portName: 'we' },
+      { pin: bit.clk, isOutput: false, portName: 'clk' },
+      { pin: bit.q, isOutput: true, portName: 'q' },
+      { pin: bit.qn, isOutput: true, portName: 'qn' },
+    ], { labelize: false });
+  } finally {
+    setCircuitGatePlacer(scratch, null);
+  }
 }
 
 // One REG_BIT def per ChipLibrary, however many registers get built against
@@ -157,21 +213,90 @@ export function buildAluSlice(circuit: Circuit, pos: Point = { x: 0, y: 0 }): Al
   return { a: adder.a, b: adder.b, cin: adder.cin, op0: mux.sel0, op1: mux.sel1, out: mux.out, cout: adder.cout };
 }
 
-/** Fold buildAluSlice() into a reusable 1-bit ALU chip. Ports, in order: a, b, cin, op0, op1, out, cout. */
+/** Fold ALU slice as FULL_ADDER + AND/OR/XOR + MUX4 chips (not flat FETs). */
 function makeAluSliceChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
   makeSource(scratch, 1); // rail driver
   makeSource(scratch, 0);
-  const slice = buildAluSlice(scratch);
-  return foldExposing(scratch, 'ALU_SLICE', library, [
-    { pin: slice.a, isOutput: false, portName: 'a' },
-    { pin: slice.b, isOutput: false, portName: 'b' },
-    { pin: slice.cin, isOutput: false, portName: 'cin' },
-    { pin: slice.op0, isOutput: false, portName: 'op0' },
-    { pin: slice.op1, isOutput: false, portName: 'op1' },
-    { pin: slice.out, isOutput: true, portName: 'out' },
-    { pin: slice.cout, isOutput: true, portName: 'cout' },
-  ]);
+
+  const faDef = library.findByName('FULL_ADDER');
+  const andDef = getNamedGateChip(library, andChipDefs, 'AND', (lib) =>
+    makeTwoInputGateChip(lib, 'AND', buildAnd),
+  );
+  const orDef = getNamedGateChip(library, orChipDefs, 'OR', (lib) =>
+    makeTwoInputGateChip(lib, 'OR', buildOr),
+  );
+  const xorDef = getNamedGateChip(library, xorChipDefs, 'XOR', (lib) =>
+    makeTwoInputGateChip(lib, 'XOR', buildXor),
+  );
+  const mux4Def = library.findByName('MUX4');
+
+  if (faDef && mux4Def) {
+    const fa = makeChipInstance(scratch, faDef, { x: 0, y: 0 });
+    const andG = placeTwoInputChip(scratch, andDef, { x: 0, y: 200 });
+    const orG = placeTwoInputChip(scratch, orDef, { x: 0, y: 320 });
+    const xorG = placeTwoInputChip(scratch, xorDef, { x: 0, y: 440 });
+    const mux = makeChipInstance(scratch, mux4Def, { x: 280, y: 160 });
+    const faA = fa.pins[faDef.ports[0]!]!;
+    const faB = fa.pins[faDef.ports[1]!]!;
+    const faCin = fa.pins[faDef.ports[2]!]!;
+    const faSum = fa.pins[faDef.ports[3]!]!;
+    const faCout = fa.pins[faDef.ports[4]!]!;
+    const sel0 = mux.pins[mux4Def.ports[0]!]!;
+    const sel1 = mux.pins[mux4Def.ports[1]!]!;
+    const in0 = mux.pins[mux4Def.ports[2]!]!;
+    const in1 = mux.pins[mux4Def.ports[3]!]!;
+    const in2 = mux.pins[mux4Def.ports[4]!]!;
+    const in3 = mux.pins[mux4Def.ports[5]!]!;
+    const muxOut = mux.pins[mux4Def.ports[6]!]!;
+    wire(scratch, faA, andG.a);
+    wire(scratch, faA, orG.a);
+    wire(scratch, faA, xorG.a);
+    wire(scratch, faB, andG.b);
+    wire(scratch, faB, orG.b);
+    wire(scratch, faB, xorG.b);
+    wire(scratch, faSum, in0);
+    wire(scratch, andG.out, in1);
+    wire(scratch, orG.out, in2);
+    wire(scratch, xorG.out, in3);
+    return foldExposing(scratch, 'ALU_SLICE', library, [
+      { pin: faA, isOutput: false, portName: 'a' },
+      { pin: faB, isOutput: false, portName: 'b' },
+      { pin: faCin, isOutput: false, portName: 'cin' },
+      { pin: sel0, isOutput: false, portName: 'op0' },
+      { pin: sel1, isOutput: false, portName: 'op1' },
+      { pin: muxOut, isOutput: true, portName: 'out' },
+      { pin: faCout, isOutput: true, portName: 'cout' },
+    ], { labelize: false });
+  }
+
+  // Fallback without FULL_ADDER/MUX4 stdcells — gate-place the builders.
+  const not = library.findByName('NOT') ?? makeNotChip(library);
+  const nand = getNamedGateChip(library, nandChipDefs, 'NAND', (lib) =>
+    makeTwoInputGateChip(lib, 'NAND', buildNand),
+  );
+  const nor = getNamedGateChip(library, norChipDefs, 'NOR', (lib) =>
+    makeTwoInputGateChip(lib, 'NOR', buildNor),
+  );
+  const mux2 = getMux2Chip(library);
+  setCircuitGatePlacer(
+    scratch,
+    makeChipGatePlacer({ not, nand, and: andDef, nor, or: orDef, xor: xorDef, mux2 }),
+  );
+  try {
+    const slice = buildAluSlice(scratch);
+    return foldExposing(scratch, 'ALU_SLICE', library, [
+      { pin: slice.a, isOutput: false, portName: 'a' },
+      { pin: slice.b, isOutput: false, portName: 'b' },
+      { pin: slice.cin, isOutput: false, portName: 'cin' },
+      { pin: slice.op0, isOutput: false, portName: 'op0' },
+      { pin: slice.op1, isOutput: false, portName: 'op1' },
+      { pin: slice.out, isOutput: true, portName: 'out' },
+      { pin: slice.cout, isOutput: true, portName: 'cout' },
+    ], { labelize: false });
+  } finally {
+    setCircuitGatePlacer(scratch, null);
+  }
 }
 
 // One ALU_SLICE def per ChipLibrary — see the identical reasoning on
@@ -180,7 +305,7 @@ const aluSliceDefs = new WeakMap<ChipLibrary, ChipDef>();
 function getAluSliceChip(library: ChipLibrary): ChipDef {
   let def = aluSliceDefs.get(library);
   if (!def) {
-    def = makeAluSliceChip(library);
+    def = library.findByName('ALU_SLICE') ?? makeAluSliceChip(library);
     aluSliceDefs.set(library, def);
   }
   return def;
@@ -507,8 +632,11 @@ function makeRamAddrBitChip(library: ChipLibrary): ChipDef {
   const outBlockReadMux = placeMux(2600, 0);
   wire(scratch, inBlockWriteMux.out, outBlockReadMux.in0);
 
-  // RRD/RLD sel OR — inside the chip so topology matches the former local OR.
-  const rrdRldAddrNow = buildOr(scratch, { x: 2700, y: -40 });
+  // RRD/RLD sel OR — OR chip (not bare FETs) so dive stays hierarchical.
+  const orDef = getNamedGateChip(library, orChipDefs, 'OR', (lib) =>
+    makeTwoInputGateChip(lib, 'OR', buildOr),
+  );
+  const rrdRldAddrNow = placeTwoInputChip(scratch, orDef, { x: 2700, y: -40 });
   const rrdRldAddrMux = placeMux(2800, 0);
   wire(scratch, rrdRldAddrNow.out, rrdRldAddrMux.sel);
   wire(scratch, outBlockReadMux.out, rrdRldAddrMux.in0);
@@ -2507,7 +2635,8 @@ function buildZ80CpuInner(
   const im2Serving = buildRegister(parent, library, 1, { x: pos.x + 2400, y: pos.y + 4400 });
   // INTACK window: latched on any maskable accept; PHASE0 = ack sample,
   // PHASE1 = wait hold (PC already suppressed via irqServing). Soft burns
-  // ~2 wait units for the same window. No IORQ FET pins; ring stays at 10.
+  // ~2 wait units for the same window. IORQ_* labels are probes only —
+  // ring stays at 10 (not a full FET IORQ+M1 cycle).
   const intAckServing = buildRegister(parent, library, 1, { x: pos.x + 2100, y: pos.y + 4360 });
   // Rising-edge NMI: `nmiPrev` samples the pin every PHASE0; accept when
   // pin high and prev low (soft is an explicit pulse — same one-shot feel).
@@ -2696,6 +2825,12 @@ function buildZ80CpuInner(
   wire(parent, intAckServing.q[0]!, intAckWait.a);
   tieToLabel('PHASE1', intAckWait.b, { x: pos.x + 2400, y: pos.y + 4460 });
   tieToLabel('INTACK_WAIT', intAckWait.out, { x: pos.x + 2600, y: pos.y + 4460 }); // PHASE1 wait hold
+  // Probe: IORQ asserted during INTACK ack+wait (classic Z80 also asserts
+  // IORQ+M1 here — we only expose the window as a label).
+  const iorqIntAck = buildOr(parent, { x: pos.x + 2650, y: pos.y + 4480 });
+  wire(parent, intAcceptNow.out, iorqIntAck.a);
+  wire(parent, intAckWait.out, iorqIntAck.b);
+  tieToLabel('IORQ_INTACK', iorqIntAck.out, { x: pos.x + 2750, y: pos.y + 4480 });
   const irqServingIntNmi = buildOr(parent, { x: pos.x + 2300, y: pos.y + 4440 });
   wire(parent, intServing.q[0]!, irqServingIntNmi.a);
   wire(parent, nmiServing.q[0]!, irqServingIntNmi.b);
@@ -9365,45 +9500,34 @@ function buildZ80CpuInner(
     const popWeRaw = buildAnd(parent, { x: pos.x + 11000, y: pos.y - 450 + ri * 300 });
     wire(parent, popPhase.out, popWeRaw.a);
     wire(parent, popY, popWeRaw.b);
-    const ldWeStage = buildOr(parent, { x: pos.x + 11050, y: pos.y - 465 + ri * 300 });
-    wire(parent, ldWeRaw.out, ldWeStage.a);
-    wire(parent, popWeRaw.out, ldWeStage.b);
-    const ldWeStage2 = buildOr(parent, { x: pos.x + 11080, y: pos.y - 470 + ri * 300 });
-    wire(parent, ldWeStage.out, ldWeStage2.a);
-    tieToLabel(ldImm8Label, ldWeStage2.b, { x: pos.x + 10950, y: pos.y - 470 + ri * 300 });
-    const ldWeStage3 = buildOr(parent, { x: pos.x + 11100, y: pos.y - 475 + ri * 300 });
-    wire(parent, ldWeStage2.out, ldWeStage3.a);
-    tieToLabel(ldDdNnLabel, ldWeStage3.b, { x: pos.x + 11000, y: pos.y - 475 + ri * 300 });
-    const ldWeStage4 = buildOr(parent, { x: pos.x + 11120, y: pos.y - 480 + ri * 300 });
-    wire(parent, ldWeStage3.out, ldWeStage4.a);
-    tieToLabel(edNnWeLabel, ldWeStage4.b, { x: pos.x + 11020, y: pos.y - 480 + ri * 300 });
-    const ldWeStage5 = buildOr(parent, { x: pos.x + 11140, y: pos.y - 485 + ri * 300 });
-    wire(parent, ldWeStage4.out, ldWeStage5.a);
-    tieToLabel(inRcWeLabel, ldWeStage5.b, { x: pos.x + 11040, y: pos.y - 485 + ri * 300 });
-    const ldWeStage6 = buildOr(parent, { x: pos.x + 11160, y: pos.y - 490 + ri * 300 });
-    wire(parent, ldWeStage5.out, ldWeStage6.a);
-    tieToLabel(setResWeLabel, ldWeStage6.b, { x: pos.x + 11060, y: pos.y - 490 + ri * 300 });
-    const ldWeStage7 = buildOr(parent, { x: pos.x + 11180, y: pos.y - 495 + ri * 300 });
-    wire(parent, ldWeStage6.out, ldWeStage7.a);
-    tieToLabel(cbRotWeLabel, ldWeStage7.b, { x: pos.x + 11080, y: pos.y - 495 + ri * 300 });
-    // DD/FD LD r,(IX+d)/(IY+d) — ninth/tenth sources (ldGroupNow dead under prefix).
+    // DD/FD LD r,(IX+d)/(IY+d) — side-fold before the OR-N (same as before).
     const ddFdMemLdWe = buildOr(parent, { x: pos.x + 11190, y: pos.y - 498 + ri * 300 });
     tieToLabel(ddMemLdWeLabel, ddFdMemLdWe.a, { x: pos.x + 11090, y: pos.y - 498 + ri * 300 });
     tieToLabel(fdMemLdWeLabel, ddFdMemLdWe.b, { x: pos.x + 11090, y: pos.y - 478 + ri * 300 });
-    const ldWeStage8 = buildOr(parent, { x: pos.x + 11200, y: pos.y - 500 + ri * 300 });
-    wire(parent, ldWeStage7.out, ldWeStage8.a);
-    wire(parent, ddFdMemLdWe.out, ldWeStage8.b);
-    // DD/FD HL8 LD into B/C/D/E only — H/L remapped to IXH/IXL (never here).
-    let ldWe: Pin = ldWeStage8.out;
-    if (ddHl8WeLabel && fdHl8WeLabel) {
+    // B/C/D/E: 10 WE sources; H/L: 9 (no HL8 remap).
+    const withHl8 = !!(ddHl8WeLabel && fdHl8WeLabel);
+    let ddFdHl8LdWeOut: Pin | null = null;
+    if (withHl8) {
       const ddFdHl8LdWe = buildOr(parent, { x: pos.x + 11210, y: pos.y - 502 + ri * 300 });
-      tieToLabel(ddHl8WeLabel, ddFdHl8LdWe.a, { x: pos.x + 11110, y: pos.y - 502 + ri * 300 });
-      tieToLabel(fdHl8WeLabel, ddFdHl8LdWe.b, { x: pos.x + 11110, y: pos.y - 482 + ri * 300 });
-      const ldWeStage9 = buildOr(parent, { x: pos.x + 11220, y: pos.y - 504 + ri * 300 });
-      wire(parent, ldWeStage8.out, ldWeStage9.a);
-      wire(parent, ddFdHl8LdWe.out, ldWeStage9.b);
-      ldWe = ldWeStage9.out;
+      tieToLabel(ddHl8WeLabel!, ddFdHl8LdWe.a, { x: pos.x + 11110, y: pos.y - 502 + ri * 300 });
+      tieToLabel(fdHl8WeLabel!, ddFdHl8LdWe.b, { x: pos.x + 11110, y: pos.y - 482 + ri * 300 });
+      ddFdHl8LdWeOut = ddFdHl8LdWe.out;
     }
+    const weN = withHl8 ? 10 : 9;
+    const ldWeOrDef = getOrNChip(library, weN, withHl8 ? 'LD_WE_OR_10' : 'LD_WE_OR_9');
+    const ldWeOr = makeChipInstance(parent, ldWeOrDef, { x: pos.x + 11150, y: pos.y - 480 + ri * 300 });
+    const ldWeIn = (idx: number) => ldWeOr.pins[ldWeOrDef.ports[idx]!]!;
+    wire(parent, ldWeRaw.out, ldWeIn(0));
+    wire(parent, popWeRaw.out, ldWeIn(1));
+    tieToLabel(ldImm8Label, ldWeIn(2), { x: pos.x + 10950, y: pos.y - 470 + ri * 300 });
+    tieToLabel(ldDdNnLabel, ldWeIn(3), { x: pos.x + 11000, y: pos.y - 475 + ri * 300 });
+    tieToLabel(edNnWeLabel, ldWeIn(4), { x: pos.x + 11020, y: pos.y - 480 + ri * 300 });
+    tieToLabel(inRcWeLabel, ldWeIn(5), { x: pos.x + 11040, y: pos.y - 485 + ri * 300 });
+    tieToLabel(setResWeLabel, ldWeIn(6), { x: pos.x + 11060, y: pos.y - 490 + ri * 300 });
+    tieToLabel(cbRotWeLabel, ldWeIn(7), { x: pos.x + 11080, y: pos.y - 495 + ri * 300 });
+    wire(parent, ddFdMemLdWe.out, ldWeIn(8));
+    if (ddFdHl8LdWeOut) wire(parent, ddFdHl8LdWeOut, ldWeIn(9));
+    const ldWe: Pin = ldWeOr.pins[ldWeOrDef.ports[weN]!]!;
 
     const extD: Pin[] = [];
     for (let i = 0; i < 8; i++) {
@@ -11369,6 +11493,15 @@ function buildZ80CpuInner(
   const ioWriteFinal2 = buildOr(parent, { x: pos.x + 13550, y: pos.y - 2100 });
   wire(parent, ioWriteFinal.out, ioWriteFinal2.a);
   tieToLabel('OUTRC_NOW', ioWriteFinal2.b, { x: pos.x + 13450, y: pos.y - 2100 });
+
+  // Unified IORQ probe: INTACK window ∪ instruction IN/OUT strobes.
+  const iorqIo = buildOr(parent, { x: pos.x + 13600, y: pos.y - 2150 });
+  wire(parent, ioReadFinal2.out, iorqIo.a);
+  wire(parent, ioWriteFinal2.out, iorqIo.b);
+  const iorqAny = buildOr(parent, { x: pos.x + 13650, y: pos.y - 2150 });
+  tieToLabel('IORQ_INTACK', iorqAny.a, { x: pos.x + 13550, y: pos.y - 2150 });
+  wire(parent, iorqIo.out, iorqAny.b);
+  tieToLabel('IORQ', iorqAny.out, { x: pos.x + 13750, y: pos.y - 2150 });
 
   // Kill remaining long-distance point-to-point wires (gate→gate, leftover
   // single-anchor label stubs, etc.). Stdcell ChipDefs (NOT/NAND/…) keep

@@ -188,12 +188,9 @@ export function draw(
   ctx.scale(camera.scale, camera.scale);
   ctx.translate(-camera.x, -camera.y);
 
-  // Soft Run: mute live wire/pin colors so a quiet schematic is not mistaken
-  // for a stuck gate sim — levels are often Z while the soft CPU runs in RAM.
-  if (opts?.softMode) {
-    ctx.globalAlpha = 0.55;
-  }
-
+  // Soft Run badge only — do not mute wire/pin colors. Soft canvas resolve
+  // already paints Input/Source/LED-forceOn nets; muting made a driven LAB_LED
+  // look like Z next to bright seed Inputs.
   drawGrid(ctx, camera, viewportW, viewportH);
 
   // A fixed screen-space margin (in world units, i.e. divided by scale)

@@ -5,7 +5,7 @@ import { foldZ80CpuLeavingRam, newComponentIdSet, packFoldedMachine } from './si
 import { replaceLongWiresWithLabels } from './sim/labelWires.js';
 import { circuitHasPulseGen, circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
 import { flatten, fold, foldPortWarnings, forkChipInstance, unfold } from './sim/hierarchy.js';
-import { buildNot, makeButton, makeBusProbe, makeInput, makeLed, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
+import { buildNot, makeButton, makeBusProbe, makeInput, makeLabel, makeLed, makeChipInstance, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
 import { EXAMPLE_PROJECTS } from './examples/catalog.js';
 import {
   deserializeProject,
@@ -69,6 +69,7 @@ import { ObjectInspector } from './ui/ObjectInspector.js';
 import { WatchList, consecutiveBusPins, type WatchBusGroup } from './ui/WatchList.js';
 import { IoMapViewer } from './ui/IoMapViewer.js';
 import { draw } from './ui/Renderer.js';
+import { makeSoftCanvasResolve } from './ui/softCanvasResolve.js';
 import { isOrientable, orientSelection } from './sim/orientation.js';
 import {
   showContextMenu,
@@ -1131,7 +1132,7 @@ async function renameSelectedNet(): Promise<void> {
   uiDirty = true;
   if (result.merged) {
     /* soft notice via status */
-    statusEl.textContent = `Net merged into "${name.trim()}"`;
+    setStatusLine(`Net merged into "${name.trim()}"`);
   }
 }
 
@@ -1486,10 +1487,6 @@ function placeLedBlinkMachine(): void {
   const cpu = buildZ80Cpu(editor.circuit, library, MACHINE_ADDR_BITS, LED_BLINK_ROM_BYTES, pos);
   const placedIds = newComponentIdSet(editor.circuit, beforeIds);
 
-  const ledDrive = makeInput(editor.circuit, 0, { x: pos.x + 160, y: pos.y - 40 });
-  const led = makeLed(editor.circuit, { x: pos.x + 220, y: pos.y - 40 }, 'LAB_LED');
-  wire(editor.circuit, ledDrive.pins.out, led.pins.in);
-
   const simTick = () => {
     const flat = flatten(topCircuit, library);
     const flatNetMap = flat.computeNets();
@@ -1506,7 +1503,28 @@ function placeLedBlinkMachine(): void {
       return simState.levelOf.get(net) ?? 'Z';
     },
   });
+
+  // Fold/pack first so the lab LED Input is not sucked into the seed grid
+  // as another RUN_* toggle — Soft OUT never drives a Z80CPU pin on canvas.
+  foldZ80CpuLeavingRam(editor.circuit, library, placedIds, pos);
+  packFoldedMachine(editor.circuit, pos);
+  replaceLongWiresWithLabels(editor.circuit, 24);
+
+  const ledX = pos.x + CHIP_INSTANCE_WIDTH / 2 + 200;
+  const ledY = pos.y - 40;
+  const ledDrive = makeInput(editor.circuit, 0, { x: ledX, y: ledY });
+  const led = makeLed(editor.circuit, { x: ledX + 60, y: ledY }, 'LAB_LED');
+  wire(editor.circuit, ledDrive.pins.out, led.pins.in);
+  // Named net (not auto `_N0`) — SoftDevices → this Input → LED.
+  const ledNet = makeLabel(editor.circuit, 'LAB_LED', { x: ledX + 30, y: ledY - 16 });
+  wire(editor.circuit, led.pins.in, ledNet.pins.net);
+
   machineRunner.bindLabLed(led, ledDrive);
+  const regDef = library.list().find((d) => d.name === 'REG8');
+  const ctrDef = library.list().find((d) => d.name === 'COUNTER4');
+  if (regDef) makeChipInstance(editor.circuit, regDef, { x: ledX + 120, y: ledY + 20 });
+  if (ctrDef) makeChipInstance(editor.circuit, ctrDef, { x: ledX + 260, y: ledY + 20 });
+  machineRunner.autoBindLabPeripherals(editor.circuit, library);
   machineRunner.boot();
   machineRunner.setSpeed('soft');
   machineRunner.setRunning(true);
@@ -1514,9 +1532,6 @@ function placeLedBlinkMachine(): void {
   machinePanel.refreshControls();
   machinePanel.draw();
 
-  foldZ80CpuLeavingRam(editor.circuit, library, placedIds, pos);
-  packFoldedMachine(editor.circuit, pos);
-  replaceLongWiresWithLabels(editor.circuit, 24);
   camera.fit(circuitBounds(editor.circuit), vw(), vh());
   refreshChipPalette();
   uiDirty = true;
@@ -2838,6 +2853,13 @@ window.addEventListener('keyup', (ev) => {
 
 // --- Simulation + render loop -------------------------------------------
 const statusEl = document.getElementById('status') as HTMLDivElement;
+
+/** Status bar truncates with ellipsis — keep full text in title for hover. */
+function setStatusLine(text: string): void {
+  statusEl.textContent = text;
+  statusEl.title = text;
+}
+
 let lastContendedNets = new Set<string>();
 /** Contended set from the previous sim frame — used for "break on contend". */
 let prevBreakContended = new Set<string>();
@@ -3157,6 +3179,14 @@ function frame(): void {
   if (machineRunner.running) {
     machineWorked = machineRunner.tickBudget();
   }
+  if (memoryEditor.attached && machineRunner.isSoft) {
+    const soft = machineRunner.softCpu;
+    if (soft && memoryEditor.setLivePc(soft.pc & 0xffff)) {
+      machineWorked = true;
+    }
+  } else if (memoryEditor.attached) {
+    memoryEditor.setLivePc(null);
+  }
 
   // No manual Lab Run — keep ticking while a pulse/button/analyzer actually
   // needs wall-clock frames; idle TRIG is sampled after step (fresh net levels).
@@ -3178,7 +3208,7 @@ function frame(): void {
         simStepOnce ||
         statusNoticeActive() ||
         porActive ||
-        (machineWorked && machineRunner.hasLabLed)
+        (machineWorked && (machineRunner.hasLabLed || memoryEditor.attached))
       : uiDirty ||
         labChanged ||
         (!simPaused && !simState.settled) ||
@@ -3198,7 +3228,8 @@ function frame(): void {
     // through flatten() — interactive TTY does not need pin levels. Dive-in
     // (navStack depth > 1) or any Gates path still flattens as before.
     const softTop = softRun && navStack.length === 1;
-    const softLabLedPaint = softRun && machineRunner.hasLabLed && machineWorked;
+    const softLabLedPaint =
+      softRun && machineWorked && (machineRunner.hasLabLed || memoryEditor.attached);
     if (!softRun || uiDirty || labActive || labChanged || simStepOnce || softLabLedPaint) {
       const view = navStack[navStack.length - 1]!;
       if (softTop && !simStepOnce) {
@@ -3211,10 +3242,9 @@ function frame(): void {
             simState.levelOf,
           );
         }
-        const resolve = (_localPinId: string): { level: Level; contended: boolean } => ({
-          level: 'Z',
-          contended: false,
-        });
+        // Input/Source/LED-forceOn levels only — no flatten. Keeps lab LED
+        // wires in sync with SoftDevices instead of painting every net as Z.
+        const resolve = makeSoftCanvasResolve(view.circuit);
         draw(ctx!, camera, vw(), vh(), view.circuit, resolve, editor, library, { softMode: true });
         tutorial.tick(view.circuit);
         drawSoftBitmapHud(ctx!, vw(), vh());
@@ -3223,9 +3253,10 @@ function frame(): void {
         zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
         lastContendedNets = new Set();
         statusEl.classList.remove('clickable');
-        statusEl.textContent =
+        setStatusLine(
           `${navStack.map((f) => f.label).join('/')} | soft (flatten deferred) | machine: soft${simPaused ? ' | sim paused' : ''}` +
-          statusNoticeSuffix();
+            statusNoticeSuffix(),
+        );
         updateWatchLevels(resolve);
         applyBreakChecks(resolve, lastContendedNets);
       } else {
@@ -3319,13 +3350,14 @@ function frame(): void {
                 : '';
         const lab = labActive ? ' | lab' : '';
         const paused = simPaused ? ' | sim paused' : '';
-        statusEl.textContent =
+        setStatusLine(
           `${navStack.map((f) => f.label).join('/')} | flat nets: ${flatNetMap.pinsOf.size} | ` +
-          `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}${contendedHint}` +
-          (mode ? ` | ${mode}` : '') +
-          lab +
-          paused +
-          statusNoticeSuffix();
+            `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}${contendedHint}` +
+            (mode ? ` | ${mode}` : '') +
+            lab +
+            paused +
+            statusNoticeSuffix(),
+        );
         updateWatchLevels(resolve);
       }
     }

@@ -20,6 +20,8 @@
  *     0x21  PORT_BMP_ADDR_HI  OUT bitmap byte-index high
  *     0x22  PORT_BMP_DATA     OUT/IN bitmap[addr]
  *     0x40  PORT_LAB_LED      OUT/IN bit0 → canvas LED (soft peripheral bridge)
+ *     0x41  PORT_LAB_REG      OUT/IN packed REG4/REG8 q
+ *     0x42  PORT_LAB_COUNTER  OUT/IN COUNTER4 q (bit4 on IN ≈ terminal count)
  *   Bitmap framebuffer: BMP_WIDTH×BMP_HEIGHT / 8 bytes on SoftDevices.bitmap
  */
 
@@ -122,6 +124,10 @@ export const PORT_BMP_DATA = 0x22;
 export const PORT_DISK_OP = 0x30;
 /** Soft lab LED: OUT/IN bit0 drives an attached canvas LED (see MachineRunner.bindLabLed). */
 export const PORT_LAB_LED = 0x40;
+/** Soft lab REG4/REG8: OUT/IN packed q bits (bindLabReg). */
+export const PORT_LAB_REG = 0x41;
+/** Soft lab COUNTER4: OUT/IN low 4 bits = q; IN bit4 = carry-out style (q===0xf). */
+export const PORT_LAB_COUNTER = 0x42;
 
 export function fbIndex(col: number, row: number, fbBase = FB_BASE): number {
   if (col < 0 || col >= FB_COLS || row < 0 || row >= FB_ROWS) {

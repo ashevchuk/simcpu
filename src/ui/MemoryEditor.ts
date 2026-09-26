@@ -5,7 +5,7 @@
  */
 
 import { assemble, bytesToHexPrompt } from '../machine/assembler.js';
-import { formatDisassembly } from '../machine/disassembler.js';
+import { disassemble, formatDisasmLine } from '../machine/disassembler.js';
 import type { MemoryComponent } from '../sim/types.js';
 import { FloatingWindow } from './FloatingWindow.js';
 
@@ -64,12 +64,15 @@ export class MemoryEditor {
   private readonly spacerEl: HTMLElement;
   private readonly rowsEl: HTMLElement;
   private readonly asmEl: HTMLTextAreaElement;
-  private readonly disasmEl: HTMLTextAreaElement;
+  private readonly disasmEl: HTMLElement;
+  private readonly followPcEl: HTMLInputElement;
   private onChange: (() => void) | null = null;
   /** Soft machine: JP @addr + reboot/run after Assemble+Go. */
   private onGo: ((addr: number) => void) | null = null;
 
   private cursor = 0;
+  /** Soft PC highlight (null = off). Independent of edit cursor unless Follow PC. */
+  private livePc: number | null = null;
   /** After typing the high nibble, wait for the low one before advancing. */
   private pendingHi: number | null = null;
   private renderPending = false;
@@ -101,8 +104,11 @@ export class MemoryEditor {
           <textarea name="asm" class="memory-asm" rows="6" spellcheck="false" placeholder="; Z80 asm — Assemble loads at @"></textarea>
         </div>
         <div class="memory-disasm-pane">
-          <div class="memory-asm-label">Disassembly from cursor</div>
-          <textarea name="disasm" class="memory-disasm" rows="6" readonly spellcheck="false"></textarea>
+          <div class="memory-asm-label">
+            Disassembly
+            <label class="memory-follow-pc" title="Scroll disasm with soft PC"><input type="checkbox" name="follow-pc" /> Follow PC</label>
+          </div>
+          <div class="memory-disasm" tabindex="0" role="list" aria-label="Disassembly"></div>
         </div>
       </div>
       <div class="memory-asm-actions">
@@ -116,7 +122,8 @@ export class MemoryEditor {
     this.statusEl = this.root.querySelector('.lab-panel-status')!;
     this.viewEl = this.root.querySelector('.hex-view')!;
     this.asmEl = this.root.querySelector('textarea[name="asm"]')!;
-    this.disasmEl = this.root.querySelector('textarea[name="disasm"]')!;
+    this.disasmEl = this.root.querySelector('.memory-disasm')!;
+    this.followPcEl = this.root.querySelector('input[name="follow-pc"]')!;
     this.spacerEl = document.createElement('div');
     this.spacerEl.className = 'hex-spacer';
     this.rowsEl = document.createElement('div');
@@ -161,6 +168,25 @@ export class MemoryEditor {
     this.onGo = fn;
   }
 
+  /**
+   * Soft PC for disasm highlight. When Follow PC is checked, also scrolls the
+   * hex cursor to PC. Returns true if the highlighted line changed.
+   */
+  setLivePc(pc: number | null): boolean {
+    const next = pc == null ? null : pc & 0xffff;
+    const prev = this.livePc;
+    this.livePc = next;
+    if (this.followPcEl.checked && next != null && this.mem) {
+      if (next !== this.cursor) this.setCursor(next, true);
+      else this.refreshDisasm();
+    } else if (next !== prev) {
+      this.refreshDisasm();
+    } else {
+      this.paintPcHighlight();
+    }
+    return next !== prev;
+  }
+
   get attached(): boolean {
     return this.mem !== null;
   }
@@ -177,9 +203,10 @@ export class MemoryEditor {
 
   detach(): void {
     this.mem = null;
+    this.livePc = null;
     this.rowsEl.replaceChildren();
     this.spacerEl.style.height = '0';
-    this.disasmEl.value = '';
+    this.disasmEl.replaceChildren();
     this.statusEl.textContent = 'Select a RAM/ROM (dblclick) to edit.';
     this.win.setVisible(false);
   }
@@ -229,10 +256,37 @@ export class MemoryEditor {
 
   private refreshDisasm(): void {
     if (!this.mem) {
-      this.disasmEl.value = '';
+      this.disasmEl.replaceChildren();
       return;
     }
-    this.disasmEl.value = formatDisassembly(this.mem.bytes, this.cursor, { count: DISASM_COUNT });
+    // Origin: soft PC when following, else edit cursor. Re-list when origin
+    // jumps outside the current window so Follow PC stays readable.
+    const origin =
+      this.followPcEl.checked && this.livePc != null ? this.livePc : this.cursor;
+    const lines = disassemble(this.mem.bytes, origin, { count: DISASM_COUNT });
+    this.disasmEl.replaceChildren();
+    for (const d of lines) {
+      const row = document.createElement('div');
+      row.className = 'memory-disasm-line';
+      row.dataset.addr = String(d.addr);
+      row.textContent = formatDisasmLine(d);
+      row.addEventListener('click', () => this.setCursor(d.addr, true));
+      this.disasmEl.appendChild(row);
+    }
+    this.paintPcHighlight();
+  }
+
+  private paintPcHighlight(): void {
+    const pc = this.livePc;
+    let matched: HTMLElement | null = null;
+    for (const el of this.disasmEl.querySelectorAll('.memory-disasm-line')) {
+      const row = el as HTMLElement;
+      const addr = Number(row.dataset.addr);
+      const on = pc != null && addr === pc;
+      row.classList.toggle('is-pc', on);
+      if (on) matched = row;
+    }
+    matched?.scrollIntoView({ block: 'nearest' });
   }
 
   private doAssemble(go: boolean): void {
@@ -244,7 +298,13 @@ export class MemoryEditor {
     const result = assemble(this.asmEl.value, addr);
     if (!result.ok) {
       this.statusEl.textContent = result.errors[0] ?? 'assemble failed';
-      this.disasmEl.value = result.errors.join('\n');
+      this.disasmEl.replaceChildren();
+      for (const err of result.errors) {
+        const row = document.createElement('div');
+        row.className = 'memory-disasm-line is-err';
+        row.textContent = err;
+        this.disasmEl.appendChild(row);
+      }
       return;
     }
     const n = applyBytes(this.mem, addr, [...result.bytes]);

@@ -1043,10 +1043,12 @@ the solver clears `KEY_STATUS` (0xF00) — same contract as soft
 
 **Lab LED peripheral (soft bridge MVP):** `PORT_LAB_LED` (`0x40`) bit0 on
 `SoftDevices.labLed`. `Insert → LED blink…` loads `ledBlinkRom.ts` (OUT
-loop), places a canvas LED, and `MachineRunner.bindLabLed` mirrors the
-port onto `LedComponent.forceOn` so Soft Run (which draws pin levels as Z)
-still shows the blink. Gates can also drive a wired Input. Not a FET IORQ
-bus yet — host port → Soft Lab indicator.
+loop), places a canvas LED (+ optional REG8/COUNTER4), and
+`MachineRunner.bindLabLed` / `autoBindLabPeripherals` mirrors ports onto
+`LedComponent.forceOn` and Soft Lab `softState.q` (`0x41` REG, `0x42`
+COUNTER). Soft Run (pin levels drawn as Z) still shows the blink. Gates can
+also drive a wired Input. `IORQ` / `IORQ_INTACK` are probe labels on the
+gate CPU (INTACK window ∪ IN/OUT strobes) — not a FET IORQ+M1 bus.
 
 Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
 pos?)`, etc.); power is always `tiePowerRail` (reuses the circuit's Source
@@ -1058,9 +1060,9 @@ hooks so CALL/RET/RST match the gate's single-byte return stack.
 ### Explicitly later
 
 Diminishing place returns: `PC_COMMIT_BIT` folded the deep PC-commit MUX
-cascade (same recipe as `RAM_ADDR_BIT`). Remaining hotspot is per-register
-LD-WE trees — higher risk, lower impact than the OR/MUX macros already
-folded.
+cascade (same recipe as `RAM_ADDR_BIT`). Per-register `LD_WE_OR_9` /
+`LD_WE_OR_10` now fold the B..L write-enable OR trees (data MUX cascade
+still unfolded).
 
 
 ## Decode and execute: a tiny working CPU

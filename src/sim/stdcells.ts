@@ -56,6 +56,24 @@ function cmosInputPortsGlued(def: ChipDef): boolean {
   return max - min < 48;
 }
 
+/** Mark every instance of `def` as up-to-date (clears false "edited" badges). */
+export function acknowledgeChipDefRevision(
+  library: ChipLibrary,
+  def: ChipDef,
+  extraCircuits: Circuit[] = [],
+): void {
+  const rev = def.revision ?? 0;
+  for (const circuit of [...extraCircuits, ...library.list().map((d) => d.circuit)]) {
+    for (const c of circuit.components.values()) {
+      if (c.kind === 'chip' && c.defId === def.id) c.defRevision = rev;
+    }
+  }
+}
+
+function portsEqual(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((name, i) => name === b[i]);
+}
+
 function refreshCmosDef(
   library: ChipLibrary,
   name: string,
@@ -76,9 +94,16 @@ function refreshCmosDef(
   }
   const tmp = new ChipLibrary();
   const fresh = foldExposing(circuit, name, tmp, ports, { labelize: false });
+  const samePorts = portsEqual(existing.ports, fresh.ports);
   existing.circuit = fresh.circuit;
   existing.ports = [...fresh.ports];
-  existing.revision = (existing.revision ?? 0) + 1;
+  // Guts-only refresh (pitch / routing): instances already share this def —
+  // do not bump revision or every nested AND/OR in MUX2 lights a false badge.
+  if (!samePorts) {
+    existing.revision = (existing.revision ?? 0) + 1;
+  } else {
+    acknowledgeChipDefRevision(library, existing);
+  }
   bumpStructureVersion();
 }
 

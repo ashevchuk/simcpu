@@ -409,10 +409,12 @@ const SECTIONS: Section[] = [
       '  1. Choose RAM address bits (16 = 64K for Spectrum/CP/M-class soft machines).\n' +
       '  2. Optional program bytes (comma hex). Default can seed the command ROM path.\n' +
       '  3. A Z80CPU chip + RAM appear; attach TTY / open machine panel.\n\n' +
-      'Insert → LED blink… places Z80 + ROM that OUT bit0 to port 0x40 (PORT_LAB_LED)\n' +
-      'and a canvas LED driven by the soft peripheral bridge (Soft speed).\n\n' +
-      'Dblclick machine RAM → Memory editor: write Z80 asm at @, Disasm from cursor,\n' +
-      'Assemble + Go (soft JP + reboot). Console asm box still works the same way.\n\n' +
+      'Insert → LED blink… places Z80 + ROM that OUT bit0 to port 0x40 (PORT_LAB_LED).\n' +
+      'Soft Run mirrors that bit onto a host Input + LAB_LED net (not a Z80CPU pin —\n' +
+      'flatten is deferred, so chip ports stay quiet while the LED blinks).\n\n' +
+      'Dblclick machine RAM → Memory editor: write Z80 asm at @, Disasm from cursor\n' +
+      '(Follow PC highlights the soft PC line), Assemble + Go (soft JP + reboot).\n' +
+      'Console asm box still works the same way.\n\n' +
       'Toolbar Speed: Soft (fast interpreter) vs Gates (transistor CPU — very slow).\n' +
       'Run / Pause / Step: Soft steps instructions; Gates steps solver ticks.\n\n' +
       'From the machine panel you can Boot BASIC / CP/M / stub, or boot Spectrum (see next).\n' +

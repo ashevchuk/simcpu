@@ -128,6 +128,34 @@ describe('Soft Lab / ChipDef port-name alignment', () => {
     ]);
   });
 
+  it('REG_BIT / ALU_SLICE dive to chips, not inline FETs, when stdcells are seeded', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const parent = new Circuit();
+    makeSource(parent, 1);
+    makeSource(parent, 0);
+    buildRegister(parent, library, 1);
+    buildAlu(parent, library, 1, { x: 2000, y: 0 });
+    const chipNames = (defName: string): string[] => {
+      const def = library.findByName(defName)!;
+      return [...def.circuit.components.values()]
+        .filter((c) => c.kind === 'chip')
+        .map((c) => library.get(c.defId).name);
+    };
+    for (const name of ['REG_BIT', 'ALU_SLICE'] as const) {
+      const def = library.findByName(name)!;
+      expect(
+        [...def.circuit.components.values()].some((c) => c.kind === 'transistor'),
+        name,
+      ).toBe(false);
+      expect(chipNames(name).length, name).toBeGreaterThan(0);
+    }
+    expect(chipNames('REG_BIT')).toEqual(expect.arrayContaining(['MUX2', 'D_FF']));
+    expect(chipNames('ALU_SLICE')).toEqual(
+      expect.arrayContaining(['FULL_ADDER', 'AND', 'OR', 'XOR', 'MUX4']),
+    );
+  });
+
   it('74157_1 Soft Lab mux works against seeded MUX2 port names', () => {
     const library = new ChipLibrary();
     seedStandardCells(library);

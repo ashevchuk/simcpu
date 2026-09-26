@@ -128,8 +128,9 @@ export interface LedComponent {
   label?: string;
   color: string; // CSS color for the "on" glow
   /**
-   * Host override (soft machine PORT_LAB_LED). Soft Run draws pin levels as Z;
-   * when set, the LED glows from this flag instead of the net.
+   * Host override (soft machine PORT_LAB_LED). Soft Run skips transistor
+   * step; when set, the LED glows from this flag and soft-canvas resolve
+   * paints the LED net (see makeSoftCanvasResolve).
    */
   forceOn?: boolean;
   pos: Point;

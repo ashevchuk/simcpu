@@ -35,11 +35,15 @@
       }
       #menubar {
         display: flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         gap: 0;
         align-items: center;
         padding: 0 8px 0 4px;
+        height: 32px;
         min-height: 32px;
+        max-height: 32px;
+        /* Must stay visible — .menu-panel dropdowns are absolute children. */
+        overflow: visible;
         background: #12141a;
         border-bottom: 1px solid var(--border);
       }
@@ -70,8 +74,9 @@
         display: flex;
         gap: 0;
         align-items: center;
-        flex: 1 1 auto;
+        flex: 1 1 6rem;
         min-width: 0;
+        max-width: 40vw;
         overflow: hidden;
         font: 12px ui-monospace, monospace;
         padding: 0 4px;
@@ -103,9 +108,9 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 42vw;
-        flex-shrink: 1;
+        flex: 0 1 22vw;
         min-width: 0;
+        max-width: 36vw;
       }
 
       button {
@@ -129,6 +134,7 @@
 
       .menu {
         position: relative;
+        flex-shrink: 0;
       }
       .menu > .menu-trigger {
         background: transparent;
@@ -553,7 +559,30 @@
         font: 11px/1.35 ui-monospace, 'SF Mono', monospace;
         padding: 6px 8px;
       }
-      .memory-disasm { color: #b8c0d4; }
+      .memory-disasm {
+        color: #b8c0d4;
+        overflow: auto;
+        white-space: pre;
+      }
+      .memory-disasm-line {
+        padding: 0 2px;
+        border-radius: 2px;
+        cursor: pointer;
+      }
+      .memory-disasm-line:hover { background: rgba(255, 255, 255, 0.04); }
+      .memory-disasm-line.is-pc {
+        background: rgba(245, 197, 24, 0.22);
+        color: #f5e6a8;
+      }
+      .memory-disasm-line.is-err { color: #f88; }
+      .memory-follow-pc {
+        float: right;
+        font-weight: normal;
+        color: var(--text-dim);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
       .memory-asm-actions {
         display: flex;
         flex-wrap: wrap;

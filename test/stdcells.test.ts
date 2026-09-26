@@ -45,6 +45,30 @@ describe('seedStandardCells — placed chip instances behave like the raw gates 
     const names = library.list().map((d) => d.name);
     expect(new Set(names).size).toBe(names.length);
   });
+
+  it('CMOS reseed does not leave false edited badges on nested MUX2 gates', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const andRev = getDef(library, 'AND').revision ?? 0;
+    const mux = getDef(library, 'MUX2');
+    const andId = getDef(library, 'AND').id;
+    const andInsts = [...mux.circuit.components.values()].filter(
+      (c) => c.kind === 'chip' && c.defId === andId,
+    );
+    expect(andInsts.length).toBe(2);
+    for (const c of andInsts) {
+      expect(c.defRevision ?? 0).toBe(andRev);
+    }
+    seedStandardCells(library);
+    seedStandardCells(library);
+    const andRev2 = getDef(library, 'AND').revision ?? 0;
+    // Ports unchanged → revision must not climb on every reseed.
+    expect(andRev2).toBe(andRev);
+    for (const c of andInsts) {
+      expect(c.defRevision ?? 0).toBe(andRev2);
+    }
+  });
+
   it('NOT', () => {
     const library = new ChipLibrary();
     seedStandardCells(library);
