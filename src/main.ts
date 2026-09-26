@@ -574,7 +574,7 @@ function enterLevel(): void {
   const pathDefNames = navStack
     .filter((f) => f.defId)
     .map((f) => library.get(f.defId!).name);
-  const newlyExpanded = syncSoftExpandForDivePath(pathDefNames);
+  const newlyExpanded = syncSoftExpandForDivePath(pathDefNames, library);
   if (newlyExpanded.length > 0) {
     armSoftLabToGatesPor(topCircuit, library, new Set(newlyExpanded));
   }

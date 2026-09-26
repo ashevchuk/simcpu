@@ -54,6 +54,25 @@ describe('syncSoftExpandForDivePath', () => {
     }
   });
 
+  it('dive into COUNTER4 also expands nested Soft Lab T_FF', () => {
+    const prev = isSoftLabEnabled();
+    clearSoftExpandForced();
+    try {
+      setSoftLabEnabled(true);
+      const { library } = loadCounterLab();
+      const newly = syncSoftExpandForDivePath(['COUNTER4'], library);
+      expect(newly.sort()).toEqual(['COUNTER4', 'T_FF'].sort());
+      expect(isSoftExpandForced('COUNTER4')).toBe(true);
+      expect(isSoftExpandForced('T_FF')).toBe(true);
+      syncSoftExpandForDivePath([], library);
+      expect(isSoftExpandForced('COUNTER4')).toBe(false);
+      expect(isSoftExpandForced('T_FF')).toBe(false);
+    } finally {
+      clearSoftExpandForced();
+      setSoftLabEnabled(prev);
+    }
+  });
+
   it('dive-expand BCD_7SEG makes internal nets live under Soft Lab', () => {
     const prev = isSoftLabEnabled();
     clearSoftExpandForced();

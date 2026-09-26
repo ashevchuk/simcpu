@@ -4,8 +4,9 @@
  * When enabled, flatten() leaves matching chip instances opaque and solver.ts
  * drives their ports from truth tables / edge-triggered state (same idea as
  * RAM). Soft Lab off expands all hierarchical transistor defs. Dive-in while
- * Soft Lab is on auto force-expands ChipDefs on the nav path (see
- * syncSoftExpandForDivePath) so internals show live levels.
+ * Soft Lab is on auto force-expands ChipDefs on the nav path *and* Soft Lab
+ * descendants nested under them (see syncSoftExpandForDivePath) so internals
+ * show live levels that match the Soft exterior.
  */
 
 import { bumpStructureVersion } from './Circuit.js';
@@ -188,12 +189,46 @@ export function clearSoftExpandForced(): void {
 }
 
 /**
+ * Soft Lab defs nested under `defName` (and their soft children). Used so a
+ * dive into COUNTER4 also expands T_FF guts — otherwise Soft-opaque children
+ * hide live levels on deeper dive (MUX2 / gates).
+ */
+function collectSoftLabDescendants(
+  defName: string,
+  library: {
+    findByName(name: string): { circuit: { components: Map<string, { kind: string; defId?: string }> } } | undefined;
+    has(id: string): boolean;
+    get(id: string): { name: string };
+  },
+  into: Set<string>,
+): void {
+  const def = library.findByName(defName);
+  if (!def) return;
+  for (const c of def.circuit.components.values()) {
+    if (c.kind !== 'chip' || !c.defId || !library.has(c.defId)) continue;
+    const childName = library.get(c.defId).name;
+    if (!softLabModelKey(childName)) continue;
+    if (into.has(childName)) continue;
+    into.add(childName);
+    collectSoftLabDescendants(childName, library, into);
+  }
+}
+
+/**
  * Keep Soft Lab chip defs on the dive path transistor-expanded so internals
- * show live levels; release auto-forced defs when leaving those levels.
- * Manual force-expand (inspector) is preserved.
+ * show live levels that match Soft Lab’s exterior behavior. Also expands Soft
+ * Lab descendants nested under those defs (COUNTER4 → T_FF). Manual
+ * force-expand (inspector) is preserved. Released when leaving the path.
  * @returns def names newly auto-forced this call (for POR seeding)
  */
-export function syncSoftExpandForDivePath(defNamesOnPath: readonly string[]): string[] {
+export function syncSoftExpandForDivePath(
+  defNamesOnPath: readonly string[],
+  library?: {
+    findByName(name: string): { circuit: { components: Map<string, { kind: string; defId?: string }> } } | undefined;
+    has(id: string): boolean;
+    get(id: string): { name: string };
+  },
+): string[] {
   const newly: string[] = [];
   if (!softLabEnabled) {
     // Soft Lab off expands everything; drop auto markers only.
@@ -204,6 +239,11 @@ export function syncSoftExpandForDivePath(defNamesOnPath: readonly string[]): st
   const onPath = new Set<string>();
   for (const name of defNamesOnPath) {
     if (softLabModelKey(name)) onPath.add(name);
+  }
+  if (library) {
+    for (const name of [...onPath]) {
+      collectSoftLabDescendants(name, library, onPath);
+    }
   }
 
   let released = false;
