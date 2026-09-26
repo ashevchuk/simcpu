@@ -882,6 +882,38 @@ function getRegDataBitChip(library: ChipLibrary): ChipDef {
 }
 
 /**
+ * One bit of wrapWithPairCommit: MUX2(sel→override else passthrough).
+ * Ports: sel, passthrough, override, out.
+ */
+function makePairCommitBitChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const muxDef = getMux2Chip(library);
+  const inst = makeChipInstance(scratch, muxDef, { x: 0, y: 0 });
+  const sel = inst.pins[muxDef.ports[0]!]!;
+  const passthrough = inst.pins[muxDef.ports[1]!]!;
+  const override = inst.pins[muxDef.ports[2]!]!;
+  const out = inst.pins[muxDef.ports[3]!]!;
+  return foldExposing(scratch, 'PAIR_COMMIT_BIT', library, [
+    { pin: sel, isOutput: false, portName: 'sel' },
+    { pin: passthrough, isOutput: false, portName: 'passthrough' },
+    { pin: override, isOutput: false, portName: 'override' },
+    { pin: out, isOutput: true, portName: 'out' },
+  ]);
+}
+
+const pairCommitBitDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getPairCommitBitChip(library: ChipLibrary): ChipDef {
+  let def = pairCommitBitDefs.get(library);
+  if (!def) {
+    def = makePairCommitBitChip(library);
+    pairCommitBitDefs.set(library, def);
+  }
+  return def;
+}
+
+/**
  * Sequential left-associated OR of `n` inputs (n>=2). Ports: i0..i{n-1}, out.
  * Scratch uses nested OR stdcell instances (no gate placer on the scratch).
  */
@@ -1544,6 +1576,16 @@ export interface Z80Cpu {
   ioPortDataIn: Pin[];
   ioRead: Pin;
   ioWrite: Pin;
+  /** Classical bus control (active-high): IORQ = I/O strobes ∨ INTACK window. */
+  iorq: Pin;
+  /** M1 ≈ opcode/prefix fetch (PHASE0 ∨ PREFIX_READ) ∨ INTACK (IORQ∧M1). */
+  m1: Pin;
+  /** RD ≈ RAM OE ∨ ioRead (INTACK samples without RD). */
+  rd: Pin;
+  /** WR ≈ RAM WE ∨ ioWrite. */
+  wr: Pin;
+  /** MREQ ≈ (RAM OE ∨ RAM WE) ∧ ¬IORQ. */
+  mreq: Pin;
 }
 
 /**
@@ -2690,8 +2732,8 @@ function buildZ80CpuInner(
   const im2Serving = buildRegister(parent, library, 1, { x: pos.x + 2400, y: pos.y + 4400 });
   // INTACK window: latched on any maskable accept; PHASE0 = ack sample,
   // PHASE1 = wait hold (PC already suppressed via irqServing). Soft burns
-  // ~2 wait units for the same window. IORQ_* labels are probes only —
-  // ring stays at 10 (not a full FET IORQ+M1 cycle).
+  // ~2 wait units for the same window. Exposed as IORQ∧M1 bus pins
+  // (instruction ring stays at 10; multi-T INTACK is this PHASE0+PHASE1 nest).
   const intAckServing = buildRegister(parent, library, 1, { x: pos.x + 2100, y: pos.y + 4360 });
   // Rising-edge NMI: `nmiPrev` samples the pin every PHASE0; accept when
   // pin high and prev low (soft is an explicit pulse — same one-shot feel).
@@ -2880,10 +2922,17 @@ function buildZ80CpuInner(
   wire(parent, intAckServing.q[0]!, intAckWait.a);
   tieToLabel('PHASE1', intAckWait.b, { x: pos.x + 2400, y: pos.y + 4460 });
   tieToLabel('INTACK_WAIT', intAckWait.out, { x: pos.x + 2600, y: pos.y + 4460 }); // PHASE1 wait hold
-  // Probe: IORQ asserted during INTACK ack+wait (classic Z80 also asserts
-  // IORQ+M1 here — we only expose the window as a label).
+  // IORQ∧M1 window: accept pulse ∨ PHASE0 hold after latch ∨ PHASE1 wait.
+  // (After dataClk on accept, IFF1 clears so intAcceptNow drops — serving.q
+  // keeps IORQ high through the rest of PHASE0.)
+  const intAckPhase0Hold = buildAnd(parent, { x: pos.x + 2550, y: pos.y + 4480 });
+  wire(parent, intAckServing.q[0]!, intAckPhase0Hold.a);
+  tieToLabel('PHASE0', intAckPhase0Hold.b, { x: pos.x + 2450, y: pos.y + 4480 });
+  const iorqIntAckA = buildOr(parent, { x: pos.x + 2600, y: pos.y + 4490 });
+  wire(parent, intAcceptNow.out, iorqIntAckA.a);
+  wire(parent, intAckPhase0Hold.out, iorqIntAckA.b);
   const iorqIntAck = buildOr(parent, { x: pos.x + 2650, y: pos.y + 4480 });
-  wire(parent, intAcceptNow.out, iorqIntAck.a);
+  wire(parent, iorqIntAckA.out, iorqIntAck.a);
   wire(parent, intAckWait.out, iorqIntAck.b);
   tieToLabel('IORQ_INTACK', iorqIntAck.out, { x: pos.x + 2750, y: pos.y + 4480 });
   const irqServingIntNmi = buildOr(parent, { x: pos.x + 2300, y: pos.y + 4440 });
@@ -9626,17 +9675,19 @@ function buildZ80CpuInner(
   // decodes exactly one), so layering rather than choosing between them is
   // safe. `inner.d`/`inner.we` here are the layer below's own *sink* pins
   // (ldExternal's `extD`/`weOr.b`) — driving into them, not reading them.
+  const pairCommitBitDef = getPairCommitBitChip(library);
   const wrapWithPairCommit = (inner: Register, commitLabel: string, aluByteLabel: string, wrapPos: Point): Register => {
     const extD: Pin[] = [];
     const weOr = buildOr(parent, { x: wrapPos.x, y: wrapPos.y + 850 });
     tieToLabel(commitLabel, weOr.a, { x: wrapPos.x - 100, y: wrapPos.y + 850 });
     wire(parent, weOr.out, inner.we);
     for (let i = 0; i < 8; i++) {
-      const mux = makeChipInstance(parent, muxDef, { x: wrapPos.x, y: wrapPos.y + i * 100 });
-      tieToLabel(commitLabel, mux.pins[muxDef.ports[0]!]!, { x: wrapPos.x - 100, y: wrapPos.y + i * 100 });
-      extD.push(mux.pins[muxDef.ports[1]!]!); // in0: passthrough to the caller's own seed (ldExternal's own `.d`, one layer further down)
-      tieToLabel(`${aluByteLabel}${i}`, mux.pins[muxDef.ports[2]!]!, { x: wrapPos.x - 200, y: wrapPos.y + i * 100 }); // in1: this pair's +-1
-      wire(parent, mux.pins[muxDef.ports[3]!]!, inner.d[i]!);
+      const bit = makeChipInstance(parent, pairCommitBitDef, { x: wrapPos.x, y: wrapPos.y + i * 100 });
+      const p = (name: string) => bit.pins[name]!;
+      tieToLabel(commitLabel, p('sel'), { x: wrapPos.x - 100, y: wrapPos.y + i * 100 });
+      extD.push(p('passthrough')); // to the caller's seed one layer further down
+      tieToLabel(`${aluByteLabel}${i}`, p('override'), { x: wrapPos.x - 200, y: wrapPos.y + i * 100 });
+      wire(parent, p('out'), inner.d[i]!);
     }
     return { d: extD, we: weOr.b, clk: inner.clk, q: inner.q, qn: inner.qn };
   };
@@ -9999,23 +10050,23 @@ function buildZ80CpuInner(
   tieToLabel('PHASE3', ioImmAdvanceNow.b, { x: pos.x + 11500, y: pos.y - 2180 });
   tieToLabel('IOIMM_ADVANCE_NOW', ioImmAdvanceNow.out, { x: pos.x + 11700, y: pos.y - 2180 }); // anchor — pcHold (far) reads this
 
-  // `OUT (n),A` writes at `PHASE2` itself — `n` (the address) and `A` (the
-  // data) are both already stable the instant `n` lands on the bus, no
-  // holding register needed (`A` isn't also changing this same tick for
-  // this opcode, unlike the register-to-RAM swap `EX (SP),HL` above needed
-  // one for). `IN A,(n)` reads at `PHASE2` too — `A`'s own write mux (far
-  // below) picks `ioPortDataIn` straight up, the same "always compute,
-  // gate only the commit" shape every other `A`-write layer already uses.
+  // Nested I/O window (imm): PHASE2 = addr/data setup + strobe (T1), PHASE3 =
+  // hold strobe while PC advances (T2). Classical IORQ∧WR/RD tracks this
+  // nest inside the 10-phase instruction ring.
+  const ioPhase = buildOr(parent, { x: pos.x + 11620, y: pos.y - 2120 });
+  tieToLabel('PHASE2', ioPhase.a, { x: pos.x + 11520, y: pos.y - 2120 });
+  tieToLabel('PHASE3', ioPhase.b, { x: pos.x + 11520, y: pos.y - 2100 });
   const outNow = buildAnd(parent, { x: pos.x + 11650, y: pos.y - 2100 });
   wire(parent, isOutImm.out, outNow.a);
-  tieToLabel('PHASE2', outNow.b, { x: pos.x + 11550, y: pos.y - 2100 });
+  wire(parent, ioPhase.out, outNow.b);
   // `outNow.out` feeds `ioWrite` in the return object below by direct JS
   // reference, not a label — that's the same local scope, no genuinely far
   // consumer exists for this one the way `IN_NOW` (below) has.
   const inNow = buildAnd(parent, { x: pos.x + 11650, y: pos.y - 2200 });
   wire(parent, isInImm.out, inNow.a);
-  tieToLabel('PHASE2', inNow.b, { x: pos.x + 11550, y: pos.y - 2200 });
+  wire(parent, ioPhase.out, inNow.b);
   tieToLabel('IN_NOW', inNow.out, { x: pos.x + 11750, y: pos.y - 2200 }); // anchor — A's own write mux (far) reads this via the label; `ioRead` in the return object reads `inNow.out` directly, same local scope
+  tieToLabel('OUT_NOW', outNow.out, { x: pos.x + 11750, y: pos.y - 2100 });
 
   const ioPortAddr: Pin[] = [];
   for (let i = 0; i < 8; i++) {
@@ -11554,7 +11605,7 @@ function buildZ80CpuInner(
   wire(parent, ioWriteFinal.out, ioWriteFinal2.a);
   tieToLabel('OUTRC_NOW', ioWriteFinal2.b, { x: pos.x + 13450, y: pos.y - 2100 });
 
-  // Unified IORQ probe: INTACK window ∪ instruction IN/OUT strobes.
+  // Unified IORQ: INTACK window ∪ instruction IN/OUT strobes.
   const iorqIo = buildOr(parent, { x: pos.x + 13600, y: pos.y - 2150 });
   wire(parent, ioReadFinal2.out, iorqIo.a);
   wire(parent, ioWriteFinal2.out, iorqIo.b);
@@ -11562,6 +11613,38 @@ function buildZ80CpuInner(
   tieToLabel('IORQ_INTACK', iorqAny.a, { x: pos.x + 13550, y: pos.y - 2150 });
   wire(parent, iorqIo.out, iorqAny.b);
   tieToLabel('IORQ', iorqAny.out, { x: pos.x + 13750, y: pos.y - 2150 });
+
+  // Classical bus pins (active-high).
+  // M1: opcode/prefix fetch ∨ INTACK (IORQ∧M1 during ack).
+  const m1Fetch = buildOr(parent, { x: pos.x + 13600, y: pos.y - 2050 });
+  tieToLabel('PHASE0', m1Fetch.a, { x: pos.x + 13500, y: pos.y - 2050 });
+  tieToLabel('PREFIX_READ_NOW', m1Fetch.b, { x: pos.x + 13500, y: pos.y - 2030 });
+  const m1Any = buildOr(parent, { x: pos.x + 13650, y: pos.y - 2050 });
+  wire(parent, m1Fetch.out, m1Any.a);
+  tieToLabel('IORQ_INTACK', m1Any.b, { x: pos.x + 13550, y: pos.y - 2050 });
+  tieToLabel('M1', m1Any.out, { x: pos.x + 13750, y: pos.y - 2050 });
+
+  const ramOePin = ramOeOr.pins[ramOeOrDef.ports[37]!]!;
+  const ramWePin = ramWeOr.pins[ramWeOrDef.ports[16]!]!;
+  const rdAny = buildOr(parent, { x: pos.x + 13600, y: pos.y - 1950 });
+  wire(parent, ramOePin, rdAny.a);
+  wire(parent, ioReadFinal2.out, rdAny.b);
+  tieToLabel('RD', rdAny.out, { x: pos.x + 13750, y: pos.y - 1950 });
+
+  const wrAny = buildOr(parent, { x: pos.x + 13600, y: pos.y - 1850 });
+  wire(parent, ramWePin, wrAny.a);
+  wire(parent, ioWriteFinal2.out, wrAny.b);
+  tieToLabel('WR', wrAny.out, { x: pos.x + 13750, y: pos.y - 1850 });
+
+  const memCycle = buildOr(parent, { x: pos.x + 13600, y: pos.y - 1750 });
+  wire(parent, ramOePin, memCycle.a);
+  wire(parent, ramWePin, memCycle.b);
+  const notIorq = buildNot(parent, { x: pos.x + 13650, y: pos.y - 1750 });
+  wire(parent, iorqAny.out, notIorq.in);
+  const mreqAny = buildAnd(parent, { x: pos.x + 13700, y: pos.y - 1750 });
+  wire(parent, memCycle.out, mreqAny.a);
+  wire(parent, notIorq.out, mreqAny.b);
+  tieToLabel('MREQ', mreqAny.out, { x: pos.x + 13800, y: pos.y - 1750 });
 
   // Kill remaining long-distance point-to-point wires (gate→gate, leftover
   // single-anchor label stubs, etc.). Stdcell ChipDefs (NOT/NAND/…) keep
@@ -11627,5 +11710,10 @@ function buildZ80CpuInner(
     ioPortDataIn,
     ioRead: ioReadFinal2.out,
     ioWrite: ioWriteFinal2.out,
+    iorq: iorqAny.out,
+    m1: m1Any.out,
+    rd: rdAny.out,
+    wr: wrAny.out,
+    mreq: mreqAny.out,
   };
 }

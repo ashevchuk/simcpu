@@ -5,7 +5,7 @@ import { foldZ80CpuLeavingRam, newComponentIdSet, packFoldedMachine } from './si
 import { replaceLongWiresWithLabels } from './sim/labelWires.js';
 import { circuitHasPulseGen, circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
 import { flatten, fold, foldPortWarnings, forkChipInstance, unfold } from './sim/hierarchy.js';
-import { buildNot, makeButton, makeBusProbe, makeInput, makeLabel, makeLed, makeChipInstance, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
+import { buildNot, makeButton, makeBusProbe, makeInput, makeLabel, makeLed, makeChipInstance, makePort, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
 import { EXAMPLE_PROJECTS } from './examples/catalog.js';
 import {
   deserializeProject,
@@ -54,6 +54,7 @@ import { MachineRunner } from './machine/MachineRunner.js';
 import { placeLabLedGateDecode } from './machine/labLedGateDecode.js';
 import { commandRomHexPrompt } from './machine/commandRom.js';
 import { LED_BLINK_ROM_BYTES } from './machine/ledBlinkRom.js';
+import { PORT_TTY_ROM_BYTES } from './machine/portTtyRom.js';
 import { runSoftCommand } from './machine/softConsole.js';
 import { Camera, type Bounds } from './ui/Camera.js';
 import { showAlert, showChoice, showConfirm, showPrompt } from './ui/Dialog.js';
@@ -1508,11 +1509,26 @@ function placeLedBlinkMachine(): void {
     },
   });
 
-  // Gates MVP: OUT 0x40 ∧ D0 decode (outside fold so taps become chip ports).
+  // Gates: OUT 0x40 ∧ D0 decode (outside fold so taps become chip ports).
   const gateLed = placeLabLedGateDecode(editor.circuit, library, cpu, {
     x: pos.x + CHIP_INSTANCE_WIDTH / 2 + 40,
     y: pos.y + 200,
   });
+
+  // Named bus-control ports (outside fold selection) → stable ChipDef names.
+  const busPortX = pos.x + CHIP_INSTANCE_WIDTH / 2 + 40;
+  const busPortY = pos.y + 320;
+  const exposeBus = (name: string, pin: typeof cpu.iorq, dy: number) => {
+    const p = makePort(editor.circuit, name, { x: busPortX, y: busPortY + dy }, 'out');
+    wire(editor.circuit, pin, p.pins.io);
+  };
+  exposeBus('IORQ', cpu.iorq, 0);
+  exposeBus('M1', cpu.m1, 40);
+  exposeBus('RD', cpu.rd, 80);
+  exposeBus('WR', cpu.wr, 120);
+  exposeBus('MREQ', cpu.mreq, 160);
+  exposeBus('IOWRITE', cpu.ioWrite, 200);
+  exposeBus('IOREAD', cpu.ioRead, 240);
 
   // Fold/pack first so the lab LED Input is not sucked into the seed grid.
   foldZ80CpuLeavingRam(editor.circuit, library, placedIds, pos);
@@ -1528,33 +1544,41 @@ function placeLedBlinkMachine(): void {
   const ledNet = makeLabel(editor.circuit, 'LAB_LED', { x: ledX + 30, y: ledY - 16 });
   wire(editor.circuit, led.pins.in, ledNet.pins.net);
 
-  // Soft Run host probes — paint IORQ / ioWrite when Soft OUT fires.
+  // Soft Run host probes — paint shared semantic nets (not electrically tied
+  // into Z80CPU outputs — avoids fighting Gates bus drivers). Same names as
+  // ChipDef ports for Soft canvas parity.
   const iorqProbe = makeInput(editor.circuit, 0, { x: ledX, y: ledY - 50 });
   const ioWriteProbe = makeInput(editor.circuit, 0, { x: ledX + 50, y: ledY - 50 });
   const ioReadProbe = makeInput(editor.circuit, 0, { x: ledX + 100, y: ledY - 50 });
+  const m1Probe = makeInput(editor.circuit, 0, { x: ledX + 150, y: ledY - 50 });
   wire(
     editor.circuit,
     iorqProbe.pins.out,
-    makeLabel(editor.circuit, 'SOFT_IORQ', { x: ledX + 20, y: ledY - 66 }).pins.net,
+    makeLabel(editor.circuit, 'IORQ', { x: ledX + 20, y: ledY - 66 }).pins.net,
   );
   wire(
     editor.circuit,
     ioWriteProbe.pins.out,
-    makeLabel(editor.circuit, 'SOFT_IOWRITE', { x: ledX + 70, y: ledY - 66 }).pins.net,
+    makeLabel(editor.circuit, 'IOWRITE', { x: ledX + 70, y: ledY - 66 }).pins.net,
   );
   wire(
     editor.circuit,
     ioReadProbe.pins.out,
-    makeLabel(editor.circuit, 'SOFT_IOREAD', { x: ledX + 120, y: ledY - 66 }).pins.net,
+    makeLabel(editor.circuit, 'IOREAD', { x: ledX + 120, y: ledY - 66 }).pins.net,
   );
-  machineRunner.bindSoftIoProbes({ iorq: iorqProbe, ioWrite: ioWriteProbe, ioRead: ioReadProbe });
+  wire(
+    editor.circuit,
+    m1Probe.pins.out,
+    makeLabel(editor.circuit, 'M1', { x: ledX + 170, y: ledY - 66 }).pins.net,
+  );
+  machineRunner.bindSoftIoProbes({
+    iorq: iorqProbe,
+    ioWrite: ioWriteProbe,
+    ioRead: ioReadProbe,
+    m1: m1Probe,
+  });
 
   machineRunner.bindLabLed(led, null);
-  const regDef = library.list().find((d) => d.name === 'REG8');
-  const ctrDef = library.list().find((d) => d.name === 'COUNTER4');
-  if (regDef) makeChipInstance(editor.circuit, regDef, { x: ledX + 120, y: ledY + 20 });
-  if (ctrDef) makeChipInstance(editor.circuit, ctrDef, { x: ledX + 260, y: ledY + 20 });
-  machineRunner.autoBindLabPeripherals(editor.circuit, library);
   machineRunner.boot();
   machineRunner.setSpeed('soft');
   machineRunner.setRunning(true);
@@ -1569,6 +1593,14 @@ function placeLedBlinkMachine(): void {
 
 document.getElementById('add-led-blink')?.addEventListener('click', () => {
   placeLedBlinkMachine();
+});
+
+function placePortTtyMachine(): void {
+  placeZ80Machine(MACHINE_ADDR_BITS, PORT_TTY_ROM_BYTES);
+}
+
+document.getElementById('add-port-tty')?.addEventListener('click', () => {
+  placePortTtyMachine();
 });
 
 document.getElementById('add-spectrum')?.addEventListener('click', () => {

@@ -113,7 +113,7 @@ export class IoMapViewer {
     ports.innerHTML = `
       <div class="io-map-h">Soft ports (IN/OUT)</div>
       <table class="io-map-table">
-        <tr><td>PORT_TTY_OUT</td><td class="mono">${hexAddr(PORT_TTY_OUT)}</td><td>OUT → text FB</td></tr>
+        <tr><td>PORT_TTY_OUT</td><td class="mono">${hexAddr(PORT_TTY_OUT)}</td><td>OUT → host VT100 (lab alt. to MMIO FB)</td></tr>
         <tr><td>PORT_KEY_STATUS</td><td class="mono">${hexAddr(PORT_KEY_STATUS)}</td><td>IN → KEY_STATUS</td></tr>
         <tr><td>PORT_KEY_DATA</td><td class="mono">${hexAddr(PORT_KEY_DATA)}</td><td>IN → KEY_DATA</td></tr>
         <tr><td>PORT_BMP_ADDR_LO/HI</td><td class="mono">${hexAddr(PORT_BMP_ADDR_LO)}/${hexAddr(PORT_BMP_ADDR_HI)}</td><td>bitmap index</td></tr>

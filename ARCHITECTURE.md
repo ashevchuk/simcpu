@@ -1043,14 +1043,20 @@ the solver clears `KEY_STATUS` (0xF00) — same contract as soft
 
 **Lab LED peripheral (soft bridge MVP):** `PORT_LAB_LED` (`0x40`) bit0 on
 `SoftDevices.labLed`. `Insert → LED blink…` loads `ledBlinkRom.ts` (OUT
-loop), places a canvas LED (+ optional REG8/COUNTER4), and
-`MachineRunner.bindLabLed` / `autoBindLabPeripherals` mirrors ports onto
-`LedComponent.forceOn` and Soft Lab `softState.q` (`0x41` REG, `0x42`
-COUNTER). Soft Run paints host probes `SOFT_IORQ` / `SOFT_IOWRITE` /
-`SOFT_IOREAD` and REG/COUNTER `q*` nets via `makeSoftCanvasResolve` (no
-flatten). Gates MVP: combinational decode of gate `ioWrite` ∧ port `0x40` ∧
-`D0` onto the LED (`placeLabLedGateDecode`) — not a FET IORQ+M1 bus; ring
-stays at 10. `IORQ` / `IORQ_INTACK` remain probe labels inside the CPU.
+loop), places a canvas LED, and `MachineRunner.bindLabLed` mirrors the port
+onto `LedComponent.forceOn`. Soft Run paints host probes `IORQ` / `IOWRITE` /
+`IOREAD` / `M1` via `makeSoftCanvasResolve` (no flatten). Gates: ChipDef
+`LAB_LED_DECODE` (`iorq` ∧ `wr` ∧ port `0x40` ∧ `D0`) drives the LED
+(`placeLabLedGateDecode`). Folded Z80CPU exposes named bus ports `IORQ` /
+`M1` / `RD` / `WR` / `MREQ` / `IOWRITE` / `IOREAD`. Nested I/O window: imm
+OUT/IN assert strobes across PHASE2+PHASE3; INTACK is PHASE0+PHASE1 with
+`IORQ∧M1` (instruction ring stays at 10). Soft Lab REG8/COUNTER4 remain
+ordinary Library chips (ports `0x41`/`0x42` live in SoftDevices only unless
+explicitly `bindLabReg` / `bindLabCounter`).
+
+**Port TTY:** `Insert → Port TTY…` loads `portTtyRom.ts` (`OUT (01h),A`).
+Soft and Gates rising `ioWrite` feed `SoftDevices` → host VT100
+(`PORT_TTY_OUT` / `PORT_CONDAT`) — lab alternative to MMIO `FB_BASE`.
 
 Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
 pos?)`, etc.); power is always `tiePowerRail` (reuses the circuit's Source
@@ -1065,6 +1071,7 @@ Diminishing place returns: `PC_COMMIT_BIT` folded the deep PC-commit MUX
 cascade (same recipe as `RAM_ADDR_BIT`). Per-register `LD_WE_OR_9` /
 `LD_WE_OR_10` fold the B..L write-enable OR trees; `REG_DATA_BIT` folds the
 four-deep data MUX cascade (IN r,(C) → SET/RES → CB rot → LD/POP).
+`PAIR_COMMIT_BIT` folds each `wrapWithPairCommit` MUX2 layer (~86 call sites).
 
 
 ## Decode and execute: a tiny working CPU
@@ -4065,11 +4072,12 @@ plus `IFF1←IFF2` on `PHASE4`. Soft `RETI` is unchanged (Spectrum); soft
 matches RETI encodings first — leave as-is.
 
 Verified with `z80cpu-irq-im1.test.ts`, `z80cpu-irq-im0.test.ts` (includes
-gate IM2), `z80cpu-nmi-retn.test.ts`. Soft↔gate EI delay and HALT latch
-parity: `soft-gate-ei-halt.test.ts`. INTACK = PHASE0 acknowledge sample
-(`INTACK_NOW` / irqBus + one R bump) + PHASE1 wait hold (`INTACK_WAIT` /
-`intAckServing`; soft burns ~2 wait units via `hooks.intAckWaits`). No
-IORQ FET pins and no ring widen beyond 10. NMI does not bump R (soft
+gate IM2), `z80cpu-nmi-retn.test.ts`, `z80cpu-bus-pins.test.ts`. Soft↔gate EI
+delay and HALT latch parity: `soft-gate-ei-halt.test.ts`. INTACK = PHASE0
+acknowledge sample (`INTACK_NOW` / irqBus + one R bump) + PHASE1 wait hold
+(`INTACK_WAIT` / `intAckServing`; soft burns ~2 wait units via
+`hooks.intAckWaits`) with bus pins `IORQ∧M1`. Instruction ring stays at 10;
+imm I/O nests strobes across PHASE2+PHASE3. NMI does not bump R (soft
 `softNmi` parity).
 
 ### Spectrum Gates (mirrored RAM)
@@ -4867,9 +4875,9 @@ section's own success story.
   flip-flops as part of the IRQ/NMI layer (see "Thin IM1 IRQ / NMI / IM modes" above) —
   no longer the permanent gap this paragraph once described. Soft↔gate now
   share one-instruction EI delay and a HALT latch (`soft-gate-ei-halt.test.ts`).
-  Remaining IRQ gaps are deliberate: INTACK is PHASE0 ack + PHASE1 wait
-  (labels `INTACK_NOW` / `INTACK_WAIT`; soft `intAckWaits(2)`); no IORQ FET
-  pins and no ring widen beyond 10. Soft and gate both implement IM0/IM1/IM2 accept (gate IM2: push + word
+  Remaining IRQ notes: INTACK is PHASE0 ack + PHASE1 wait with bus pins
+  `IORQ∧M1` (labels `INTACK_NOW` / `INTACK_WAIT`; soft `intAckWaits(2)`);
+  instruction ring stays at 10 (I/O nests PHASE2+PHASE3 strobes). Soft and gate both implement IM0/IM1/IM2 accept (gate IM2: push + word
   at `(I<<8)|bus` → PC). Soft and gate
   both auto-increment `R` on M1 (bit7 sticky), including once on maskable
   INT accept (NMI leaves R alone, matching soft). `P/V←IFF2` on `LD A,I`/`LD A,R`

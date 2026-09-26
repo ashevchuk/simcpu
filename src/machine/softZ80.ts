@@ -93,7 +93,7 @@ export interface SoftMemHooks {
   irqBusByte?: () => number;
   /**
    * Soft INTACK wait burn — Spectrum-style ~2 wait states before the push.
-   * Gate models the same window as PHASE0 ack + PHASE1 wait (no IORQ pins).
+   * Gate models the same window as PHASE0 ack + PHASE1 wait (IORQ∧M1 pins).
    */
   intAckWaits?: (n: number) => void;
 }

@@ -168,14 +168,19 @@ export class MachineRunner {
   private labLed: LedComponent | null = null;
   /** Drive Input wired to labLed (Gates path); Soft uses forceOn. */
   private labLedDrive: InputComponent | null = null;
-  /** Soft Run host probes — paint IORQ / ioWrite / ioRead without flatten. */
+  /** Soft Run host probes — paint IORQ / ioWrite / ioRead / M1 without flatten. */
   private softIorqProbe: InputComponent | null = null;
   private softIoWriteProbe: InputComponent | null = null;
   private softIoReadProbe: InputComponent | null = null;
+  private softM1Probe: InputComponent | null = null;
   /** Latched Soft I/O strobes for the current soft instruction. */
   private softIorqPulse = false;
   private softIoWritePulse = false;
   private softIoReadPulse = false;
+  private softM1Pulse = false;
+  /** Previous gate ioWrite/ioRead levels for rising-edge SoftDevices capture. */
+  private lastGateIoWrite = 0;
+  private lastGateIoRead = 0;
   /** Soft Lab REG4/REG8 bound to PORT_LAB_REG. */
   private labReg: ChipInstanceComponent | null = null;
   /** Soft Lab COUNTER4 bound to PORT_LAB_COUNTER. */
@@ -190,7 +195,8 @@ export class MachineRunner {
       this.labCounter !== null ||
       this.softIorqProbe !== null ||
       this.softIoWriteProbe !== null ||
-      this.softIoReadProbe !== null
+      this.softIoReadProbe !== null ||
+      this.softM1Probe !== null
     );
   }
 
@@ -213,30 +219,40 @@ export class MachineRunner {
   }
 
   /**
-   * Bind top-level Inputs that Soft Run pulses on portIn/portOut (IORQ paint).
-   * Not electrically tied into the folded Z80CPU — host probes only.
+   * Bind top-level Inputs that Soft Run pulses on portIn/portOut / fetch (M1).
+   * Not electrically tied into the folded Z80CPU bus drivers — host paint only
+   * (same semantic names as ChipDef ports for Soft canvas).
    */
   bindSoftIoProbes(opts: {
     iorq?: InputComponent | null;
     ioWrite?: InputComponent | null;
     ioRead?: InputComponent | null;
+    m1?: InputComponent | null;
   }): void {
     this.softIorqProbe = opts.iorq ?? null;
     this.softIoWriteProbe = opts.ioWrite ?? null;
     this.softIoReadProbe = opts.ioRead ?? null;
+    this.softM1Probe = opts.m1 ?? null;
     this.syncSoftIoProbes();
   }
 
   unbindSoftIoProbes(): void {
-    for (const p of [this.softIorqProbe, this.softIoWriteProbe, this.softIoReadProbe]) {
+    for (const p of [
+      this.softIorqProbe,
+      this.softIoWriteProbe,
+      this.softIoReadProbe,
+      this.softM1Probe,
+    ]) {
       if (p) p.value = 0;
     }
     this.softIorqProbe = null;
     this.softIoWriteProbe = null;
     this.softIoReadProbe = null;
+    this.softM1Probe = null;
     this.softIorqPulse = false;
     this.softIoWritePulse = false;
     this.softIoReadPulse = false;
+    this.softM1Pulse = false;
   }
 
   bindLabReg(chip: ChipInstanceComponent): void {
@@ -246,21 +262,6 @@ export class MachineRunner {
 
   bindLabCounter(chip: ChipInstanceComponent): void {
     this.labCounter = chip;
-    this.syncLabPeripherals();
-  }
-
-  /**
-   * Bind the first top-level REG4/REG8 and COUNTER4 Soft Lab chips on the
-   * circuit (if any) to ports 0x41 / 0x42.
-   */
-  autoBindLabPeripherals(circuit: Circuit, library: ChipLibrary): void {
-    this.library = library;
-    for (const c of circuit.components.values()) {
-      if (c.kind !== 'chip' || !c.defId || !library.has(c.defId)) continue;
-      const key = softLabModelKey(library.get(c.defId).name);
-      if ((key === 'REG4' || key === 'REG8') && !this.labReg) this.labReg = c;
-      else if (key === 'COUNTER4' && !this.labCounter) this.labCounter = c;
-    }
     this.syncLabPeripherals();
   }
 
@@ -309,6 +310,7 @@ export class MachineRunner {
     apply(this.softIorqProbe, this.softIorqPulse);
     apply(this.softIoWriteProbe, this.softIoWritePulse);
     apply(this.softIoReadProbe, this.softIoReadPulse);
+    apply(this.softM1Probe, this.softM1Pulse);
     return changed;
   }
 
@@ -317,6 +319,7 @@ export class MachineRunner {
     this.softIorqPulse = false;
     this.softIoWritePulse = false;
     this.softIoReadPulse = false;
+    this.softM1Pulse = false;
   }
 
   private syncSoftLabQ(
@@ -879,6 +882,8 @@ export class MachineRunner {
     this.tick = null;
     this.readPin = null;
     this.library = null;
+    this.lastGateIoWrite = 0;
+    this.lastGateIoRead = 0;
   }
 
   /** Gate-level boot (FSM seed, reset, first fetch) + soft CPU reset. */
@@ -998,6 +1003,36 @@ export class MachineRunner {
     if (!this.booted) this.boot();
     this.pulse(this.phaseClk);
     this.pulse(this.dataClk);
+    this.syncGatePortDevices();
+  }
+
+  /**
+   * On rising gate `ioWrite` / `ioRead`, mirror into SoftDevices so Gates Run
+   * feeds the same port TTY / lab peripherals as Soft Run.
+   */
+  private syncGatePortDevices(): void {
+    if (!this.cpu || !this.readPin || !this.ram) return;
+    const wr = this.readPin(this.cpu.ioWrite) === 1 ? 1 : 0;
+    const rd = this.readPin(this.cpu.ioRead) === 1 ? 1 : 0;
+    if (wr && !this.lastGateIoWrite) {
+      let addr = 0;
+      let data = 0;
+      for (let i = 0; i < 8; i++) {
+        if (this.readPin(this.cpu.ioPortAddr[i]!) === 1) addr |= 1 << i;
+        if (this.readPin(this.cpu.ioPortDataOut[i]!) === 1) data |= 1 << i;
+      }
+      this.devices.portOut(this.ram.bytes, addr, data);
+    }
+    if (rd && !this.lastGateIoRead) {
+      let addr = 0;
+      for (let i = 0; i < 8; i++) {
+        if (this.readPin(this.cpu.ioPortAddr[i]!) === 1) addr |= 1 << i;
+      }
+      // Side-effect ports (e.g. CONDAT / key clear); data stays on cpu.ioPortDataIn Inputs.
+      void this.devices.portIn(this.ram.bytes, addr);
+    }
+    this.lastGateIoWrite = wr;
+    this.lastGateIoRead = rd;
   }
 
   /** One full instruction: soft if speed=soft, else 10 gate phases. */
@@ -1013,6 +1048,7 @@ export class MachineRunner {
         }
         if (this.spectrum) this.spectrum.pulseFrameIrq();
         this.clearSoftIoPulses();
+        this.softM1Pulse = true; // every soft instruction begins with an M1 fetch
         softStep(this.soft, this.ram.bytes, this.softHooks());
         this.softDesynced = true;
         this.syncLabPeripherals();
@@ -1079,6 +1115,7 @@ export class MachineRunner {
           this.spectrum.beginBeeperFrame();
         }
         this.clearSoftIoPulses();
+        this.softM1Pulse = true;
         softRun(this.soft, this.ram.bytes, this.phasesPerFrame, this.softHooks(), this.breakpointPc);
         this.softDesynced = true;
         this.syncLabPeripherals();

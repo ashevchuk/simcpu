@@ -410,9 +410,14 @@ const SECTIONS: Section[] = [
       '  2. Optional program bytes (comma hex). Default can seed the command ROM path.\n' +
       '  3. A Z80CPU chip + RAM appear; attach TTY / open machine panel.\n\n' +
       'Insert → LED blink… places Z80 + ROM that OUT bit0 to port 0x40 (PORT_LAB_LED).\n' +
-      'Soft Run mirrors that bit onto LAB_LED (forceOn) and pulses SOFT_IORQ /\n' +
-      'SOFT_IOWRITE probes; REG8/COUNTER4 q pins paint from softState.\n' +
-      'Gates MVP: ioWrite∧port 0x40∧D0 decode drives the LED (not FET IORQ+M1).\n\n' +
+      'Soft Run mirrors that bit onto LAB_LED (forceOn) and pulses IORQ / IOWRITE /\n' +
+      'IOREAD / M1 host probes.\n' +
+      'Gates: LAB_LED_DECODE (iorq∧wr∧port 0x40∧D0) drives the LED; folded\n' +
+      'Z80CPU exposes IORQ/M1/RD/WR/MREQ ports. Nested I/O = PHASE2+3 strobes;\n' +
+      'INTACK = PHASE0+1 with IORQ∧M1 (ring stays at 10).\n\n' +
+      'Insert → Port TTY… prints via OUT (01h),A into the host VT100 console\n' +
+      '(PORT_TTY_OUT) — lab alternative to MMIO text FB. Soft and Gates both\n' +
+      'feed SoftDevices on port OUT/IN.\n\n' +
       'Dblclick machine RAM → Memory editor: write Z80 asm at @, Disasm from cursor\n' +
       '(Follow PC highlights the soft PC line), Assemble + Go (soft JP + reboot).\n' +
       'Console asm box still works the same way.\n\n' +
