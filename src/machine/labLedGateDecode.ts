@@ -8,6 +8,7 @@
  *
  * Formula: `iorq ∧ wr ∧ (a[7:0] == PORT_LAB_LED) ∧ d0`
  * (equivalent to ioWrite∧addr∧d0 once wr includes ioWrite and iorq includes it).
+ * High byte of 16-bit `ioPortAddr` is ignored — SoftDevices also masks `& 0xff`.
  */
 
 import type { ChipDef, ChipLibrary } from '../sim/ChipLibrary.js';

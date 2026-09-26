@@ -158,10 +158,11 @@ const SECTIONS: Section[] = [
       'CPUs / machines:\n' +
       '  Tiny CPU… — teaching CPU (PC+RAM+IR+ACC+ALU + FETCH FSM).\n' +
       '  Z80 CPU… — Z80-opcode soft/gate CPU + RAM (asks addr bits + program bytes).\n' +
-      '  Spectrum 48K… / 128K… — Z80 + 64K RAM, opens machine panel, boots soft Spectrum.\n\n' +
+      '  Spectrum 48K… / 128K… — Z80 + 64K RAM, opens machine panel, boots soft Spectrum.\n' +
+      '  (Ready-to-run machines live under File → Demo…; Insert keeps building blocks.)\n\n' +
       'See Soft machine → Spectrum chapters for boot, load images (.SNA/.Z80/.TAP…), demos, tape, pad, and debug.',
-    figures: [
-      { src: img32, caption: 'Insert menu — Register/ALU/PC, ROM/RAM, Z80, Spectrum.' },
+      figures: [
+      { src: img32, caption: 'Insert menu — Register/ALU/PC, ROM/RAM, Z80. Demos under File → Demo.' },
       { src: img38, caption: 'rom-viewer example — behavioral ROM on the canvas.' },
     ],
   },
@@ -409,15 +410,17 @@ const SECTIONS: Section[] = [
       '  1. Choose RAM address bits (16 = 64K for Spectrum/CP/M-class soft machines).\n' +
       '  2. Optional program bytes (comma hex). Default can seed the command ROM path.\n' +
       '  3. A Z80CPU chip + RAM appear; attach TTY / open machine panel.\n\n' +
-      'Insert → LED blink… places Z80 + ROM that OUT bit0 to port 0x40 (PORT_LAB_LED).\n' +
+      'File → Demo → LED blink… places Z80 + ROM that OUT bit0 to port 0x40 (PORT_LAB_LED).\n' +
       'Soft Run mirrors that bit onto LAB_LED (forceOn) and pulses IORQ / IOWRITE /\n' +
       'IOREAD / M1 host probes.\n' +
       'Gates: LAB_LED_DECODE (iorq∧wr∧port 0x40∧D0) drives the LED; folded\n' +
       'Z80CPU exposes IORQ/M1/RD/WR/MREQ ports. Nested I/O = PHASE2+3 strobes;\n' +
       'INTACK = PHASE0+1 with IORQ∧M1 (ring stays at 10).\n\n' +
-      'Insert → Port TTY… prints via OUT (01h),A into the host VT100 console\n' +
+      'File → Demo → Port TTY… prints via OUT (01h),A into the host VT100 console\n' +
       '(PORT_TTY_OUT) — lab alternative to MMIO text FB. Soft and Gates both\n' +
       'feed SoftDevices on port OUT/IN.\n\n' +
+      'File → Demo → Lab REG/COUNTER… OUT 0x41/0x42 onto Soft Lab REG8 / COUNTER4\n' +
+      '(explicit bind — chips are placed and wired to SoftDevices paint).\n\n' +
       'Dblclick machine RAM → Memory editor: write Z80 asm at @, Disasm from cursor\n' +
       '(Follow PC highlights the soft PC line), Assemble + Go (soft JP + reboot).\n' +
       'Console asm box still works the same way.\n\n' +
@@ -426,7 +429,7 @@ const SECTIONS: Section[] = [
       'From the machine panel you can Boot BASIC / CP/M / stub, or boot Spectrum (see next).\n' +
       'View → I/O map… shows soft memory / port map when a machine is linked.',
     figures: [
-      { src: img32, caption: 'Insert → Z80 CPU… / Spectrum…' },
+      { src: img32, caption: 'Insert → Z80 CPU…; File → Demo → LED / Port TTY / Spectrum.' },
       { src: img37, caption: 'Machine panel after a soft Spectrum boot (Z80 + screen + controls).' },
     ],
   },
@@ -434,7 +437,7 @@ const SECTIONS: Section[] = [
     id: 'spectrum',
     title: 'Spectrum — boot & overview',
     body:
-      'Fastest path: Place / Insert → Spectrum 48K… or 128K…\n' +
+      'Fastest path: File → Demo → Spectrum 48K… or 128K…\n' +
       '  Drops Z80 + 64K RAM, opens the machine panel, boots soft ULA ROM, switches to Spectrum tab.\n\n' +
       'Or: Insert → Z80 CPU… (16 addr bits) → machine panel Console → Boot Spectrum 48K / 128K.\n\n' +
       'Two tabs in the machine panel:\n' +
@@ -448,7 +451,7 @@ const SECTIONS: Section[] = [
     figures: [
       { src: img42, caption: 'Machine panel — Spectrum tab (rainbow smoke, coloured paper bands).' },
       { src: img37, caption: '#demo=rainbow — Spectrum panel ready (no overlays).' },
-      { src: img32, caption: 'Insert → Spectrum 48K… / 128K…' },
+      { src: img32, caption: 'File → Demo → Spectrum 48K… / 128K…' },
       { src: img49, caption: 'Console tab — Boot Spectrum / Load .SNA / .Z80 / .TAP…' },
     ],
   },
@@ -485,6 +488,9 @@ const SECTIONS: Section[] = [
       'TAP/TZX demos wait for BASIC ready then auto-type LOAD "" (with retry).\n' +
       'After load, the screen is focused and the pad may switch (e.g. GLAZX → WASD).\n' +
       'ay-beep is a 128K SNA (AY + beeper smoke). rainbow is a 48K attr-colour smoke (bright paper bands).\n\n' +
+      'Page reload soft-reattaches 64K RAM and restores the last Spectrum model + bundled Demo\n' +
+      '(MMU banks / tape position are not persisted — use Save .SNA / slots / #sna= for that).\n' +
+      'Gates speeds need a freshly Placed Z80CPU; after reload only Soft is available until Place again.\n\n' +
       'Teach overlay on first #demo= explains the Spectrum tab — dismiss and use the media bar.',
     figures: [
       { src: img51, caption: 'Demo dropdown listing bundled TAP/SNA entries.' },

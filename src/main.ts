@@ -48,13 +48,15 @@ import {
   syncSoftExpandForDivePath,
 } from './sim/softLab.js';
 import { decodeShareHash, encodeShareHash } from './sim/shareLink.js';
-import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
-import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT } from './machine/memoryMap.js';
+import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, RamComponent, SimState } from './sim/types.js';
+import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT, requiresMachineMap } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
+import { loadSpectrumSession } from './machine/spectrumSession.js';
 import { placeLabLedGateDecode } from './machine/labLedGateDecode.js';
 import { commandRomHexPrompt } from './machine/commandRom.js';
 import { LED_BLINK_ROM_BYTES } from './machine/ledBlinkRom.js';
 import { PORT_TTY_ROM_BYTES } from './machine/portTtyRom.js';
+import { LAB_REG_ROM_BYTES } from './machine/labRegRom.js';
 import { runSoftCommand } from './machine/softConsole.js';
 import { Camera, type Bounds } from './ui/Camera.js';
 import { showAlert, showChoice, showConfirm, showPrompt } from './ui/Dialog.js';
@@ -94,6 +96,53 @@ machinePanel.bindRunner(machineRunner);
 machineRunner.onReboot = () => {
   clearSoftLabState(topCircuit);
 };
+
+/**
+ * After autosave restore the folded Z80CPU chip has no live Z80Cpu handle —
+ * soft-reattach from TTY-linked (or largest) machine RAM so Run/Reboot/Load demo work.
+ */
+function findLinkedMachineRam(circuit: Circuit): RamComponent | null {
+  for (const c of circuit.components.values()) {
+    if (c.kind === 'tty' && c.ramId) {
+      const ram = circuit.components.get(c.ramId);
+      if (ram && ram.kind === 'ram' && requiresMachineMap(ram.addrBits)) return ram;
+    }
+  }
+  let best: RamComponent | null = null;
+  for (const c of circuit.components.values()) {
+    if (c.kind === 'ram' && requiresMachineMap(c.addrBits)) {
+      if (!best || c.addrBits > best.addrBits) best = c;
+    }
+  }
+  return best;
+}
+
+function reattachSoftMachine(_opts?: { openPanel?: boolean }): void {
+  const ram = findLinkedMachineRam(topCircuit);
+  if (!ram) {
+    machineRunner.detach();
+    if (machinePanel.attached) machinePanel.detach();
+    return;
+  }
+  // Project reload calls machinePanel.detach() which used to clear the runner
+  // binding — always re-bind so Run/Reboot/Load demo see machineRunner.
+  machinePanel.bindRunner(machineRunner);
+  if (!machineRunner.attached || machineRunner.machineRam !== ram) {
+    machineRunner.attachSoft(ram, { library });
+    machineRunner.boot();
+  }
+  // Sync panel.ram + show TTY — Load demo / Boot / draw require panel RAM.
+  machinePanel.attach(ram);
+  // 64K sessions are Spectrum machines; restore soft ULA so Run isn't a blank screen.
+  if (ram.addrBits >= 16 && ram.bytes.length >= 0x10000) {
+    const hint = loadSpectrumSession();
+    const model = hint?.model ?? '48';
+    void machinePanel
+      .restoreSpectrumSession({ model, demoId: hint?.demoId ?? null })
+      .catch((err) => console.warn(err));
+  }
+  machinePanel.refreshControls();
+}
 
 const memoryEditor = new MemoryEditor();
 const logicAnalyzer = new LogicAnalyzer();
@@ -154,6 +203,9 @@ const bootExampleId = parseExampleHash(location.hash);
 const bootSnaPending = hasSnaHash(location.hash);
 
 function applyLoadedProject(loaded: { topCircuit: Circuit; library: ChipLibrary }): void {
+  // Drop gate Inputs / soft host before wiping the circuit graph.
+  machineRunner.detach();
+  if (machinePanel.attached) machinePanel.detach();
   clearSoftExpandForced();
   topCircuit.components.clear();
   topCircuit.wires.clear();
@@ -170,6 +222,8 @@ function applyLoadedProject(loaded: { topCircuit: Circuit; library: ChipLibrary 
   // Soft Lab off (e.g. localStorage after reload): seed sequential Q nets so
   // COUNTER/REG don't sit at Z when Clear is already released.
   if (!isSoftLabEnabled()) armSoftLabToGatesPor(topCircuit, library);
+  // Folded machines lose the live Z80Cpu handle — soft-reattach from RAM.
+  reattachSoftMachine();
 }
 
 const restoredSync = bootDemoId || bootSnaPending || bootExampleId ? null : loadAutosaveSync();
@@ -784,10 +838,15 @@ document.addEventListener('keydown', (ev) => {
 });
 for (const panel of Array.from(document.querySelectorAll('#menubar .menu-panel'))) {
   panel.addEventListener('click', (ev: Event) => {
-    // Keep the menu open only for non-action chrome (section labels).
     const t = ev.target as HTMLElement;
+    // Nested Demo flyout trigger — keep File open.
+    if (t.closest('.menu-sub-trigger')) {
+      ev.preventDefault();
+      const sub = t.closest('.menu-sub');
+      if (sub) sub.classList.toggle('open');
+      return;
+    }
     if (t.closest('.menu-item')) {
-      // Close after the item's own handler runs (bubble phase).
       queueMicrotask(() => {
         closeAllMenus();
         menuBarArmed = false;
@@ -1601,6 +1660,67 @@ function placePortTtyMachine(): void {
 
 document.getElementById('add-port-tty')?.addEventListener('click', () => {
   placePortTtyMachine();
+});
+
+/** Soft Lab REG8 + COUNTER4 via ports 0x41 / 0x42 (explicit bind, no auto-scan). */
+function placeLabRegMachine(): void {
+  const pos = snap(camera.screenToWorld({ x: vw() / 2, y: vh() / 2 }, vw(), vh()));
+  machineRunner.detach();
+
+  const beforeIds = new Set(editor.circuit.components.keys());
+  const cpu = buildZ80Cpu(editor.circuit, library, MACHINE_ADDR_BITS, LAB_REG_ROM_BYTES, pos);
+  const placedIds = newComponentIdSet(editor.circuit, beforeIds);
+
+  const simTick = () => {
+    const flat = flatten(topCircuit, library);
+    const flatNetMap = flat.computeNets();
+    lastFlatNetMap = flatNetMap;
+    simState = step(flat, flatNetMap, simState);
+  };
+  machinePanel.attach(cpu.ram);
+  machinePanel.bindRunner(machineRunner);
+  machineRunner.attach(editor.circuit, library, cpu, simTick, {
+    readPin: (pin) => {
+      if (!lastFlatNetMap) return 'Z';
+      const net = lastFlatNetMap.netOf.get(pin.id);
+      if (!net) return 'Z';
+      return simState.levelOf.get(net) ?? 'Z';
+    },
+  });
+
+  foldZ80CpuLeavingRam(editor.circuit, library, placedIds, pos);
+  packFoldedMachine(editor.circuit, pos);
+  replaceLongWiresWithLabels(editor.circuit, 24);
+
+  const labX = pos.x + CHIP_INSTANCE_WIDTH / 2 + 200;
+  const labY = pos.y - 40;
+  const regDef = library.findByName('REG8');
+  const ctrDef = library.findByName('COUNTER4');
+  if (!regDef || !ctrDef) {
+    void showAlert('Lab REG/COUNTER demo needs Soft Lab REG8 and COUNTER4 in the library.');
+    return;
+  }
+  const reg = makeChipInstance(editor.circuit, regDef, { x: labX, y: labY });
+  const ctr = makeChipInstance(editor.circuit, ctrDef, { x: labX + 160, y: labY });
+  makeLabel(editor.circuit, 'LAB_REG', { x: labX + 20, y: labY - 24 });
+  makeLabel(editor.circuit, 'LAB_CTR', { x: labX + 180, y: labY - 24 });
+  machineRunner.bindLabReg(reg);
+  machineRunner.bindLabCounter(ctr);
+
+  machineRunner.boot();
+  machineRunner.setSpeed('soft');
+  machineRunner.setRunning(true);
+  makeTty(editor.circuit, { x: pos.x + 120, y: pos.y - 80 }, cpu.ram.id);
+  machinePanel.refreshControls();
+  machinePanel.draw();
+
+  camera.fit(circuitBounds(editor.circuit), vw(), vh());
+  refreshChipPalette();
+  uiDirty = true;
+}
+
+document.getElementById('add-lab-reg')?.addEventListener('click', () => {
+  placeLabRegMachine();
 });
 
 document.getElementById('add-spectrum')?.addEventListener('click', () => {
@@ -2744,7 +2864,22 @@ canvas.addEventListener('dblclick', async (ev) => {
   } else if (hit.kind === 'tty') {
     const ramComp = hit.ramId ? editor.circuit.components.get(hit.ramId) : undefined;
     if (ramComp && ramComp.kind === 'ram') {
+      // Ensure Soft runner is live after page reload (panel alone is not enough).
+      machinePanel.bindRunner(machineRunner);
+      if (!machineRunner.attached || machineRunner.machineRam !== ramComp) {
+        machineRunner.attachSoft(ramComp, { library });
+        machineRunner.boot();
+      }
       machinePanel.attach(ramComp);
+      if (ramComp.addrBits >= 16 && ramComp.bytes.length >= 0x10000 && !machineRunner.isSpectrum) {
+        const hint = loadSpectrumSession();
+        void machinePanel
+          .restoreSpectrumSession({
+            model: hint?.model ?? '48',
+            demoId: hint?.demoId ?? null,
+          })
+          .catch((err) => console.warn(err));
+      }
     } else {
       await showAlert('TTY is not linked to a machine RAM. Place a Z80CPU (≥12 addr bits) first.');
     }

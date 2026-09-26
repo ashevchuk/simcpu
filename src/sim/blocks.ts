@@ -914,6 +914,190 @@ function getPairCommitBitChip(library: ChipLibrary): ChipDef {
 }
 
 /**
+ * One bit of A's 14-deep data MUX cascade (INC/DEC → DAA → rot → EX AF → IN →
+ * NEG → RRD/RLD → IN (C) → LD A,R/I → SET/RES → CB rot → BUS → reset).
+ * Ports expose every sel + override; `ioIn` is shared by IN A,(n) and IN r,(C).
+ */
+function makeADataBitChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const muxDef = getMux2Chip(library);
+  const placeMux = (x: number) => {
+    const inst = makeChipInstance(scratch, muxDef, { x, y: 0 });
+    return {
+      sel: inst.pins[muxDef.ports[0]!]!,
+      in0: inst.pins[muxDef.ports[1]!]!,
+      in1: inst.pins[muxDef.ports[2]!]!,
+      out: inst.pins[muxDef.ports[3]!]!,
+    };
+  };
+  const r8 = placeMux(0);
+  const daa = placeMux(200);
+  wire(scratch, r8.out, daa.in0);
+  const rot = placeMux(400);
+  wire(scratch, daa.out, rot.in0);
+  const ex = placeMux(600);
+  wire(scratch, rot.out, ex.in0);
+  const inn = placeMux(800);
+  wire(scratch, ex.out, inn.in0);
+  const neg = placeMux(1000);
+  wire(scratch, inn.out, neg.in0);
+  const rrd = placeMux(1200);
+  wire(scratch, neg.out, rrd.in0);
+  const inRc = placeMux(1400);
+  wire(scratch, rrd.out, inRc.in0);
+  wire(scratch, inn.in1, inRc.in1); // shared ioIn
+  const ldAR = placeMux(1600);
+  wire(scratch, inRc.out, ldAR.in0);
+  const ldAI = placeMux(1800);
+  wire(scratch, ldAR.out, ldAI.in0);
+  const setRes = placeMux(2000);
+  wire(scratch, ldAI.out, setRes.in0);
+  const cbRot = placeMux(2200);
+  wire(scratch, setRes.out, cbRot.in0);
+  const bus = placeMux(2400);
+  wire(scratch, cbRot.out, bus.in0);
+  const reset = placeMux(2600);
+  wire(scratch, bus.out, reset.in0);
+
+  return foldExposing(scratch, 'A_DATA_BIT', library, [
+    { pin: r8.sel, isOutput: false, portName: 'selIncDec' },
+    { pin: daa.sel, isOutput: false, portName: 'selDaa' },
+    { pin: rot.sel, isOutput: false, portName: 'selRotAcc' },
+    { pin: ex.sel, isOutput: false, portName: 'selExAfAf' },
+    { pin: inn.sel, isOutput: false, portName: 'selIn' },
+    { pin: neg.sel, isOutput: false, portName: 'selNeg' },
+    { pin: rrd.sel, isOutput: false, portName: 'selRrdRld' },
+    { pin: inRc.sel, isOutput: false, portName: 'selInRc' },
+    { pin: ldAR.sel, isOutput: false, portName: 'selLdAR' },
+    { pin: ldAI.sel, isOutput: false, portName: 'selLdAI' },
+    { pin: setRes.sel, isOutput: false, portName: 'selSetRes' },
+    { pin: cbRot.sel, isOutput: false, portName: 'selCbRot' },
+    { pin: bus.sel, isOutput: false, portName: 'selBus' },
+    { pin: reset.sel, isOutput: false, portName: 'selReset' },
+    { pin: r8.in0, isOutput: false, portName: 'alu' },
+    { pin: r8.in1, isOutput: false, portName: 'r8Result' },
+    { pin: daa.in1, isOutput: false, portName: 'daaResult' },
+    { pin: rot.in1, isOutput: false, portName: 'rotAccResult' },
+    { pin: ex.in1, isOutput: false, portName: 'apOld' },
+    { pin: inn.in1, isOutput: false, portName: 'ioIn' },
+    { pin: neg.in1, isOutput: false, portName: 'neg' },
+    { pin: rrd.in1, isOutput: false, portName: 'rrdRldOrHold' },
+    { pin: ldAR.in1, isOutput: false, portName: 'regR' },
+    { pin: ldAI.in1, isOutput: false, portName: 'regI' },
+    { pin: setRes.in1, isOutput: false, portName: 'setResResult' },
+    { pin: cbRot.in1, isOutput: false, portName: 'cbRotResult' },
+    { pin: bus.in1, isOutput: false, portName: 'bus' },
+    { pin: reset.in1, isOutput: false, portName: 'reset0' },
+    { pin: reset.out, isOutput: true, portName: 'out' },
+  ]);
+}
+
+const aDataBitDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getADataBitChip(library: ChipLibrary): ChipDef {
+  let def = aDataBitDefs.get(library);
+  if (!def) {
+    def = makeADataBitChip(library);
+    aDataBitDefs.set(library, def);
+  }
+  return def;
+}
+
+/**
+ * SP half-byte commit (LD SP,nn / ED LD SP,(nn)): inner mux picks bus vs hold,
+ * outer mux picks that vs passthrough when either half writes.
+ * Ports: selHold, selAny, busBit, holdQ, passthrough → out.
+ */
+function makeSpHalfCommitBitChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const muxDef = getMux2Chip(library);
+  const fresh = makeChipInstance(scratch, muxDef, { x: 0, y: 0 });
+  const outer = makeChipInstance(scratch, muxDef, { x: 200, y: 0 });
+  const fSel = fresh.pins[muxDef.ports[0]!]!;
+  const fIn0 = fresh.pins[muxDef.ports[1]!]!;
+  const fIn1 = fresh.pins[muxDef.ports[2]!]!;
+  const fOut = fresh.pins[muxDef.ports[3]!]!;
+  const oSel = outer.pins[muxDef.ports[0]!]!;
+  const oIn0 = outer.pins[muxDef.ports[1]!]!;
+  const oIn1 = outer.pins[muxDef.ports[2]!]!;
+  const oOut = outer.pins[muxDef.ports[3]!]!;
+  wire(scratch, fOut, oIn1);
+  return foldExposing(scratch, 'SP_HALF_COMMIT_BIT', library, [
+    { pin: fSel, isOutput: false, portName: 'selHold' },
+    { pin: oSel, isOutput: false, portName: 'selAny' },
+    { pin: fIn0, isOutput: false, portName: 'busBit' },
+    { pin: fIn1, isOutput: false, portName: 'holdQ' },
+    { pin: oIn0, isOutput: false, portName: 'passthrough' },
+    { pin: oOut, isOutput: true, portName: 'out' },
+  ]);
+}
+
+const spHalfCommitBitDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getSpHalfCommitBitChip(library: ChipLibrary): ChipDef {
+  let def = spHalfCommitBitDefs.get(library);
+  if (!def) {
+    def = makeSpHalfCommitBitChip(library);
+    spHalfCommitBitDefs.set(library, def);
+  }
+  return def;
+}
+
+/**
+ * One bit of F's flag MUX cascade. Every layer is always present; call sites
+ * idle unused sels (tie GND) for bits that skip a layer.
+ */
+function makeFFlagBitChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const muxDef = getMux2Chip(library);
+  const placeMux = (x: number) => {
+    const inst = makeChipInstance(scratch, muxDef, { x, y: 0 });
+    return {
+      sel: inst.pins[muxDef.ports[0]!]!,
+      in0: inst.pins[muxDef.ports[1]!]!,
+      in1: inst.pins[muxDef.ports[2]!]!,
+      out: inst.pins[muxDef.ports[3]!]!,
+    };
+  };
+  const muxes = Array.from({ length: 20 }, (_, i) => placeMux(i * 200));
+  for (let i = 1; i < muxes.length; i++) {
+    wire(scratch, muxes[i - 1]!.out, muxes[i]!.in0);
+  }
+  const selNames = [
+    'selAlu', 'selR8', 'selAddHl', 'selRotAcc', 'selDaa', 'selLdBlock', 'selCpBlock', 'selInBlock', 'selOutBlock',
+    'selNeg', 'selAdcSbcHl', 'selRrdRld', 'selInRc', 'selLdAIr', 'selBitReg', 'selBitHl', 'selBitIxIy', 'selCbRot', 'selExAfAf', 'selBus',
+  ];
+  const freshNames = [
+    'aluFresh', 'r8Fresh', 'addHlFresh', 'rotAccFresh', 'daaFresh', 'ldBlockFresh', 'cpBlockFresh', 'inBlockFresh', 'outBlockFresh',
+    'negFresh', 'adcSbcHlFresh', 'rrdRldFresh', 'inRcFresh', 'ldAIrFresh', 'bitRegFresh', 'bitHlFresh', 'bitIxIyFresh', 'cbRotFresh', 'fpOld', 'busBit',
+  ];
+  const ports: { pin: Pin; isOutput: boolean; portName: string }[] = [];
+  for (let i = 0; i < muxes.length; i++) {
+    ports.push({ pin: muxes[i]!.sel, isOutput: false, portName: selNames[i]! });
+  }
+  ports.push({ pin: muxes[0]!.in0, isOutput: false, portName: 'holdQ' });
+  for (let i = 0; i < muxes.length; i++) {
+    ports.push({ pin: muxes[i]!.in1, isOutput: false, portName: freshNames[i]! });
+  }
+  ports.push({ pin: muxes[muxes.length - 1]!.out, isOutput: true, portName: 'out' });
+  return foldExposing(scratch, 'F_FLAG_BIT', library, ports);
+}
+
+const fFlagBitDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getFFlagBitChip(library: ChipLibrary): ChipDef {
+  let def = fFlagBitDefs.get(library);
+  if (!def) {
+    def = makeFFlagBitChip(library);
+    fFlagBitDefs.set(library, def);
+  }
+  return def;
+}
+
+/**
  * Sequential left-associated OR of `n` inputs (n>=2). Ports: i0..i{n-1}, out.
  * Scratch uses nested OR stdcell instances (no gate placer on the scratch).
  */
@@ -1568,9 +1752,8 @@ export interface Z80Cpu {
   // and A, respectively), valid only while `ioRead`/`ioWrite` is high;
   // `ioPortDataIn` is a genuine external sink, the identical contract
   // `Register.d` already uses — a caller's own device drives it, this file
-  // never does. Real Z80 hardware also puts A on the *upper* half of a
-  // 16-bit port address; this slice only ever exposes `n` on `ioPortAddr`
-  // — a real, documented simplification.
+  // never does. Port address is 16-bit Soft parity: low = bus/`n`/`C`,
+  // high = `A` (imm) or `B` (IN/OUT (C) / block). Lab LED still matches low 8.
   ioPortAddr: Pin[];
   ioPortDataOut: Pin[];
   ioPortDataIn: Pin[];
@@ -1586,6 +1769,8 @@ export interface Z80Cpu {
   wr: Pin;
   /** MREQ ≈ (RAM OE ∨ RAM WE) ∧ ¬IORQ. */
   mreq: Pin;
+  /** Nested 4-T bus cycle busy — instruction ring held while high. */
+  busBusy: Pin;
 }
 
 /**
@@ -2746,9 +2931,43 @@ function buildZ80CpuInner(
   const eiArm2 = buildRegister(parent, library, 1, { x: pos.x + 2400, y: pos.y + 4000 });
   const alu = buildAlu(parent, library, 8, { x: pos.x + 3400, y: pos.y + 2400 });
   const fsm = buildRingCounter(parent, library, 10, { x: pos.x, y: pos.y + 3600 }); // FETCH/INCREMENT/EXEC1-EXEC8 — see the doc comment above ("x=11: SP, PUSH/POP, RET, RST n" for why a 4th phase exists; "x=00, z=1: LD dd,nn" for why a 5th and 6th do too; "x=11: CALL nn" for why a 7th and 8th do too; DD/FD CB SET/RES/rot (IX+d)/(IY+d) for why a 9th and 10th do too — BIT fit in 8, but read+write after op needs PHASE8 and op-advance moved to PHASE9). Widening is, again, a pure parameter change — buildRingCounter is fully generic (any N>=2), and every existing PHASE0-PHASE7 label keeps its exact ring position, the two new phases appended after EXEC6, before the wrap back to FETCH.
+  // Nested 4-T bus-cycle FSM (T0–T3). Both rings share phaseClk; the
+  // instruction ring is *held* via load=1 + d←phase while busBusy (no
+  // gated clock — switch-level AND on clk edges is unreliable here).
+  const busCycle = buildRingCounter(parent, library, 4, { x: pos.x - 500, y: pos.y + 3600 });
+  const busBusyReg = buildRegister(parent, library, 1, { x: pos.x - 500, y: pos.y + 4200 });
+  const phaseClkHub = makeLabel(parent, 'PCLK', { x: pos.x - 80, y: pos.y + 3550 }).pins.net;
+  wire(parent, phaseClkHub, busCycle.clk);
+  wire(parent, phaseClkHub, fsm.clk);
+  wire(parent, phaseClkHub, busBusyReg.clk);
+  tiePowerRail(parent, 'VCC', busBusyReg.we);
   const dec = buildZ80Decoder(parent, ir.q, { x: pos.x + 8600, y: pos.y });
   const muxDef = getMux2Chip(library);
   const bufDef = getTriBufChip(library);
+  // load = fsmLoadExt (boot seed). busBusy tracks nested IORQ windows but
+  // does *not* freeze the instruction ring yet — holding PHASE while
+  // stack/register WE stay phase-gated re-fires those WE on every dataClk
+  // of the nest (SP -= 4 on INTACK). Soft intAckWaits(4) + busBusy pin give
+  // Soft↔gate timing parity; full ring-hold needs one-shot WE first.
+  const fsmLoadOr = buildOr(parent, { x: pos.x - 200, y: pos.y + 3500 });
+  tiePowerRail(parent, 'GND', fsmLoadOr.b);
+  wire(parent, fsmLoadOr.out, fsm.load);
+  wire(parent, fsmLoadOr.a, busCycle.load); // seed bus T0 with the same external load
+  wire(parent, fsmLoadOr.a, busCycle.d[0]!); // one-hot T0 when seeding
+  for (let i = 1; i < 4; i++) tiePowerRail(parent, 'GND', busCycle.d[i]!);
+  const notLoadExtEarly = buildNot(parent, { x: pos.x - 280, y: pos.y + 3480 });
+  wire(parent, fsmLoadOr.a, notLoadExtEarly.in);
+  const holdSel = buildAnd(parent, { x: pos.x - 220, y: pos.y + 3480 });
+  tiePowerRail(parent, 'GND', holdSel.a); // hold path reserved (wire busy here later)
+  wire(parent, notLoadExtEarly.out, holdSel.b);
+  const fsmDExt: Pin[] = [];
+  for (let i = 0; i < 10; i++) {
+    const holdMux = makeChipInstance(parent, muxDef, { x: pos.x - 100, y: pos.y + 3600 + i * 40 });
+    wire(parent, holdSel.out, holdMux.pins[muxDef.ports[0]!]!);
+    fsmDExt.push(holdMux.pins[muxDef.ports[1]!]!); // in0: external seed
+    wire(parent, fsm.phase[i]!, holdMux.pins[muxDef.ports[2]!]!); // in1: hold (idle)
+    wire(parent, holdMux.pins[muxDef.ports[3]!]!, fsm.d[i]!);
+  }
 
   // This composite is dense enough (100+ internal connections, several
   // signals fanned out across the whole coordinate space — CLK to 11
@@ -2941,12 +3160,16 @@ function buildZ80CpuInner(
   const irqServingAny = buildOr(parent, { x: pos.x + 2350, y: pos.y + 4440 });
   wire(parent, irqServingIntNmi.out, irqServingAny.a);
   wire(parent, im2Serving.q[0]!, irqServingAny.b);
-  // Widen PC-suppress with INTACK wait so PHASE1 stays held while irqBus is stable.
+  // Widen PC-suppress with INTACK wait / nested busBusy so the ring stays
+  // held while irqBus is stable across the 4-T ack window.
   const irqOrIntAck = buildOr(parent, { x: pos.x + 2400, y: pos.y + 4420 });
   wire(parent, irqServingAny.out, irqOrIntAck.a);
   wire(parent, intAckServing.q[0]!, irqOrIntAck.b);
+  const irqOrBusBusy = buildOr(parent, { x: pos.x + 2420, y: pos.y + 4420 });
+  wire(parent, irqOrIntAck.out, irqOrBusBusy.a);
+  wire(parent, busBusyReg.q[0]!, irqOrBusBusy.b);
   const notIntServing = buildNot(parent, { x: pos.x + 2450, y: pos.y + 4440 });
-  wire(parent, irqOrIntAck.out, notIntServing.in);
+  wire(parent, irqOrBusBusy.out, notIntServing.in);
   tieToLabel('NOT_INT_SERVING', notIntServing.out, { x: pos.x + 2550, y: pos.y + 4440 }); // PC PHASE1 suppress
   tieToLabel('INT_SERVING', intServing.q[0]!, { x: pos.x + 2550, y: pos.y + 4420 });
   tieToLabel('NMI_SERVING', nmiServing.q[0]!, { x: pos.x + 2550, y: pos.y + 4400 });
@@ -9439,124 +9662,46 @@ function buildZ80CpuInner(
   // lives much further down, well past where `wrapWithPairCommit` and the
   // rest of this composite's second half are defined.
   const ioPortDataIn: Pin[] = [];
+  const aDataBitDef = getADataBitChip(library);
   for (let i = 0; i < 8; i++) {
-    // INC A/DEC A (x=00, z=4/z=5, y=7): a layer ahead of srcMux's own in0,
-    // same "mux ahead of the existing mux's input" shape F's own R8 layer
-    // above uses — alu.out[i] (x=10's own result) stays the default,
-    // R8RESULT{i} (this group's own shared adder — see "x=00, z=4/z=5:
-    // INC r/DEC r" above) wins only when INCDEC_A_NOW fires.
-    const r8AMux = makeChipInstance(parent, muxDef, { x: pos.x + 4450, y: pos.y + 1750 + i * 100 });
-    tieToLabel('INCDEC_A_NOW', r8AMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4350, y: pos.y + 1750 + i * 100 });
-    wire(parent, alu.out[i]!, r8AMux.pins[muxDef.ports[1]!]!); // in0: normal ALU-group execution
-    tieToLabel(`R8RESULT${i}`, r8AMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4350, y: pos.y + 1770 + i * 100 }); // in1: this group's own INC/DEC result
+    const bit = makeChipInstance(parent, aDataBitDef, { x: pos.x + 4450, y: pos.y + 1750 + i * 100 });
+    const p = (name: string) => bit.pins[name]!;
+    const y = pos.y + 1750 + i * 100;
+    tieToLabel('INCDEC_A_NOW', p('selIncDec'), { x: pos.x + 4350, y });
+    tieToLabel('DAA_NOW', p('selDaa'), { x: pos.x + 4360, y: y + 15 });
+    tieToLabel('ROTACC_A_NOW', p('selRotAcc'), { x: pos.x + 4370, y: y + 25 });
+    tieToLabel('EX_AFAF_NOW', p('selExAfAf'), { x: pos.x + 4385, y: y + 35 });
+    tieToLabel('IN_NOW', p('selIn'), { x: pos.x + 4392, y: y + 40 });
+    tieToLabel('NEG_NOW', p('selNeg'), { x: pos.x + 4396, y: y + 45 });
+    tieToLabel('RRDRLD_COMMIT_NOW', p('selRrdRld'), { x: pos.x + 4398, y: y + 48 });
+    tieToLabel('INRC_WE_A_NOW', p('selInRc'), { x: pos.x + 4399, y: y + 49 });
+    tieToLabel('LDAR_NOW', p('selLdAR'), { x: pos.x + 4400, y: y + 49 });
+    tieToLabel('LDAI_NOW', p('selLdAI'), { x: pos.x + 4401, y: y + 49 });
+    tieToLabel('SETRES_WE_A_NOW', p('selSetRes'), { x: pos.x + 4402, y: y + 49 });
+    tieToLabel('CBROT_WE_A_NOW', p('selCbRot'), { x: pos.x + 4402.5, y: y + 49 });
+    wire(parent, isBusToA.out, p('selBus'));
+    if (i === 0) aReset = p('selReset');
+    else wire(parent, aReset, p('selReset'));
 
-    // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) is a
-    // second layer ahead of srcMux's own in0, the same shape r8AMux just
-    // above uses: `DAARESULT{i}` (the corrected accumulator) wins only when
-    // `DAA_NOW` fires.
-    const daaAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4460, y: pos.y + 1765 + i * 100 });
-    tieToLabel('DAA_NOW', daaAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4360, y: pos.y + 1765 + i * 100 });
-    wire(parent, r8AMux.pins[muxDef.ports[3]!]!, daaAMux.pins[muxDef.ports[1]!]!); // in0: the layer above (ALU group, or INC/DEC A)
-    tieToLabel(`DAARESULT${i}`, daaAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4360, y: pos.y + 1785 + i * 100 }); // in1: DAA's own corrected result
-
-    // RLCA/RRCA/RLA/RRA/CPL (x=00, z=7 — see the doc comment above) are a
-    // third layer ahead of srcMux's own in0, identical shape to r8AMux
-    // just above: `ROTACCRESULT{i}` (this group's own freshly-rotated-or-
-    // complemented bit) wins only when `ROTACC_A_NOW` fires (SCF/CCF never
-    // assert it — neither one ever touches `A` at all).
-    const rotAccAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4470, y: pos.y + 1775 + i * 100 });
-    tieToLabel('ROTACC_A_NOW', rotAccAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4370, y: pos.y + 1775 + i * 100 });
-    wire(parent, daaAMux.pins[muxDef.ports[3]!]!, rotAccAMux.pins[muxDef.ports[1]!]!); // in0: the layer above (ALU group, INC/DEC A, or DAA)
-    tieToLabel(`ROTACCRESULT${i}`, rotAccAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4370, y: pos.y + 1795 + i * 100 }); // in1: RLCA/RRCA/RLA/RRA/CPL's own fresh result
-
-    // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) is a third
-    // layer ahead of srcMux's own in0: `APOLD{i}` (A''s own old value,
-    // published alongside `aP`'s own creation) wins only when
-    // `EX_AFAF_NOW` fires.
-    const exAfAfAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4485, y: pos.y + 1785 + i * 100 });
-    tieToLabel('EX_AFAF_NOW', exAfAfAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4385, y: pos.y + 1785 + i * 100 });
-    wire(parent, rotAccAMux.pins[muxDef.ports[3]!]!, exAfAfAMux.pins[muxDef.ports[1]!]!); // in0: the layer above (ALU group, INC/DEC A, DAA, or RLCA/RRCA/RLA/RRA/CPL)
-    tieToLabel(`APOLD${i}`, exAfAfAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4385, y: pos.y + 1805 + i * 100 }); // in1: A''s own old value
-
-    // IN A,(n) (x=11, z=3, y=3 — see "x=11: IN A,(n) / OUT (n),A" above) is
-    // a fourth layer ahead of srcMux's own in0: `in1` here *is*
-    // `ioPortDataIn[i]`, the raw external-sink pin itself, not a value
-    // read off of it — the same "this mux's own in1 port pin is the
-    // external contract" shape `Register.d` already establishes.
-    const inMux = makeChipInstance(parent, muxDef, { x: pos.x + 4492, y: pos.y + 1790 + i * 100 });
-    tieToLabel('IN_NOW', inMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4392, y: pos.y + 1790 + i * 100 });
-    wire(parent, exAfAfAMux.pins[muxDef.ports[3]!]!, inMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-    ioPortDataIn.push(inMux.pins[muxDef.ports[2]!]!); // in1: the caller's own I/O device drives this
-
-    // NEG (see "x=00, z=4: NEG" above) is a fifth layer ahead of
-    // srcMux's own in0: `negAdder`'s own fresh `0-A` result wins only
-    // when `NEG_NOW` fires.
-    const negAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4496, y: pos.y + 1795 + i * 100 });
-    tieToLabel('NEG_NOW', negAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4396, y: pos.y + 1795 + i * 100 });
-    wire(parent, inMux.pins[muxDef.ports[3]!]!, negAMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-    wire(parent, negAdder.out[i]!, negAMux.pins[muxDef.ports[2]!]!); // in1: 0-A
-
-    // RRD/RLD (see "x=01, z=7: RRD/RLD" above) is a sixth layer, on
-    // *every* bit, not just the low nibble it actually rotates: `A`'s
-    // own `we` commits the whole byte in one edge, so the high nibble
-    // needs an explicit "hold `a.q`" layer here too — found live,
-    // chasing this instruction's own repro: leaving no layer at all for
-    // `i>=4` doesn't hold anything by itself, it just falls through to
-    // whatever `r8AMux`'s own `in0` carries at the *bottom* of this
-    // chain (`alu.out[i]`, the shared ALU's own live, unrelated
-    // computation) — the same "a mux with no active select still passes
-    // its `in0` straight through" fact, just newly consequential here
-    // because every earlier feature touching a subset of `A`'s bits
-    // happened to touch *all eight*, so this exact gap never showed
-    // itself before.
-    const rrdRldAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4498, y: pos.y + 1798 + i * 100 });
-    tieToLabel('RRDRLD_COMMIT_NOW', rrdRldAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4398, y: pos.y + 1798 + i * 100 });
-    wire(parent, negAMux.pins[muxDef.ports[3]!]!, rrdRldAMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-    if (i < 4) tieToLabel(`RRDRLD_NEWALOW${i}`, rrdRldAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4398, y: pos.y + 1818 + i * 100 });
-    else wire(parent, a.q[i]!, rrdRldAMux.pins[muxDef.ports[2]!]!); // in1: hold — RRD/RLD never touches A's high nibble
-
-    // IN r,(C) into A (see "x=01, z=0: IN r,(C)" above) — same raw
-    // `ioPortDataIn` contract `IN A,(n)`'s own layer already uses, just
-    // gated by this instruction's own y=7 term instead of `IN_NOW`.
-    const inRcAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4499, y: pos.y + 1799 + i * 100 });
-    tieToLabel('INRC_WE_A_NOW', inRcAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4399, y: pos.y + 1799 + i * 100 });
-    wire(parent, rrdRldAMux.pins[muxDef.ports[3]!]!, inRcAMux.pins[muxDef.ports[1]!]!);
-    wire(parent, ioPortDataIn[i]!, inRcAMux.pins[muxDef.ports[2]!]!);
-
-    // LD A,I / LD A,R (see "x=01, z=7, y=0..3") — I or R into A. Two
-    // stacked layers: pick R over the held path when LDAR fires, else I
-    // when LDAI fires. Mutually exclusive by one-hot y.
-    const ldARMux = makeChipInstance(parent, muxDef, { x: pos.x + 4500, y: pos.y + 1799 + i * 100 });
-    tieToLabel('LDAR_NOW', ldARMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4400, y: pos.y + 1799 + i * 100 });
-    wire(parent, inRcAMux.pins[muxDef.ports[3]!]!, ldARMux.pins[muxDef.ports[1]!]!);
-    wire(parent, regR.q[i]!, ldARMux.pins[muxDef.ports[2]!]!);
-    const ldAIMux = makeChipInstance(parent, muxDef, { x: pos.x + 4501, y: pos.y + 1799 + i * 100 });
-    tieToLabel('LDAI_NOW', ldAIMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4401, y: pos.y + 1799 + i * 100 });
-    wire(parent, ldARMux.pins[muxDef.ports[3]!]!, ldAIMux.pins[muxDef.ports[1]!]!);
-    wire(parent, regI.q[i]!, ldAIMux.pins[muxDef.ports[2]!]!);
-
-    const setResAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4502, y: pos.y + 1799 + i * 100 });
-    tieToLabel('SETRES_WE_A_NOW', setResAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4402, y: pos.y + 1799 + i * 100 });
-    wire(parent, ldAIMux.pins[muxDef.ports[3]!]!, setResAMux.pins[muxDef.ports[1]!]!);
-    tieToLabel(`SETRESRESULT${i}`, setResAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4402, y: pos.y + 1819 + i * 100 });
-
-    const cbRotAMux = makeChipInstance(parent, muxDef, { x: pos.x + 4502.5, y: pos.y + 1799 + i * 100 });
-    tieToLabel('CBROT_WE_A_NOW', cbRotAMux.pins[muxDef.ports[0]!]!, { x: pos.x + 4402.5, y: pos.y + 1799 + i * 100 });
-    wire(parent, setResAMux.pins[muxDef.ports[3]!]!, cbRotAMux.pins[muxDef.ports[1]!]!);
-    tieToLabel(`CBROTRESULT${i}`, cbRotAMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4402.5, y: pos.y + 1819 + i * 100 });
-
-    const srcMux = makeChipInstance(parent, muxDef, { x: pos.x + 4503, y: pos.y + 1800 + i * 100 });
-    wire(parent, isBusToA.out, srcMux.pins[muxDef.ports[0]!]!); // sel: LD A,z or POP AF's high byte, now?
-    wire(parent, cbRotAMux.pins[muxDef.ports[3]!]!, srcMux.pins[muxDef.ports[1]!]!); // in0: the layer above (… SET/RES A, or CB rotate A)
-    tieToLabel(`BUS${i}`, srcMux.pins[muxDef.ports[2]!]!, { x: pos.x + 4400, y: pos.y + 1800 + i * 100 }); // in1: the bus (LD's source, or POP's)
-
-    const resetMux = makeChipInstance(parent, muxDef, { x: pos.x + 4600, y: pos.y + 1800 + i * 100 });
-    const sel = resetMux.pins[muxDef.ports[0]!]!;
-    if (i === 0) aReset = sel;
-    else wire(parent, aReset, sel);
-    wire(parent, srcMux.pins[muxDef.ports[3]!]!, resetMux.pins[muxDef.ports[1]!]!); // in0: normal (ALU, LD, or INC/DEC A, per srcMux above)
-    tiePowerRail(parent, 'GND', resetMux.pins[muxDef.ports[2]!]!); // in1: reset — force 0
-    wire(parent, resetMux.pins[muxDef.ports[3]!]!, a.d[i]!);
+    wire(parent, alu.out[i]!, p('alu'));
+    tieToLabel(`R8RESULT${i}`, p('r8Result'), { x: pos.x + 4350, y: y + 20 });
+    tieToLabel(`DAARESULT${i}`, p('daaResult'), { x: pos.x + 4360, y: y + 35 });
+    tieToLabel(`ROTACCRESULT${i}`, p('rotAccResult'), { x: pos.x + 4370, y: y + 45 });
+    tieToLabel(`APOLD${i}`, p('apOld'), { x: pos.x + 4385, y: y + 55 });
+    ioPortDataIn.push(p('ioIn'));
+    wire(parent, negAdder.out[i]!, p('neg'));
+    if (i < 4) {
+      tieToLabel(`RRDRLD_NEWALOW${i}`, p('rrdRldOrHold'), { x: pos.x + 4398, y: y + 68 });
+    } else {
+      wire(parent, a.q[i]!, p('rrdRldOrHold'));
+    }
+    wire(parent, regR.q[i]!, p('regR'));
+    wire(parent, regI.q[i]!, p('regI'));
+    tieToLabel(`SETRESRESULT${i}`, p('setResResult'), { x: pos.x + 4402, y: y + 69 });
+    tieToLabel(`CBROTRESULT${i}`, p('cbRotResult'), { x: pos.x + 4402.5, y: y + 69 });
+    tieToLabel(`BUS${i}`, p('bus'), { x: pos.x + 4400, y: y + 50 });
+    tiePowerRail(parent, 'GND', p('reset0'));
+    wire(parent, p('out'), a.d[i]!);
   }
   // A WE OR — sequential left-associated OR of every A write-enable term
   // (same order as the former aWeStage…aWeFinal chain).
@@ -10024,14 +10169,12 @@ function buildZ80CpuInner(
   // x=11, z=3, y=3: IN A,(n), y=2: OUT (n),A (real 0xDB/0xD3 — see "x=11:
   // IN A,(n) / OUT (n),A" below). This simulator invents its own I/O-port
   // concept from scratch here — nothing in this file has ever needed one
-  // before — so the interface is deliberately minimal: `ioPortAddr` (a
-  // live tap of the bus, valid only while `ioRead`/`ioWrite` fires),
+  // before — so the interface is deliberately minimal: `ioPortAddr` (16-bit
+  // Soft parity: low = bus/`n`/`C`, high = `A` imm or `B` for (C)/block),
   // `ioPortDataOut` (a live tap of `A`, valid only while `ioWrite` fires),
   // `ioPortDataIn` (a genuinely external input pin — whatever device a
   // caller wires up there is expected to respond to `ioRead` combination-
-  // ally), and the two strobes themselves. Real Z80 hardware also puts `A`
-  // on the *upper* half of a 16-bit port address (`A:n`); this slice only
-  // ever exposes `n` — a real, documented simplification, not an oversight.
+  // ally), and the two strobes themselves.
   const isOutImm = buildAnd(parent, { x: pos.x + 11500, y: pos.y - 2100 });
   wire(parent, isX11Z3.out, isOutImm.a);
   tieToLabel('DECY2', isOutImm.b, { x: pos.x + 11400, y: pos.y - 2100 });
@@ -10050,28 +10193,38 @@ function buildZ80CpuInner(
   tieToLabel('PHASE3', ioImmAdvanceNow.b, { x: pos.x + 11500, y: pos.y - 2180 });
   tieToLabel('IOIMM_ADVANCE_NOW', ioImmAdvanceNow.out, { x: pos.x + 11700, y: pos.y - 2180 }); // anchor — pcHold (far) reads this
 
-  // Nested I/O window (imm): PHASE2 = addr/data setup + strobe (T1), PHASE3 =
-  // hold strobe while PC advances (T2). Classical IORQ∧WR/RD tracks this
-  // nest inside the 10-phase instruction ring.
-  const ioPhase = buildOr(parent, { x: pos.x + 11620, y: pos.y - 2120 });
-  tieToLabel('PHASE2', ioPhase.a, { x: pos.x + 11520, y: pos.y - 2120 });
-  tieToLabel('PHASE3', ioPhase.b, { x: pos.x + 11520, y: pos.y - 2100 });
+  // Nested I/O window (imm): PHASE2 arms the 4-T bus nest (addr/data +
+  // strobe). PHASE3 only advances PC (IOIMM_ADVANCE_NOW) — no second IORQ.
   const outNow = buildAnd(parent, { x: pos.x + 11650, y: pos.y - 2100 });
   wire(parent, isOutImm.out, outNow.a);
-  wire(parent, ioPhase.out, outNow.b);
-  // `outNow.out` feeds `ioWrite` in the return object below by direct JS
-  // reference, not a label — that's the same local scope, no genuinely far
-  // consumer exists for this one the way `IN_NOW` (below) has.
+  tieToLabel('PHASE2', outNow.b, { x: pos.x + 11550, y: pos.y - 2100 });
   const inNow = buildAnd(parent, { x: pos.x + 11650, y: pos.y - 2200 });
   wire(parent, isInImm.out, inNow.a);
-  wire(parent, ioPhase.out, inNow.b);
+  tieToLabel('PHASE2', inNow.b, { x: pos.x + 11550, y: pos.y - 2200 });
   tieToLabel('IN_NOW', inNow.out, { x: pos.x + 11750, y: pos.y - 2200 }); // anchor — A's own write mux (far) reads this via the label; `ioRead` in the return object reads `inNow.out` directly, same local scope
   tieToLabel('OUT_NOW', outNow.out, { x: pos.x + 11750, y: pos.y - 2100 });
 
+  // ioPortAddr[15:0]: low 8 = BUS (n / C); high 8 = A (imm) or B ((C)/block).
+  const ioPortHighFromB = buildOr(parent, { x: pos.x + 11800, y: pos.y - 2260 });
+  tieToLabel('INRC_NOW', ioPortHighFromB.a, { x: pos.x + 11700, y: pos.y - 2260 });
+  tieToLabel('OUTRC_NOW', ioPortHighFromB.b, { x: pos.x + 11700, y: pos.y - 2280 });
+  const ioPortHighFromB2 = buildOr(parent, { x: pos.x + 11820, y: pos.y - 2260 });
+  wire(parent, ioPortHighFromB.out, ioPortHighFromB2.a);
+  tieToLabel('INBLOCK_READ_NOW', ioPortHighFromB2.b, { x: pos.x + 11720, y: pos.y - 2260 });
+  const ioPortHighFromB3 = buildOr(parent, { x: pos.x + 11840, y: pos.y - 2260 });
+  wire(parent, ioPortHighFromB2.out, ioPortHighFromB3.a);
+  tieToLabel('OUTBLOCK_WRITE_NOW', ioPortHighFromB3.b, { x: pos.x + 11740, y: pos.y - 2260 });
   const ioPortAddr: Pin[] = [];
   for (let i = 0; i < 8; i++) {
     const label = makeLabel(parent, `BUS${i}`, { x: pos.x + 11850, y: pos.y - 2200 + i * 20 });
     ioPortAddr.push(label.pins.net);
+  }
+  for (let i = 0; i < 8; i++) {
+    const hiMux = makeChipInstance(parent, muxDef, { x: pos.x + 11900, y: pos.y - 2360 + i * 20 });
+    wire(parent, ioPortHighFromB3.out, hiMux.pins[muxDef.ports[0]!]!);
+    tieToLabel(`REGA${i}`, hiMux.pins[muxDef.ports[1]!]!, { x: pos.x + 11800, y: pos.y - 2360 + i * 20 });
+    tieToLabel(`REGB${i}`, hiMux.pins[muxDef.ports[2]!]!, { x: pos.x + 11800, y: pos.y - 2340 + i * 20 });
+    ioPortAddr.push(hiMux.pins[muxDef.ports[3]!]!);
   }
   // `ioPortDataOut` was `AOLD{i}` alone before OUTI/OUTD/OTIR/OTDR
   // existed (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above) — a mux layer
@@ -10847,350 +11000,191 @@ function buildZ80CpuInner(
   const ldAIrZBit = buildNot(parent, { x: pos.x - 1050, y: pos.y - 5720 });
   wire(parent, ldAIrZChain, ldAIrZBit.in);
 
+  // ADD HL/IX/IY sel — shared by F_FLAG_BIT (bits that skip idle this sel).
+  const addHlFSel1 = buildOr(parent, { x: pos.x + 8280, y: pos.y + 2000 });
+  tieToLabel('ADDHL_NOW', addHlFSel1.a, { x: pos.x + 8180, y: pos.y + 2000 });
+  tieToLabel('ADDIX_NOW', addHlFSel1.b, { x: pos.x + 8180, y: pos.y + 2020 });
+  const addHlFSel = buildOr(parent, { x: pos.x + 8300, y: pos.y + 2000 });
+  wire(parent, addHlFSel1.out, addHlFSel.a);
+  tieToLabel('ADDIY_NOW', addHlFSel.b, { x: pos.x + 8200, y: pos.y + 2020 });
+
+  const fFlagBitDef = getFFlagBitChip(library);
   for (let i = 0; i < 8; i++) {
-    // Found live, chasing this new group's own test: `computedFlagBit[i]`
-    // is the ALU group's own *unconditional* fresh computation, correct
-    // only while `aluGroupNow` is genuinely 1 — every later instruction
-    // that ALSO asserts `F`'s own `we` for a completely different reason
-    // (ADD HL,rr, or this new group's own RLCA/RRCA/RLA/RRA/CPL/SCF/CCF —
-    // see "x=00, z=7" above) used to inherit that raw ALU-group garbage on
-    // every bit it doesn't otherwise override — no genuine hold path
-    // existed below the ALU group's own layer at all. `baseMux`, gated by
-    // `aluGroupNow` itself, is that missing hold: `f.q[i]` unless the ALU
-    // group is truly the one executing right now. Surfaced by `SCF`
-    // clobbering `Z` — `SCF` touches only `C`, so `Z`'s own base value had
-    // nowhere to fall but this raw, meaningless ALU computation.
-    const baseMux = makeChipInstance(parent, muxDef, { x: pos.x + 8280, y: pos.y + 2050 + i * 100 });
-    wire(parent, aluAnyGroupNow.out, baseMux.pins[muxDef.ports[0]!]!); // x=10's own ALU-on-register, or x=11's own ALU op A,n — see "x=11: ALU op A,n" above
-    wire(parent, f.q[i]!, baseMux.pins[muxDef.ports[1]!]!); // in0: hold — no ALU-group op executing right now
-    wire(parent, computedFlagBit[i]!, baseMux.pins[muxDef.ports[2]!]!); // in1: x=10's own fresh computation
+    const bit = makeChipInstance(parent, fFlagBitDef, { x: pos.x + 8280, y: pos.y + 2050 + i * 100 });
+    const p = (name: string) => bit.pins[name]!;
+    const y = pos.y + 2050 + i * 100;
+    const idle = (pin: Pin) => tiePowerRail(parent, 'GND', pin);
 
-    const r8Mux = makeChipInstance(parent, muxDef, { x: pos.x + 8300, y: pos.y + 2050 + i * 100 });
-    tieToLabel('INCDEC_R8_NOW', r8Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 8200, y: pos.y + 2050 + i * 100 });
-    wire(parent, baseMux.pins[muxDef.ports[3]!]!, r8Mux.pins[muxDef.ports[1]!]!); // in0: the ALU group's own result, or hold
-    if (i === 0) {
-      wire(parent, f.q[0]!, r8Mux.pins[muxDef.ports[2]!]!); // in1: hold — INC/DEC r never touches C
-    } else {
-      tieToLabel(r8FlagLabel[i]!, r8Mux.pins[muxDef.ports[2]!]!, { x: pos.x + 8200, y: pos.y + 2070 + i * 100 });
-    }
+    wire(parent, aluAnyGroupNow.out, p('selAlu'));
+    wire(parent, f.q[i]!, p('holdQ'));
+    wire(parent, computedFlagBit[i]!, p('aluFresh'));
 
-  // ADD HL,rr / ADD IX/IY,rr: C, N=0, H from bit11 carry, X/Y from result
-  // high bits 3/5. S/Z/P/V (2/6/7) hold. Same shared adder as ADC/SBC HL.
-  // Unlike ADC/SBC HL (every flag fresh), plain ADD holds S/Z/P/V.
-    let cLayerIn = r8Mux.pins[muxDef.ports[3]!]!;
+    tieToLabel('INCDEC_R8_NOW', p('selR8'), { x: pos.x + 8200, y });
+    if (i === 0) wire(parent, f.q[0]!, p('r8Fresh'));
+    else tieToLabel(r8FlagLabel[i]!, p('r8Fresh'), { x: pos.x + 8200, y: y + 20 });
+
+    // ADD HL/IX/IY: bits 0,1,3,4,5
     if (i === 0 || i === 1 || i === 3 || i === 4 || i === 5) {
-      const addHlFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8350, y: pos.y + 2075 + i * 100 });
-      const addHlSel1 = buildOr(parent, { x: pos.x + 8280, y: pos.y + 2075 + i * 100 });
-      tieToLabel('ADDHL_NOW', addHlSel1.a, { x: pos.x + 8180, y: pos.y + 2075 + i * 100 });
-      tieToLabel('ADDIX_NOW', addHlSel1.b, { x: pos.x + 8180, y: pos.y + 2095 + i * 100 });
-      const addHlSel = buildOr(parent, { x: pos.x + 8300, y: pos.y + 2075 + i * 100 });
-      wire(parent, addHlSel1.out, addHlSel.a);
-      tieToLabel('ADDIY_NOW', addHlSel.b, { x: pos.x + 8200, y: pos.y + 2095 + i * 100 });
-      wire(parent, addHlSel.out, addHlFMux.pins[muxDef.ports[0]!]!);
-      wire(parent, r8Mux.pins[muxDef.ports[3]!]!, addHlFMux.pins[muxDef.ports[1]!]!); // in0: hold
-      if (i === 0) {
-        tieToLabel('ADDHL_C', addHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 + i * 100 });
-      } else if (i === 1) {
-        tiePowerRail(parent, 'GND', addHlFMux.pins[muxDef.ports[2]!]!); // N ← 0
-      } else if (i === 3) {
-        tieToLabel('ADDHLHI3', addHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 + i * 100 });
-      } else if (i === 4) {
-        tieToLabel('ADDHL_H', addHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 + i * 100 });
-      } else {
-        tieToLabel('ADDHLHI5', addHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 + i * 100 });
-      }
-      cLayerIn = addHlFMux.pins[muxDef.ports[3]!]!;
+      wire(parent, addHlFSel.out, p('selAddHl'));
+      if (i === 0) tieToLabel('ADDHL_C', p('addHlFresh'), { x: pos.x + 8250, y: y + 20 });
+      else if (i === 1) idle(p('addHlFresh'));
+      else if (i === 3) tieToLabel('ADDHLHI3', p('addHlFresh'), { x: pos.x + 8250, y: y + 20 });
+      else if (i === 4) tieToLabel('ADDHL_H', p('addHlFresh'), { x: pos.x + 8250, y: y + 20 });
+      else tieToLabel('ADDHLHI5', p('addHlFresh'), { x: pos.x + 8250, y: y + 20 });
+    } else {
+      idle(p('selAddHl'));
+      idle(p('addHlFresh'));
     }
-    // RLCA/RRCA/RLA/RRA/SCF/CCF/CPL — C (bit0), N (bit1), H (bit4), X/Y (3/5).
-    // S/Z/P/V hold. H: CPL→1, CCF→old C, else 0. X/Y from A after transform
-    // (rotates/CPL) or live A (SCF/CCF).
+
+    // RLCA/…/SCF/CCF/CPL — C(0), N(1), H(4), X/Y(3/5)
     if (i === 0) {
-      const rotAccCMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2085 });
-      tieToLabel('ROTACC_C_NOW', rotAccCMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8260, y: pos.y + 2085 });
-      wire(parent, cLayerIn, rotAccCMux.pins[muxDef.ports[1]!]!);
-      tieToLabel('ROTACC_C', rotAccCMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2105 });
-      cLayerIn = rotAccCMux.pins[muxDef.ports[3]!]!;
+      tieToLabel('ROTACC_C_NOW', p('selRotAcc'), { x: pos.x + 8260, y });
+      tieToLabel('ROTACC_C', p('rotAccFresh'), { x: pos.x + 8260, y: y + 20 });
+    } else if (i === 1) {
+      tieToLabel('ROTACC_N_NOW', p('selRotAcc'), { x: pos.x + 8260, y });
+      tieToLabel('CPL_NOW', p('rotAccFresh'), { x: pos.x + 8260, y: y + 20 });
+    } else if (i === 4) {
+      tieToLabel('ROTACC_N_NOW', p('selRotAcc'), { x: pos.x + 8260, y });
+      tieToLabel('ROTACC_H', p('rotAccFresh'), { x: pos.x + 8260, y: y + 20 });
+    } else if (i === 3 || i === 5) {
+      tieToLabel('ROTACC_N_NOW', p('selRotAcc'), { x: pos.x + 8260, y });
+      tieToLabel(i === 3 ? 'ROTACC_X' : 'ROTACC_Y', p('rotAccFresh'), { x: pos.x + 8260, y: y + 20 });
+    } else {
+      idle(p('selRotAcc'));
+      idle(p('rotAccFresh'));
     }
-    if (i === 1) {
-      const rotAccNMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2185 });
-      tieToLabel('ROTACC_N_NOW', rotAccNMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8260, y: pos.y + 2185 });
-      wire(parent, cLayerIn, rotAccNMux.pins[muxDef.ports[1]!]!);
-      tieToLabel('CPL_NOW', rotAccNMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2205 });
-      cLayerIn = rotAccNMux.pins[muxDef.ports[3]!]!;
-    }
-    if (i === 4) {
-      const rotAccHMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2485 });
-      tieToLabel('ROTACC_N_NOW', rotAccHMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8260, y: pos.y + 2485 });
-      wire(parent, cLayerIn, rotAccHMux.pins[muxDef.ports[1]!]!);
-      tieToLabel('ROTACC_H', rotAccHMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2505 });
-      cLayerIn = rotAccHMux.pins[muxDef.ports[3]!]!;
-    }
-    if (i === 3 || i === 5) {
-      const rotAccXyMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2385 + (i === 3 ? 0 : 100) });
-      tieToLabel('ROTACC_N_NOW', rotAccXyMux.pins[muxDef.ports[0]!]!, {
-        x: pos.x + 8260,
-        y: pos.y + 2385 + (i === 3 ? 0 : 100),
-      });
-      wire(parent, cLayerIn, rotAccXyMux.pins[muxDef.ports[1]!]!);
-      tieToLabel(i === 3 ? 'ROTACC_X' : 'ROTACC_Y', rotAccXyMux.pins[muxDef.ports[2]!]!, {
-        x: pos.x + 8260,
-        y: pos.y + 2405 + (i === 3 ? 0 : 100),
-      });
-      cLayerIn = rotAccXyMux.pins[muxDef.ports[3]!]!;
-    }
-    // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) is a
-    // seventh layer, every bit but N (bit 1 — DAA never touches it, so it
-    // just skips this layer entirely and keeps whatever the layer below
-    // already computed, the identical "no layer at all for a bit this op
-    // doesn't touch" shape bits 2/6/7 already use for the six-op rotate/
-    // flag group above).
+
+    // DAA — all but N (1)
     if (i !== 1) {
       const daaFlagLabel: Record<number, string> = { 0: 'DAA_NEWC', 2: 'DAA_NEWP', 3: 'DAA_NEWX', 4: 'DAA_NEWH', 5: 'DAA_NEWY', 6: 'DAA_NEWZ', 7: 'DAA_NEWS' };
-      const daaFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8365, y: pos.y + 2210 + i * 100 });
-      tieToLabel('DAA_NOW', daaFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8265, y: pos.y + 2210 + i * 100 });
-      wire(parent, cLayerIn, daaFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-      tieToLabel(daaFlagLabel[i]!, daaFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8265, y: pos.y + 2215 + i * 100 }); // in1: DAA's own fresh value for this bit
-      cLayerIn = daaFMux.pins[muxDef.ports[3]!]!;
-    }
-    // LDI (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above) is an eighth layer,
-    // only three bits: `N`(1)/`H`(4) reset to a fixed `0` (`gnd4` directly,
-    // not a label — there's no "fresh value" to publish, just the constant
-    // every rail in this file already is), `P/V`(2) gets `blockPvBit`'s
-    // own fresh `BC-1 != 0` result. Every other bit (`C`/`X`/`Y`/`Z`/`S`)
-    // skips this layer entirely, the same "no layer at all for a bit this
-    // op doesn't touch" shape DAA's own bit 1 (just above) and the six-op
-    // rotate/flag group's own bits 2/6/7 already establish.
-    if (i === 1 || i === 2 || i === 4) {
-      const ldBlockFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8370, y: pos.y + 2215 + i * 100 });
-      tieToLabel('LDBLOCK_COMMIT_NOW', ldBlockFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8270, y: pos.y + 2215 + i * 100 });
-      wire(parent, cLayerIn, ldBlockFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-      if (i === 2) wire(parent, blockPvBit, ldBlockFMux.pins[muxDef.ports[2]!]!); // in1: BC-1 != 0
-      else tiePowerRail(parent, 'GND', ldBlockFMux.pins[muxDef.ports[2]!]!); // in1: N/H reset to 0
-      cLayerIn = ldBlockFMux.pins[muxDef.ports[3]!]!;
-    }
-    // CPI/CPD/CPIR/CPDR (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above) is a
-    // ninth layer, five bits: `S`(7)/`Z`(6)/`H`(4) fresh off the dedicated
-    // adder above, `N`(1) forced to a fixed `1` (this family always
-    // subtracts), `P/V`(2) the same shared `blockPvBit` the LD-block
-    // family's own layer just above reads. `C`(0) is deliberately skipped
-    // — real Z80 leaves it untouched for this whole family, so whatever
-    // the layer below already carries (ultimately `f.q[0]`, a genuine
-    // hold — `aluAnyGroupNow`/`baseMux` never see this family at all)
-    // falls straight through, the same "no layer for a bit this op
-    // doesn't touch" shape immediately above already establishes. `X`/`Y`
-    // (3/5) skip it too, the identical "not modeled" stance `LDI`'s own
-    // layer and the plain `CP`'s own doc comment above already take.
-    if (i === 1 || i === 2 || i === 4 || i === 6 || i === 7) {
-      const cpBlockFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8375, y: pos.y + 2220 + i * 100 });
-      tieToLabel('CPBLOCK_COMMIT_NOW', cpBlockFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8275, y: pos.y + 2220 + i * 100 });
-      wire(parent, cLayerIn, cpBlockFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-      const cpFreshBit: Record<number, Pin> = { 1: vcc4, 2: blockPvBit, 4: cpHBit.out, 6: cpZBit.out, 7: cpSBit };
-      wire(parent, cpFreshBit[i]!, cpBlockFMux.pins[muxDef.ports[2]!]!);
-      cLayerIn = cpBlockFMux.pins[muxDef.ports[3]!]!;
-    }
-    // INI (see "x=10, y=4, z=2: INI" above) is a tenth layer, only two
-    // bits: `N`(1), real Z80's one other officially documented flag for
-    // this family, is the transferred byte's own bit 7
-    // (`ioPortDataIn[7]`, already in scope this early — no forward
-    // reference needed, unlike `IOB_Z_NOW` just below, whose own adder is
-    // built much further down this file); `Z`(6) is `B`'s own dedicated
-    // adder reaching `0`, read forward through that same label the same
-    // way `LDBLOCK_PV_NOW`'s own forward reference already established
-    // this file's precedent for. `S`/`H`/`P/V`/`C` (7/4/2/0) are real
-    // Z80's own famously undocumented territory for this whole family —
-    // left unmodeled, no layer at all, the same documented-simplification
-    // stance every earlier "not modeled" bit in this file already takes.
-    if (i === 1 || i === 6) {
-      const inBlockFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8380, y: pos.y + 2225 + i * 100 });
-      tieToLabel('INBLOCK_COMMIT_NOW', inBlockFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8280, y: pos.y + 2225 + i * 100 });
-      wire(parent, cLayerIn, inBlockFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-      if (i === 1) wire(parent, ioPortDataIn[7]!, inBlockFMux.pins[muxDef.ports[2]!]!); // in1: N — the transferred byte's own bit 7
-      else tieToLabel('IOB_Z_NOW', inBlockFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8280, y: pos.y + 2245 + i * 100 }); // in1: Z — B reached 0
-      cLayerIn = inBlockFMux.pins[muxDef.ports[3]!]!;
-    }
-    // OUTI/OUTD/OTIR/OTDR (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR" above) is
-    // an eleventh layer, the mirror image of `INI`'s own just above: `Z`
-    // is the identical shared `IOB_Z_NOW` (decrementing `B` is one
-    // operation regardless of transfer direction); `N` differs — the
-    // transferred byte here is `outBlockTemp`'s own held value (read
-    // from `(HL)`, about to go *out*), not `ioPortDataIn` (which this
-    // family never even reads).
-    if (i === 1 || i === 6) {
-      const outBlockFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8385, y: pos.y + 2230 + i * 100 });
-      tieToLabel('OUTBLOCK_COMMIT_NOW', outBlockFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8285, y: pos.y + 2230 + i * 100 });
-      wire(parent, cLayerIn, outBlockFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-      if (i === 1) wire(parent, outBlockTemp.q[7]!, outBlockFMux.pins[muxDef.ports[2]!]!); // in1: N — the transferred byte's own bit 7
-      else tieToLabel('IOB_Z_NOW', outBlockFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8285, y: pos.y + 2250 + i * 100 }); // in1: Z — B reached 0
-      cLayerIn = outBlockFMux.pins[muxDef.ports[3]!]!;
-    }
-    // NEG (see "x=01, z=4: NEG" above) swaps the *whole* byte too — every
-    // flag bit is fresh for this instruction, real Z80 leaves nothing
-    // stale or unmodeled here — the identical "this layer runs for every
-    // `i`" shape `EX AF,AF'`'s own layer just below already establishes.
-    {
-      const negFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8378, y: pos.y + 2222 + i * 100 });
-      tieToLabel('NEG_NOW', negFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8278, y: pos.y + 2222 + i * 100 });
-      wire(parent, cLayerIn, negFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-      const negFreshBit: Record<number, Pin> = { 0: negCBit, 1: vcc4, 2: negPvBit.out, 3: negXBit, 4: negHBit.out, 5: negYBit, 6: negZBit.out, 7: negSBit };
-      wire(parent, negFreshBit[i]!, negFMux.pins[muxDef.ports[2]!]!);
-      cLayerIn = negFMux.pins[muxDef.ports[3]!]!;
-    }
-    // ADC HL,rr/SBC HL,rr (see "x=01, z=2: ADC HL,rr/SBC HL,rr" above)
-    // swaps the whole byte too — plain `ADD HL,rr` refreshes C/H/N/X/Y
-    // and holds S/Z/P/V; this pair documents every flag bit. `X`/
-    // `Y` mirror the high byte's own bits 3/5 (bits 11/13 of the full
-    // 16-bit result) — real, documented behavior, not unmodeled, the
-    // same stance `NEG`'s own `X`/`Y` just above already take.
-    {
-      const adcSbcHlFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8379, y: pos.y + 2223 + i * 100 });
-      tieToLabel('ADCSBCHL_COMMIT_NOW', adcSbcHlFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8279, y: pos.y + 2223 + i * 100 });
-      wire(parent, cLayerIn, adcSbcHlFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-      const adcSbcHlFreshLabel: Record<number, string> = { 0: 'ADCSBCHL_C', 2: 'ADCSBCHL_PV', 3: 'ADDHLHI3', 4: 'ADCSBCHL_H', 5: 'ADDHLHI5', 6: 'ADCSBCHL_Z', 7: 'ADCSBCHL_S' };
-      if (i === 1) wire(parent, isSbcHlNow.out, adcSbcHlFMux.pins[muxDef.ports[2]!]!); // in1: N — 0 for ADC, 1 for SBC
-      else tieToLabel(adcSbcHlFreshLabel[i]!, adcSbcHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8279, y: pos.y + 2243 + i * 100 });
-      cLayerIn = adcSbcHlFMux.pins[muxDef.ports[3]!]!;
-    }
-    // RRD/RLD (see "x=01, z=7: RRD/RLD" above) is a layer too, every bit
-    // but `C` (real Z80 leaves it alone for this pair, so bit 0 skips
-    // this layer entirely, the same "no layer at all for a bit this op
-    // doesn't touch" shape every earlier partial-byte op in this file
-    // already uses): `S`/`Z`/`P/V`(parity, not overflow — this pair has
-    // no arithmetic to overflow) off the *new* `A`, `H`/`N` forced to
-    // `0`, `X`/`Y` mirroring the new result's own bits 3/5 same as
-    // every other real ALU-touching op in this file.
-    if (i !== 0) {
-      const rrdRldFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8380, y: pos.y + 2224 + i * 100 });
-      tieToLabel('RRDRLD_COMMIT_NOW', rrdRldFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8280, y: pos.y + 2224 + i * 100 });
-      wire(parent, cLayerIn, rrdRldFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-      const rrdRldFreshBit: Record<number, Pin> = { 1: gnd4, 2: rrdRldPBit.out, 3: rrdRldNewALow[3]!, 4: gnd4, 5: rrdRldNewAHigh[1]!, 6: rrdRldZBit.out, 7: rrdRldSBit };
-      wire(parent, rrdRldFreshBit[i]!, rrdRldFMux.pins[muxDef.ports[2]!]!);
-      cLayerIn = rrdRldFMux.pins[muxDef.ports[3]!]!;
-    }
-    // IN r,(C) (see "x=01, z=0") — every bit but C, off the port byte.
-    if (i !== 0) {
-      const inRcFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8382, y: pos.y + 2226 + i * 100 });
-      tieToLabel('INRC_NOW', inRcFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8282, y: pos.y + 2226 + i * 100 });
-      wire(parent, cLayerIn, inRcFMux.pins[muxDef.ports[1]!]!);
-      const inRcFreshBit: Record<number, Pin> = {
-        1: gnd4,
-        2: inRcPBit.out,
-        3: ioPortDataIn[3]!,
-        4: gnd4,
-        5: ioPortDataIn[5]!,
-        6: inRcZBit.out,
-        7: inRcSBit,
-      };
-      wire(parent, inRcFreshBit[i]!, inRcFMux.pins[muxDef.ports[2]!]!);
-      cLayerIn = inRcFMux.pins[muxDef.ports[3]!]!;
-    }
-    // LD A,I / LD A,R (see "x=01, z=7, y=0..3") — every bit but C; P/V←IFF2.
-    if (i !== 0) {
-      const ldAIrFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8383, y: pos.y + 2227 + i * 100 });
-      tieToLabel('LDAIR_NOW', ldAIrFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8283, y: pos.y + 2227 + i * 100 });
-      wire(parent, cLayerIn, ldAIrFMux.pins[muxDef.ports[1]!]!);
-      const ldAIrFreshBit: Record<number, Pin> = {
-        1: gnd4,
-        2: iff2.q[0]!, // P/V ← IFF2 (soft parity)
-        3: ldAIrByte[3]!,
-        4: gnd4,
-        5: ldAIrByte[5]!,
-        6: ldAIrZBit.out,
-        7: ldAIrSBit,
-      };
-      wire(parent, ldAIrFreshBit[i]!, ldAIrFMux.pins[muxDef.ports[2]!]!);
-      cLayerIn = ldAIrFMux.pins[muxDef.ports[3]!]!;
-    }
-    // BIT y,r (CB x=01, register form — see decode near isCbX1Active):
-    // every bit but C. H=1, N=0, Z/P from the tested bit, S only when
-    // testing bit 7, X/Y from the source register's bits 3/5.
-    if (i !== 0) {
-      const bitFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8384, y: pos.y + 2228 + i * 100 });
-      tieToLabel('BIT_REG_NOW', bitFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8284, y: pos.y + 2228 + i * 100 });
-      wire(parent, cLayerIn, bitFMux.pins[muxDef.ports[1]!]!);
-      const bitFreshBit: Record<number, Pin> = {
-        1: gnd4,
-        2: bitPBit,
-        3: bitXBit,
-        4: vcc4,
-        5: bitYBit,
-        6: bitZBit.out,
-        7: bitSBit.out,
-      };
-      wire(parent, bitFreshBit[i]!, bitFMux.pins[muxDef.ports[2]!]!);
-      cLayerIn = bitFMux.pins[muxDef.ports[3]!]!;
-    }
-    // BIT y,(HL) (CB x=01, z=6) — same flag recipe, off HLMEM after PHASE4.
-    if (i !== 0) {
-      const bitHlFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8385, y: pos.y + 2229 + i * 100 });
-      tieToLabel('BIT_HL_NOW', bitHlFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8285, y: pos.y + 2229 + i * 100 });
-      wire(parent, cLayerIn, bitHlFMux.pins[muxDef.ports[1]!]!);
-      const bitHlFreshBit: Record<number, Pin> = {
-        1: gnd4,
-        2: bitHlPBit,
-        3: bitHlXBit,
-        4: vcc4,
-        5: bitHlYBit,
-        6: bitHlZBit.out,
-        7: bitHlSBit.out,
-      };
-      wire(parent, bitHlFreshBit[i]!, bitHlFMux.pins[muxDef.ports[2]!]!);
-      cLayerIn = bitHlFMux.pins[muxDef.ports[3]!]!;
-    }
-    // BIT y,(IX+d)/(IY+d) — same recipe, off BUS at PHASE7.
-    if (i !== 0) {
-      const bitIxIyFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8385, y: pos.y + 2231 + i * 100 });
-      tieToLabel('BIT_IXIY_NOW', bitIxIyFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8285, y: pos.y + 2231 + i * 100 });
-      wire(parent, cLayerIn, bitIxIyFMux.pins[muxDef.ports[1]!]!);
-      const bitIxIyFreshBit: Record<number, Pin> = {
-        1: gnd4,
-        2: bitIxPBit,
-        3: bitIxXBit,
-        4: vcc4,
-        5: bitIxYBit,
-        6: bitIxZBit.out,
-        7: bitIxSBit.out,
-      };
-      wire(parent, bitIxIyFreshBit[i]!, bitIxIyFMux.pins[muxDef.ports[2]!]!);
-      cLayerIn = bitIxIyFMux.pins[muxDef.ports[3]!]!;
-    }
-    // CB rotate/shift (x=00 — see decode near isCbX0Active): every flag bit
-    // fresh from the result (unlike RLCA, which holds S/Z/P). Includes C.
-    const cbRotFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8386, y: pos.y + 2230 + i * 100 });
-    tieToLabel('CBROT_NOW', cbRotFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8286, y: pos.y + 2230 + i * 100 });
-    wire(parent, cLayerIn, cbRotFMux.pins[muxDef.ports[1]!]!);
-    if (i === 0) {
-      tieToLabel('CBROT_C', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
-    } else if (i === 1) {
-      tiePowerRail(parent, 'GND', cbRotFMux.pins[muxDef.ports[2]!]!);
-    } else if (i === 2) {
-      tieToLabel('CBROT_P', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
-    } else if (i === 3) {
-      tieToLabel('CBROT_X', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
-    } else if (i === 4) {
-      tiePowerRail(parent, 'GND', cbRotFMux.pins[muxDef.ports[2]!]!);
-    } else if (i === 5) {
-      tieToLabel('CBROT_Y', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
-    } else if (i === 6) {
-      tieToLabel('CBROT_Z', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
+      tieToLabel('DAA_NOW', p('selDaa'), { x: pos.x + 8265, y });
+      tieToLabel(daaFlagLabel[i]!, p('daaFresh'), { x: pos.x + 8265, y: y + 15 });
     } else {
-      tieToLabel('CBROT_S', cbRotFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8286, y: pos.y + 2250 + i * 100 });
+      idle(p('selDaa'));
+      idle(p('daaFresh'));
     }
-    cLayerIn = cbRotFMux.pins[muxDef.ports[3]!]!;
-    // EX AF,AF' (x=00, z=0, y=1 — see "x=00: EX AF,AF'" below) swaps the
-    // *whole* byte, not just one or two bits — this layer runs for every
-    // `i` that reaches this point (all eight, now that H and the two
-    // undocumented bits are real too).
-    const exAfAfFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8380, y: pos.y + 2225 + i * 100 });
-    tieToLabel('EX_AFAF_NOW', exAfAfFMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8280, y: pos.y + 2225 + i * 100 });
-    wire(parent, cLayerIn, exAfAfFMux.pins[muxDef.ports[1]!]!); // in0: the layer above
-    tieToLabel(`FPOLD${i}`, exAfAfFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8280, y: pos.y + 2245 + i * 100 }); // in1: F''s own old value
-    cLayerIn = exAfAfFMux.pins[muxDef.ports[3]!]!;
-    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 8400, y: pos.y + 2100 + i * 100 });
-    wire(parent, isBusToF.out, mux.pins[muxDef.ports[0]!]!);
-    wire(parent, cLayerIn, mux.pins[muxDef.ports[1]!]!); // in0: the layer above (x=10, x=00's own INC/DEC r, or — bit 0 only — ADD HL,rr's own carry)
-    tieToLabel(`BUS${i}`, mux.pins[muxDef.ports[2]!]!, { x: pos.x + 8300, y: pos.y + 2100 + i * 100 }); // in1: POP AF's low byte (the bus)
-    wire(parent, mux.pins[muxDef.ports[3]!]!, f.d[i]!);
+
+    // LDI block — N/H/P bits 1,2,4
+    if (i === 1 || i === 2 || i === 4) {
+      tieToLabel('LDBLOCK_COMMIT_NOW', p('selLdBlock'), { x: pos.x + 8270, y });
+      if (i === 2) wire(parent, blockPvBit, p('ldBlockFresh'));
+      else idle(p('ldBlockFresh'));
+    } else {
+      idle(p('selLdBlock'));
+      idle(p('ldBlockFresh'));
+    }
+
+    // CPI block — bits 1,2,4,6,7
+    if (i === 1 || i === 2 || i === 4 || i === 6 || i === 7) {
+      tieToLabel('CPBLOCK_COMMIT_NOW', p('selCpBlock'), { x: pos.x + 8275, y });
+      const cpFreshBit: Record<number, Pin> = { 1: vcc4, 2: blockPvBit, 4: cpHBit.out, 6: cpZBit.out, 7: cpSBit };
+      wire(parent, cpFreshBit[i]!, p('cpBlockFresh'));
+    } else {
+      idle(p('selCpBlock'));
+      idle(p('cpBlockFresh'));
+    }
+
+    // INI — bits 1,6
+    if (i === 1 || i === 6) {
+      tieToLabel('INBLOCK_COMMIT_NOW', p('selInBlock'), { x: pos.x + 8280, y });
+      if (i === 1) wire(parent, ioPortDataIn[7]!, p('inBlockFresh'));
+      else tieToLabel('IOB_Z_NOW', p('inBlockFresh'), { x: pos.x + 8280, y: y + 20 });
+    } else {
+      idle(p('selInBlock'));
+      idle(p('inBlockFresh'));
+    }
+
+    // OUTI — bits 1,6
+    if (i === 1 || i === 6) {
+      tieToLabel('OUTBLOCK_COMMIT_NOW', p('selOutBlock'), { x: pos.x + 8285, y });
+      if (i === 1) wire(parent, outBlockTemp.q[7]!, p('outBlockFresh'));
+      else tieToLabel('IOB_Z_NOW', p('outBlockFresh'), { x: pos.x + 8285, y: y + 20 });
+    } else {
+      idle(p('selOutBlock'));
+      idle(p('outBlockFresh'));
+    }
+
+    // NEG — all bits
+    tieToLabel('NEG_NOW', p('selNeg'), { x: pos.x + 8278, y });
+    {
+      const negFreshBit: Record<number, Pin> = { 0: negCBit, 1: vcc4, 2: negPvBit.out, 3: negXBit, 4: negHBit.out, 5: negYBit, 6: negZBit.out, 7: negSBit };
+      wire(parent, negFreshBit[i]!, p('negFresh'));
+    }
+
+    // ADC/SBC HL — all bits
+    tieToLabel('ADCSBCHL_COMMIT_NOW', p('selAdcSbcHl'), { x: pos.x + 8279, y });
+    {
+      const adcSbcHlFreshLabel: Record<number, string> = { 0: 'ADCSBCHL_C', 2: 'ADCSBCHL_PV', 3: 'ADDHLHI3', 4: 'ADCSBCHL_H', 5: 'ADDHLHI5', 6: 'ADCSBCHL_Z', 7: 'ADCSBCHL_S' };
+      if (i === 1) wire(parent, isSbcHlNow.out, p('adcSbcHlFresh'));
+      else tieToLabel(adcSbcHlFreshLabel[i]!, p('adcSbcHlFresh'), { x: pos.x + 8279, y: y + 20 });
+    }
+
+    // RRD/RLD — all but C
+    if (i !== 0) {
+      tieToLabel('RRDRLD_COMMIT_NOW', p('selRrdRld'), { x: pos.x + 8280, y });
+      const rrdRldFreshBit: Record<number, Pin> = { 1: gnd4, 2: rrdRldPBit.out, 3: rrdRldNewALow[3]!, 4: gnd4, 5: rrdRldNewAHigh[1]!, 6: rrdRldZBit.out, 7: rrdRldSBit };
+      wire(parent, rrdRldFreshBit[i]!, p('rrdRldFresh'));
+    } else {
+      idle(p('selRrdRld'));
+      idle(p('rrdRldFresh'));
+    }
+
+    // IN r,(C) — all but C
+    if (i !== 0) {
+      tieToLabel('INRC_NOW', p('selInRc'), { x: pos.x + 8282, y });
+      const inRcFreshBit: Record<number, Pin> = {
+        1: gnd4, 2: inRcPBit.out, 3: ioPortDataIn[3]!, 4: gnd4, 5: ioPortDataIn[5]!, 6: inRcZBit.out, 7: inRcSBit,
+      };
+      wire(parent, inRcFreshBit[i]!, p('inRcFresh'));
+    } else {
+      idle(p('selInRc'));
+      idle(p('inRcFresh'));
+    }
+
+    // LD A,I/R — all but C
+    if (i !== 0) {
+      tieToLabel('LDAIR_NOW', p('selLdAIr'), { x: pos.x + 8283, y });
+      const ldAIrFreshBit: Record<number, Pin> = {
+        1: gnd4, 2: iff2.q[0]!, 3: ldAIrByte[3]!, 4: gnd4, 5: ldAIrByte[5]!, 6: ldAIrZBit.out, 7: ldAIrSBit,
+      };
+      wire(parent, ldAIrFreshBit[i]!, p('ldAIrFresh'));
+    } else {
+      idle(p('selLdAIr'));
+      idle(p('ldAIrFresh'));
+    }
+
+    // BIT reg/HL/IXIY — all but C
+    if (i !== 0) {
+      tieToLabel('BIT_REG_NOW', p('selBitReg'), { x: pos.x + 8284, y });
+      wire(parent, ({ 1: gnd4, 2: bitPBit, 3: bitXBit, 4: vcc4, 5: bitYBit, 6: bitZBit.out, 7: bitSBit.out } as Record<number, Pin>)[i]!, p('bitRegFresh'));
+      tieToLabel('BIT_HL_NOW', p('selBitHl'), { x: pos.x + 8285, y });
+      wire(parent, ({ 1: gnd4, 2: bitHlPBit, 3: bitHlXBit, 4: vcc4, 5: bitHlYBit, 6: bitHlZBit.out, 7: bitHlSBit.out } as Record<number, Pin>)[i]!, p('bitHlFresh'));
+      tieToLabel('BIT_IXIY_NOW', p('selBitIxIy'), { x: pos.x + 8285, y: y + 5 });
+      wire(parent, ({ 1: gnd4, 2: bitIxPBit, 3: bitIxXBit, 4: vcc4, 5: bitIxYBit, 6: bitIxZBit.out, 7: bitIxSBit.out } as Record<number, Pin>)[i]!, p('bitIxIyFresh'));
+    } else {
+      idle(p('selBitReg')); idle(p('bitRegFresh'));
+      idle(p('selBitHl')); idle(p('bitHlFresh'));
+      idle(p('selBitIxIy')); idle(p('bitIxIyFresh'));
+    }
+
+    // CB rotate — all bits
+    tieToLabel('CBROT_NOW', p('selCbRot'), { x: pos.x + 8286, y });
+    if (i === 0) tieToLabel('CBROT_C', p('cbRotFresh'), { x: pos.x + 8286, y: y + 20 });
+    else if (i === 1) idle(p('cbRotFresh'));
+    else if (i === 2) tieToLabel('CBROT_P', p('cbRotFresh'), { x: pos.x + 8286, y: y + 20 });
+    else if (i === 3) tieToLabel('CBROT_X', p('cbRotFresh'), { x: pos.x + 8286, y: y + 20 });
+    else if (i === 4) idle(p('cbRotFresh'));
+    else if (i === 5) tieToLabel('CBROT_Y', p('cbRotFresh'), { x: pos.x + 8286, y: y + 20 });
+    else if (i === 6) tieToLabel('CBROT_Z', p('cbRotFresh'), { x: pos.x + 8286, y: y + 20 });
+    else tieToLabel('CBROT_S', p('cbRotFresh'), { x: pos.x + 8286, y: y + 20 });
+
+    tieToLabel('EX_AFAF_NOW', p('selExAfAf'), { x: pos.x + 8280, y: y + 10 });
+    tieToLabel(`FPOLD${i}`, p('fpOld'), { x: pos.x + 8280, y: y + 25 });
+    wire(parent, isBusToF.out, p('selBus'));
+    tieToLabel(`BUS${i}`, p('busBit'), { x: pos.x + 8300, y });
+    wire(parent, p('out'), f.d[i]!);
   }
+
   // ADD HL,rr / ADD IX,rr / ADD IY,rr C-bit write — side-fold stays
   // outside F_WE_OR and feeds as a single input.
   const addHlCWe1 = buildOr(parent, { x: pos.x + 8650, y: pos.y + 2220 });
@@ -11237,35 +11231,21 @@ function buildZ80CpuInner(
   const spAluActive = buildOr(parent, { x: pos.x + 8500, y: pos.y + 2850 });
   wire(parent, stackActive.out, spAluActive.a);
   tieToLabel('INCDEC_SP_NOW', spAluActive.b, { x: pos.x + 8400, y: pos.y + 2850 });
+  const pairCommitSp = getPairCommitBitChip(library);
+  const spHalfCommit = getSpHalfCommitBitChip(library);
   const spExtD: Pin[] = [];
   sp.q.forEach((_, i) => {
-    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 8600, y: pos.y + 2900 + i * 100 });
-    wire(parent, spAluActive.out, mux.pins[muxDef.ports[0]!]!);
-    spExtD.push(mux.pins[muxDef.ports[1]!]!); // in0: external seed
-    wire(parent, spAdder.out[i]!, mux.pins[muxDef.ports[2]!]!); // in1: SP+-1
-    wire(parent, mux.pins[muxDef.ports[3]!]!, sp.d[i]!);
+    const bit = makeChipInstance(parent, pairCommitSp, { x: pos.x + 8600, y: pos.y + 2900 + i * 100 });
+    wire(parent, spAluActive.out, bit.pins.sel!);
+    spExtD.push(bit.pins.passthrough!);
+    wire(parent, spAdder.out[i]!, bit.pins.override!);
+    wire(parent, bit.pins.out!, sp.d[i]!);
   });
   const spWeOr = buildOr(parent, { x: pos.x + 8600, y: pos.y + 3200 });
   wire(parent, spAluActive.out, spWeOr.a);
   wire(parent, spWeOr.out, sp.we);
   const spExternal: Register = { d: spExtD, we: spWeOr.b, clk: sp.clk, q: sp.q, qn: sp.qn };
 
-  // LD SP,nn (x=00, z=1, y=6 — see "x=00, z=1: LD dd,nn" above): SP is one
-  // monolithic `buildRegister`, not two independently-addressable 8-bit
-  // ones the way `BC`/`DE`/`HL` are (`B`/`C` etc.), so the low/high
-  // immediate bytes can't each get their own register's own `we` —
-  // `sp.we` is a single fanout across every bit, so every write commits
-  // *all* of SP's bits at once. Solved with the same "mux ahead of d,
-  // self-loop to hold" shape used everywhere else in this file for "leave
-  // this alone by default" (`PC`'s own `retMux`/`rstMux`, `F`'s own C-bit
-  // hold in the `x=00, z=4/z=5` layer): each bit gets its own small mux
-  // choosing between the low byte (bits below 8) or the high byte (bits 8
-  // and up) *while holding* (self-looping `sp.q[i]`) during the *other*
-  // half's own write phase — two separate `we`-firing edges, each one
-  // re-committing the other half's already-correct value right back to
-  // itself. Bits at or past `addrBits` for the high byte simply don't
-  // exist (the loop below stops at `addrBits`), the same natural
-  // truncation `spAdder`'s own `addrBits`-wide arithmetic already has.
   const ldDdNnLowSpNow = buildAnd(parent, { x: pos.x + 8300, y: pos.y + 3300 });
   tieToLabel('LDDDNN_LOW_NOW', ldDdNnLowSpNow.a, { x: pos.x + 8200, y: pos.y + 3300 });
   wire(parent, dec.y[6]!, ldDdNnLowSpNow.b);
@@ -11278,86 +11258,72 @@ function buildZ80CpuInner(
 
   const spExtD2: Pin[] = [];
   sp.q.forEach((q, i) => {
-    const freshMux = makeChipInstance(parent, muxDef, { x: pos.x + 8500, y: pos.y + 3400 + i * 100 });
+    const bit = makeChipInstance(parent, spHalfCommit, { x: pos.x + 8500, y: pos.y + 3400 + i * 100 });
     if (i < 8) {
-      wire(parent, ldDdNnHighSpNow.out, freshMux.pins[muxDef.ports[0]!]!); // sel=1 (high phase): hold
-      tieToLabel(`BUS${i}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x + 8400, y: pos.y + 3400 + i * 100 }); // in0 (low phase): the fresh low byte bit
-      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (high phase): hold — self-loop
+      wire(parent, ldDdNnHighSpNow.out, bit.pins.selHold!);
+      tieToLabel(`BUS${i}`, bit.pins.busBit!, { x: pos.x + 8400, y: pos.y + 3400 + i * 100 });
     } else {
-      wire(parent, ldDdNnLowSpNow.out, freshMux.pins[muxDef.ports[0]!]!); // sel=1 (low phase): hold
-      tieToLabel(`BUS${i - 8}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x + 8400, y: pos.y + 3400 + i * 100 }); // in0 (high phase): the fresh high byte bit
-      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!); // in1 (low phase): hold — self-loop
+      wire(parent, ldDdNnLowSpNow.out, bit.pins.selHold!);
+      tieToLabel(`BUS${i - 8}`, bit.pins.busBit!, { x: pos.x + 8400, y: pos.y + 3400 + i * 100 });
     }
-    const outerMux = makeChipInstance(parent, muxDef, { x: pos.x + 8700, y: pos.y + 3400 + i * 100 });
-    wire(parent, ldDdNnSpAnyNow.out, outerMux.pins[muxDef.ports[0]!]!);
-    spExtD2.push(outerMux.pins[muxDef.ports[1]!]!); // in0: the layer below (spAluActive-gated: external seed or spAdder.out)
-    wire(parent, freshMux.pins[muxDef.ports[3]!]!, outerMux.pins[muxDef.ports[2]!]!); // in1: this half's own fresh-or-hold bit
-    wire(parent, outerMux.pins[muxDef.ports[3]!]!, spExternal.d[i]!); // drives the layer below's own sink, not sp.d directly
+    wire(parent, ldDdNnSpAnyNow.out, bit.pins.selAny!);
+    wire(parent, q, bit.pins.holdQ!);
+    spExtD2.push(bit.pins.passthrough!);
+    wire(parent, bit.pins.out!, spExternal.d[i]!);
   });
   const spWeOr2 = buildOr(parent, { x: pos.x + 8600, y: pos.y + 3600 });
   wire(parent, ldDdNnSpAnyNow.out, spWeOr2.a);
   wire(parent, spWeOr2.out, spExternal.we);
   const spExternal2: Register = { d: spExtD2, we: spWeOr2.b, clk: spExternal.clk, q: spExternal.q, qn: spExternal.qn };
 
-  // LD SP,HL (x=11, z=1, y=7 — see "x=11: LD SP,HL" above): a third layer
-  // on top of `spExternal2`, unconditional (single byte, no low/high split
-  // needed the way `LD SP,nn`'s own two sequentially-read immediate bytes
-  // needed one — `H`/`L` are both already sitting in registers).
   const spExtD3: Pin[] = [];
   sp.q.forEach((_, i) => {
-    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 8900, y: pos.y + 3700 + i * 100 });
-    tieToLabel('LDSPHL_NOW', mux.pins[muxDef.ports[0]!]!, { x: pos.x + 8800, y: pos.y + 3700 + i * 100 });
-    spExtD3.push(mux.pins[muxDef.ports[1]!]!); // in0: the layer below (spExternal2's own sink)
-    if (i < 8) wire(parent, rL.q[i]!, mux.pins[muxDef.ports[2]!]!);
-    else if (rH.q[i - 8]) wire(parent, rH.q[i - 8]!, mux.pins[muxDef.ports[2]!]!);
-    else tiePowerRail(parent, 'GND', mux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
-    wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal2.d[i]!);
+    const bit = makeChipInstance(parent, pairCommitSp, { x: pos.x + 8900, y: pos.y + 3700 + i * 100 });
+    tieToLabel('LDSPHL_NOW', bit.pins.sel!, { x: pos.x + 8800, y: pos.y + 3700 + i * 100 });
+    spExtD3.push(bit.pins.passthrough!);
+    if (i < 8) wire(parent, rL.q[i]!, bit.pins.override!);
+    else if (rH.q[i - 8]) wire(parent, rH.q[i - 8]!, bit.pins.override!);
+    else tiePowerRail(parent, 'GND', bit.pins.override!);
+    wire(parent, bit.pins.out!, spExternal2.d[i]!);
   });
   const spWeOr3 = buildOr(parent, { x: pos.x + 8900, y: pos.y + 3900 });
   tieToLabel('LDSPHL_NOW', spWeOr3.a, { x: pos.x + 8800, y: pos.y + 3900 });
   wire(parent, spWeOr3.out, spExternal2.we);
   const spExternal3: Register = { d: spExtD3, we: spWeOr3.b, clk: spExternal2.clk, q: spExternal2.q, qn: spExternal2.qn };
 
-  // ED LD SP,(nn) (see "x=01, z=3") — identical hold-vs-fresh shape as
-  // `LD SP,nn` above, stacked one layer further out, gated by this
-  // instruction's own low/high data-read phases.
   const edNnSpAnyNow = buildOr(parent, { x: pos.x + 9100, y: pos.y + 4025 });
   tieToLabel('EDNN_WE_SPLO_NOW', edNnSpAnyNow.a, { x: pos.x + 8900, y: pos.y + 4000 });
   tieToLabel('EDNN_WE_SPHI_NOW', edNnSpAnyNow.b, { x: pos.x + 8900, y: pos.y + 4050 });
 
   const spExtD4: Pin[] = [];
   sp.q.forEach((q, i) => {
-    const freshMux = makeChipInstance(parent, muxDef, { x: pos.x + 9200, y: pos.y + 4100 + i * 100 });
+    const bit = makeChipInstance(parent, spHalfCommit, { x: pos.x + 9200, y: pos.y + 4100 + i * 100 });
     if (i < 8) {
-      tieToLabel('EDNN_WE_SPHI_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x + 9100, y: pos.y + 4120 + i * 100 });
-      tieToLabel(`BUS${i}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x + 9100, y: pos.y + 4100 + i * 100 });
-      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!);
+      tieToLabel('EDNN_WE_SPHI_NOW', bit.pins.selHold!, { x: pos.x + 9100, y: pos.y + 4120 + i * 100 });
+      tieToLabel(`BUS${i}`, bit.pins.busBit!, { x: pos.x + 9100, y: pos.y + 4100 + i * 100 });
     } else {
-      tieToLabel('EDNN_WE_SPLO_NOW', freshMux.pins[muxDef.ports[0]!]!, { x: pos.x + 9100, y: pos.y + 4120 + i * 100 });
-      tieToLabel(`BUS${i - 8}`, freshMux.pins[muxDef.ports[1]!]!, { x: pos.x + 9100, y: pos.y + 4100 + i * 100 });
-      wire(parent, q, freshMux.pins[muxDef.ports[2]!]!);
+      tieToLabel('EDNN_WE_SPLO_NOW', bit.pins.selHold!, { x: pos.x + 9100, y: pos.y + 4120 + i * 100 });
+      tieToLabel(`BUS${i - 8}`, bit.pins.busBit!, { x: pos.x + 9100, y: pos.y + 4100 + i * 100 });
     }
-    const outerMux = makeChipInstance(parent, muxDef, { x: pos.x + 9400, y: pos.y + 4100 + i * 100 });
-    wire(parent, edNnSpAnyNow.out, outerMux.pins[muxDef.ports[0]!]!);
-    spExtD4.push(outerMux.pins[muxDef.ports[1]!]!);
-    wire(parent, freshMux.pins[muxDef.ports[3]!]!, outerMux.pins[muxDef.ports[2]!]!);
-    wire(parent, outerMux.pins[muxDef.ports[3]!]!, spExternal3.d[i]!);
+    wire(parent, edNnSpAnyNow.out, bit.pins.selAny!);
+    wire(parent, q, bit.pins.holdQ!);
+    spExtD4.push(bit.pins.passthrough!);
+    wire(parent, bit.pins.out!, spExternal3.d[i]!);
   });
   const spWeOr4 = buildOr(parent, { x: pos.x + 9300, y: pos.y + 4300 });
   wire(parent, edNnSpAnyNow.out, spWeOr4.a);
   wire(parent, spWeOr4.out, spExternal3.we);
   const spExternal4: Register = { d: spExtD4, we: spWeOr4.b, clk: spExternal3.clk, q: spExternal3.q, qn: spExternal3.qn };
 
-  // LD SP,IX / LD SP,IY (DD/FD 0xF9) — stacked after ED LD SP,(nn).
   const spExtD5: Pin[] = [];
   sp.q.forEach((_, i) => {
-    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 9600, y: pos.y + 4400 + i * 100 });
-    tieToLabel('LDSPIX_NOW', mux.pins[muxDef.ports[0]!]!, { x: pos.x + 9500, y: pos.y + 4400 + i * 100 });
-    spExtD5.push(mux.pins[muxDef.ports[1]!]!);
-    if (i < 8) wire(parent, rIXL.q[i]!, mux.pins[muxDef.ports[2]!]!);
-    else if (rIXH.q[i - 8]) wire(parent, rIXH.q[i - 8]!, mux.pins[muxDef.ports[2]!]!);
-    else tiePowerRail(parent, 'GND', mux.pins[muxDef.ports[2]!]!);
-    wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal4.d[i]!);
+    const bit = makeChipInstance(parent, pairCommitSp, { x: pos.x + 9600, y: pos.y + 4400 + i * 100 });
+    tieToLabel('LDSPIX_NOW', bit.pins.sel!, { x: pos.x + 9500, y: pos.y + 4400 + i * 100 });
+    spExtD5.push(bit.pins.passthrough!);
+    if (i < 8) wire(parent, rIXL.q[i]!, bit.pins.override!);
+    else if (rIXH.q[i - 8]) wire(parent, rIXH.q[i - 8]!, bit.pins.override!);
+    else tiePowerRail(parent, 'GND', bit.pins.override!);
+    wire(parent, bit.pins.out!, spExternal4.d[i]!);
   });
   const spWeOr5 = buildOr(parent, { x: pos.x + 9600, y: pos.y + 4600 });
   tieToLabel('LDSPIX_NOW', spWeOr5.a, { x: pos.x + 9500, y: pos.y + 4600 });
@@ -11366,13 +11332,13 @@ function buildZ80CpuInner(
 
   const spExtD6: Pin[] = [];
   sp.q.forEach((_, i) => {
-    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 9800, y: pos.y + 4700 + i * 100 });
-    tieToLabel('LDSPIY_NOW', mux.pins[muxDef.ports[0]!]!, { x: pos.x + 9700, y: pos.y + 4700 + i * 100 });
-    spExtD6.push(mux.pins[muxDef.ports[1]!]!);
-    if (i < 8) wire(parent, rIYL.q[i]!, mux.pins[muxDef.ports[2]!]!);
-    else if (rIYH.q[i - 8]) wire(parent, rIYH.q[i - 8]!, mux.pins[muxDef.ports[2]!]!);
-    else tiePowerRail(parent, 'GND', mux.pins[muxDef.ports[2]!]!);
-    wire(parent, mux.pins[muxDef.ports[3]!]!, spExternal5.d[i]!);
+    const bit = makeChipInstance(parent, pairCommitSp, { x: pos.x + 9800, y: pos.y + 4700 + i * 100 });
+    tieToLabel('LDSPIY_NOW', bit.pins.sel!, { x: pos.x + 9700, y: pos.y + 4700 + i * 100 });
+    spExtD6.push(bit.pins.passthrough!);
+    if (i < 8) wire(parent, rIYL.q[i]!, bit.pins.override!);
+    else if (rIYH.q[i - 8]) wire(parent, rIYH.q[i - 8]!, bit.pins.override!);
+    else tiePowerRail(parent, 'GND', bit.pins.override!);
+    wire(parent, bit.pins.out!, spExternal5.d[i]!);
   });
   const spWeOr6 = buildOr(parent, { x: pos.x + 9800, y: pos.y + 4900 });
   tieToLabel('LDSPIY_NOW', spWeOr6.a, { x: pos.x + 9700, y: pos.y + 4900 });
@@ -11646,6 +11612,29 @@ function buildZ80CpuInner(
   wire(parent, notIorq.out, mreqAny.b);
   tieToLabel('MREQ', mreqAny.out, { x: pos.x + 13800, y: pos.y - 1750 });
 
+  // Nested 4-T bus busy: arm on any IORQ request while idle; hold until T3.
+  // Instruction ring is held via load←phase while busBusy (see above).
+  // Force busy←0 while the rings are being seeded (fsmLoadExt).
+  tieToLabel('BUS_BUSY', busBusyReg.q[0]!, { x: pos.x - 400, y: pos.y + 4220 });
+  tieToLabel('BUS_T0', busCycle.phase[0]!, { x: pos.x - 400, y: pos.y + 3620 });
+  tieToLabel('BUS_T1', busCycle.phase[1]!, { x: pos.x - 400, y: pos.y + 3640 });
+  tieToLabel('BUS_T2', busCycle.phase[2]!, { x: pos.x - 400, y: pos.y + 3660 });
+  tieToLabel('BUS_T3', busCycle.phase[3]!, { x: pos.x - 400, y: pos.y + 3680 });
+  const notBusT3 = buildNot(parent, { x: pos.x - 300, y: pos.y + 4300 });
+  wire(parent, busCycle.phase[3]!, notBusT3.in);
+  const notFsmLoadExt = buildNot(parent, { x: pos.x - 300, y: pos.y + 4340 });
+  wire(parent, fsmLoadOr.a, notFsmLoadExt.in);
+  const busKeep = buildOr(parent, { x: pos.x - 250, y: pos.y + 4280 });
+  wire(parent, iorqAny.out, busKeep.a);
+  wire(parent, busBusyReg.q[0]!, busKeep.b);
+  const busBusyKeep = buildAnd(parent, { x: pos.x - 200, y: pos.y + 4280 });
+  wire(parent, notBusT3.out, busBusyKeep.a);
+  wire(parent, busKeep.out, busBusyKeep.b);
+  const busBusyNext = buildAnd(parent, { x: pos.x - 150, y: pos.y + 4280 });
+  wire(parent, notFsmLoadExt.out, busBusyNext.a);
+  wire(parent, busBusyKeep.out, busBusyNext.b);
+  wire(parent, busBusyNext.out, busBusyReg.d[0]!);
+
   // Kill remaining long-distance point-to-point wires (gate→gate, leftover
   // single-anchor label stubs, etc.). Stdcell ChipDefs (NOT/NAND/…) keep
   // their own short transistor wires — this only touches the parent
@@ -11662,11 +11651,11 @@ function buildZ80CpuInner(
 
   return {
     clk: pc.clk,
-    phaseClk: fsm.clk,
+    phaseClk: phaseClkHub,
     reset: pc.reset,
     aReset,
-    fsmLoad: fsm.load,
-    fsmD: fsm.d,
+    fsmLoad: fsmLoadOr.a,
+    fsmD: fsmDExt,
     pc: pc.q,
     ir: ir.q,
     a: a.q,
@@ -11715,5 +11704,6 @@ function buildZ80CpuInner(
     rd: rdAny.out,
     wr: wrAny.out,
     mreq: mreqAny.out,
+    busBusy: busBusyReg.q[0]!,
   };
 }

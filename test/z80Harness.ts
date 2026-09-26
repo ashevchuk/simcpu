@@ -148,13 +148,22 @@ export function makeZ80Harness(
     }
   };
 
+  const runInstruction = () => {
+    runPhases(10);
+    for (let guard = 0; guard < 16; guard++) {
+      if (levelAt(state, netMap, cpu.busBusy.id) !== 1) break;
+      pulse(phaseClk);
+      pulse(dataClk);
+    }
+  };
+
   return {
     parent,
     library,
     cpu,
     tick,
     pulse,
-    runInstruction: () => runPhases(10),
+    runInstruction,
     runPhases,
     readReg: (pins) => fromBits(pins.map((p) => levelAt(state, netMap, p.id))),
     readPin: (pin) => levelAt(state, netMap, pin.id),

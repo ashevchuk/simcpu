@@ -27,6 +27,7 @@ import {
 } from '../machine/spectrum/video.js';
 import { loadHexAt, parseHex, parseHexBlob, runSoftCommand } from '../machine/softConsole.js';
 import { injectKey } from '../machine/tty.js';
+import { saveSpectrumSession } from '../machine/spectrumSession.js';
 import { FloatingWindow } from './FloatingWindow.js';
 import { SpectrumKeyboard } from './SpectrumKeyboard.js';
 import { SpectrumJoystick, joyMatrixKeys } from './SpectrumJoystick.js';
@@ -117,6 +118,12 @@ export class MachinePanel {
   private readonly tapeRewBtn: HTMLButtonElement;
   private readonly tapeNextBtn: HTMLButtonElement;
   private watchAddr = 0x4000;
+  /**
+   * Bumped to cancel in-flight `autoTypeLoadEmpty` (TAP LOAD "").
+   * Reboot / new demo / detach must invalidate the previous typer or it keeps
+   * injecting keys into the next session.
+   */
+  private autoTypeGen = 0;
   private lastTapeSig = '';
   private activeTab: 'console' | 'spectrum' = 'console';
   private wasSpectrum = false;
@@ -418,6 +425,7 @@ JR spin</textarea>
     this.resizeObserver.observe(this.canvasWrap);
     this.resizeObserver.observe(this.specCanvas.parentElement!);
     this.btnRun.addEventListener('click', () => {
+      this.ensureMachineReadyForRun();
       this.runner?.setRunning(true);
       this.refreshControls();
     });
@@ -426,11 +434,14 @@ JR spin</textarea>
       this.refreshControls();
     });
     this.btnStep.addEventListener('click', () => {
+      this.ensureMachineReadyForRun();
       this.runner?.stepInstruction();
       this.draw();
       this.refreshControls();
     });
     this.btnReboot.addEventListener('click', () => {
+      this.cancelAutoType();
+      this.ensureMachineReadyForRun();
       const model = this.runner?.spectrumModel;
       this.runner?.reboot();
       this.log(model ? `reboot (Spectrum ${model}K)` : 'reboot');
@@ -440,6 +451,14 @@ JR spin</textarea>
     this.speedSel.addEventListener('change', () => {
       const prev = this.runner?.speed;
       const v = this.speedSel.value as RunSpeed;
+      if (v !== 'soft' && this.runner && !this.runner.attachedGate) {
+        this.speedSel.value = 'soft';
+        this.log(
+          '! Gates needs a live Z80CPU (Inputs from Place). Soft only after page reload — File → Demo → Spectrum again for Gates.',
+        );
+        this.refreshControls();
+        return;
+      }
       this.runner?.setSpeed(v);
       if (prev === 'soft' && v !== 'soft' && this.runner?.softDesynced) {
         this.runner.reboot();
@@ -964,18 +983,20 @@ JR spin</textarea>
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     input.value = '';
-    if (!file || !this.ram || !this.runner) {
+    if (!file || !this.ensurePanelRam() || !this.runner) {
       this.log('no RAM attached');
       return;
     }
-    if (this.ram.addrBits < 16 || this.ram.bytes.length < 0x10000) {
+    if (this.ram!.addrBits < 16 || this.ram!.bytes.length < 0x10000) {
       this.log('! Spectrum file load needs addrBits=16 (64K RAM)');
       return;
     }
     try {
+      this.cancelAutoType();
       const buf = new Uint8Array(await file.arrayBuffer());
       if (kind === 'sna') {
         const { pc, border, model, port7ffd } = this.runner.loadSpectrumSna(buf);
+        saveSpectrumSession({ model, demoId: null });
         this.win.setTitle('TTY', `ZX Spectrum ${model} · SNA ${file.name}`);
         this.log(
           `SNA ${file.name} (${model}): PC=${pc.toString(16).padStart(4, '0')} border=${border}` +
@@ -984,6 +1005,7 @@ JR spin</textarea>
         );
       } else if (kind === 'z80') {
         const { pc, border, model, port7ffd, version } = this.runner.loadSpectrumZ80(buf);
+        saveSpectrumSession({ model, demoId: null });
         this.win.setTitle('TTY', `ZX Spectrum ${model} · Z80 ${file.name}`);
         this.log(
           `Z80 v${version} ${file.name} (${model}): PC=${pc.toString(16).padStart(4, '0')} border=${border}` +
@@ -1058,11 +1080,12 @@ JR spin</textarea>
     }
     this.gameSel.value = id;
     this.gameSelTab.value = id;
-    if (!this.ram || !this.runner) {
+    const ram = this.ensurePanelRam();
+    if (!ram || !this.runner) {
       this.log('no RAM attached');
       return;
     }
-    if (this.ram.addrBits < 16 || this.ram.bytes.length < 0x10000) {
+    if (ram.addrBits < 16 || ram.bytes.length < 0x10000) {
       this.log('! Demo load needs addrBits=16 (64K RAM)');
       return;
     }
@@ -1079,11 +1102,14 @@ JR spin</textarea>
   }
 
   private async applyDemoGame(entry: SpectrumGameEntry): Promise<void> {
+    // Kill any prior TAP auto-LOAD so Reboot → Load demo cannot race keystrokes.
+    this.cancelAutoType();
     const buf = decodeSpectrumGame(entry);
     this.currentDemoId = entry.id;
     this.applyDemoControlHints(entry.id);
     if (entry.kind === 'sna') {
       const { pc, border, model, port7ffd } = this.runner!.loadSpectrumSna(buf);
+      saveSpectrumSession({ model, demoId: entry.id });
       this.win.setTitle('TTY', `ZX Spectrum ${model} · ${entry.title}`);
       this.log(
         `Demo ${entry.file} (${model}): PC=${pc.toString(16).padStart(4, '0')} border=${border}` +
@@ -1101,6 +1127,7 @@ JR spin</textarea>
     const wantModel = entry.model ?? '48';
     this.runner!.ensureSpectrumSoft(wantModel);
     const { blocks } = this.runner!.mountSpectrumTap(buf);
+    saveSpectrumSession({ model: wantModel, demoId: entry.id });
     this.win.setTitle('TTY', `ZX Spectrum · ${entry.title}`);
     this.log(`Demo TAP ${entry.file}: ${blocks} block(s). Auto LOAD ""…`);
     this.runner!.setRunning(true);
@@ -1113,6 +1140,12 @@ JR spin</textarea>
     // soft-booted (wasCold=false) but still in early ROM init — typing LOAD ""
     // too early leaves the tape at block 0 (ParaZXland never reaches PAUSE).
     void this.autoTypeLoadEmpty(true);
+  }
+
+  /** Invalidate in-flight TAP auto-LOAD and release sticky Spectrum keys. */
+  private cancelAutoType(): void {
+    this.autoTypeGen++;
+    this.specKbd.clearAll();
   }
 
   private applyDemoControlHints(demoId: string): void {
@@ -1133,8 +1166,10 @@ JR spin</textarea>
 
   /** Wait for BASIC input loop, type LOAD ""; retry once if tape never advances. */
   private async autoTypeLoadEmpty(cold: boolean): Promise<void> {
-    if (!this.runner?.isSpectrum || !this.win.visible) return;
-    this.runner.setRunning(true);
+    const gen = ++this.autoTypeGen;
+    const alive = () => gen === this.autoTypeGen && !!this.runner?.isSpectrum && this.win.visible;
+    if (!alive()) return;
+    this.runner!.setRunning(true);
     this.log(cold ? 'Waiting for Spectrum BASIC…' : 'Waiting briefly…');
     const ready = cold
       ? await waitForSpectrumBasicInputReady(
@@ -1152,40 +1187,46 @@ JR spin</textarea>
           minWaitMs: 150,
           getRgba: () => this.runner?.spectrumHost?.lastFrameRgba ?? this.runner?.lastSpectrumRgba,
         });
-    if (!this.runner?.isSpectrum || !this.win.visible) return;
-    this.runner.setRunning(true);
-    const tapeBefore = this.runner.spectrumTapePos;
+    if (!alive()) return;
+    this.runner!.setRunning(true);
+    const tapeBefore = this.runner!.spectrumTapePos;
     this.log(ready ? 'Typing LOAD ""…' : 'Typing LOAD "" (BASIC wait timed out)…');
     await this.specKbd.typeLoadEmpty();
+    if (!alive()) return;
     this.draw();
     this.focusSpectrumCanvas();
     // Under heavy UI/CDP load, short key pulses can miss frames — retry once.
-    const advanced = await this.waitTapeAdvanced(tapeBefore, 3_500);
-    if (advanced || !this.runner?.isSpectrum || !this.win.visible) {
-      this.focusSpectrumCanvas();
-      return;
-    }
-    if (this.runner.spectrumTapePos > tapeBefore) {
+    const advanced = await this.waitTapeAdvanced(tapeBefore, 3_500, gen);
+    if (!alive()) return;
+    if (advanced || this.runner!.spectrumTapePos > tapeBefore) {
       this.focusSpectrumCanvas();
       return;
     }
     this.log('LOAD "" did not start — retrying…');
     this.specKbd.clearAll();
-    this.runner.setRunning(true);
+    this.runner!.setRunning(true);
     await sleepMs(400);
+    if (!alive()) return;
     await this.specKbd.typeLoadEmpty();
+    if (!alive()) return;
     this.draw();
     this.focusSpectrumCanvas();
   }
 
-  private async waitTapeAdvanced(before: number, timeoutMs: number): Promise<boolean> {
+  private async waitTapeAdvanced(
+    before: number,
+    timeoutMs: number,
+    gen?: number,
+  ): Promise<boolean> {
     const t0 = performance.now();
     while (performance.now() - t0 < timeoutMs) {
+      if (gen != null && gen !== this.autoTypeGen) return false;
       if (!this.runner?.isSpectrum) return false;
       if (this.runner.spectrumTapePos > before) return true;
       await sleepMs(80);
       this.draw();
     }
+    if (gen != null && gen !== this.autoTypeGen) return false;
     return (this.runner?.spectrumTapePos ?? 0) > before;
   }
 
@@ -1428,18 +1469,21 @@ JR spin</textarea>
   }
 
   private doBootSpectrum(model: '48' | '128' = '48'): void {
-    if (!this.ram) {
+    const ram = this.ensurePanelRam();
+    if (!ram) {
       this.log('no RAM attached');
       return;
     }
-    if (this.ram.addrBits < 16 || this.ram.bytes.length < 0x10000) {
+    if (ram.addrBits < 16 || ram.bytes.length < 0x10000) {
       this.log('! Boot Spectrum needs Z80 with addrBits=16 (64K RAM)');
       return;
     }
     try {
+      this.cancelAutoType();
       this.runner!.ensureSpectrumSoft(model);
       this.runner!.spectrumHost?.boot(model);
       this.runner?.setRunning(true);
+      saveSpectrumSession({ model, demoId: null });
       this.win.setTitle('TTY', `ZX Spectrum ${model}K · Spectrum tab`);
       this.log(
         model === '128'
@@ -1451,6 +1495,26 @@ JR spin</textarea>
       this.refreshControls();
     } catch (e) {
       this.log(`! ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /**
+   * After project reload: soft-reattach has RAM but no Spectrum host yet.
+   * Restore last model (+ optional bundled demo) from `spectrumSession`.
+   */
+  async restoreSpectrumSession(hint: {
+    model: '48' | '128';
+    demoId: string | null;
+  }): Promise<void> {
+    this.bootSpectrumMachine(hint.model);
+    if (hint.demoId) {
+      this.gameSel.value = hint.demoId;
+      this.gameSelTab.value = hint.demoId;
+      try {
+        await this.loadBundledDemoById(hint.demoId);
+      } catch (err) {
+        this.log(`! restore demo: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 
@@ -1497,8 +1561,42 @@ JR spin</textarea>
     this.refreshControls();
   }
 
+  /** RAM for Soft console / Spectrum loads (panel attach or runner soft-reattach). */
+  private effectiveRam(): RamComponent | null {
+    return this.ram ?? this.runner?.machineRam ?? null;
+  }
+
+  /** After reload, panel.ram may be unset while runner still has machineRam. */
+  private ensurePanelRam(): RamComponent | null {
+    const ram = this.effectiveRam();
+    if (ram && this.ram !== ram) this.ram = ram;
+    return this.ram;
+  }
+
+  /**
+   * Soft-reattach after page reload leaves 64K RAM without Spectrum mode —
+   * ensure soft ULA before Run/Reboot so the Spectrum tab is not a dead placeholder.
+   */
+  private ensureMachineReadyForRun(): void {
+    const ram = this.ensurePanelRam();
+    if (!ram || !this.runner) return;
+    if (ram.addrBits >= 16 && ram.bytes.length >= 0x10000 && !this.runner.isSpectrum) {
+      try {
+        this.runner.ensureSpectrumSoft('48');
+        this.setTab('spectrum');
+      } catch (err) {
+        this.log(`! ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
   attach(ram: RamComponent): void {
     this.detachRamOnly();
+    // Non-Spectrum demos (LED / Port TTY / Lab REG) share this panel — always
+    // land on Console with a TTY title so a prior Spectrum boot does not leave
+    // the Spectrum tab open over an unrelated Soft ROM.
+    this.setTab('console');
+    this.win.setTitle('TTY', '80×25 VT100 · resize · 128×64 bmp');
     if (!requiresMachineMap(ram.addrBits)) {
       this.hint.textContent = `Need addrBits ≥ 12 (got ${ram.addrBits}).`;
       this.win.setVisible(true);
@@ -1520,6 +1618,7 @@ JR spin</textarea>
   }
 
   private detachRamOnly(): void {
+    this.cancelAutoType();
     if (this.keyHandler) {
       this.canvas.removeEventListener('keydown', this.keyHandler);
       this.specCanvas.removeEventListener('keydown', this.keyHandler);
@@ -1535,13 +1634,13 @@ JR spin</textarea>
 
   detach(): void {
     this.detachRamOnly();
-    this.runner = null;
+    // Keep `runner` binding across project reload — only bindRunner(null) clears it.
     this.win.setVisible(false);
     this.refreshControls();
   }
 
   get attached(): boolean {
-    return this.ram !== null;
+    return this.effectiveRam() !== null;
   }
 
   setVisible(show: boolean): void {
@@ -1549,7 +1648,9 @@ JR spin</textarea>
   }
 
   refreshControls(): void {
-    const has = this.runner?.attached ?? false;
+    this.ensurePanelRam();
+    const canRun = this.runner?.attached ?? false;
+    const hasRam = this.effectiveRam() !== null;
     const spec = !!(this.runner?.isSpectrum);
     if (this.wasSpectrum && !spec) {
       this.specKbd.clearAll();
@@ -1565,27 +1666,27 @@ JR spin</textarea>
     } else {
       this.specModelEl.textContent = '48K / 128K soft';
     }
-    this.btnRun.disabled = !has;
-    this.btnPause.disabled = !has;
-    this.btnStep.disabled = !has;
-    this.btnReboot.disabled = !has;
-    this.speedSel.disabled = !has;
-    this.specTurboSel.disabled = !has || !spec;
+    this.btnRun.disabled = !canRun;
+    this.btnPause.disabled = !canRun;
+    this.btnStep.disabled = !canRun;
+    this.btnReboot.disabled = !canRun;
+    this.speedSel.disabled = !canRun;
+    this.specTurboSel.disabled = !canRun || !spec;
     if (this.runner) {
       const t = String(this.runner.spectrumTurbo);
       if (this.specTurboSel.value !== t) this.specTurboSel.value = t;
     }
-    this.cmdInput.disabled = !this.ram;
-    this.loadAddr.disabled = !this.ram;
-    this.loadHex.disabled = !this.ram;
-    this.asmSource.disabled = !this.ram;
+    this.cmdInput.disabled = !hasRam;
+    this.loadAddr.disabled = !hasRam;
+    this.loadHex.disabled = !hasRam;
+    this.asmSource.disabled = !hasRam;
     const muteBtn = this.root.querySelector<HTMLButtonElement>('[data-act="mute"]');
     if (muteBtn) {
       muteBtn.disabled = !spec;
       muteBtn.classList.toggle('active', !!this.runner?.ayAudio.isMuted);
       muteBtn.textContent = this.runner?.ayAudio.isMuted ? 'Unmute' : 'Mute';
     }
-    if (!has) {
+    if (!canRun) {
       this.writeStatus('idle');
       return;
     }

@@ -149,7 +149,7 @@ describe('softZ80', () => {
     });
     expect(cpu.pc).toBe(0x38);
     expect(cpu.r & 0x7f).toBe(0x08); // one M1 bump
-    expect(intAckWaits).toBe(2); // Spectrum-style INTACK waits before push
+    expect(intAckWaits).toBe(4); // Spectrum-style INTACK waits before push (nested 4-T)
     expect(pending).toBe(false);
   });
 });

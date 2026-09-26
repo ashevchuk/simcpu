@@ -146,8 +146,14 @@ export class MachineRunner {
   /** Optional gate-level pin reader (from last settle) for halt detection. */
   private readPin: ((pin: Pin) => 0 | 1 | 'Z') | null = null;
 
+  /** Soft Run / Reboot / Load demo need RAM; gate CPU is optional after restore. */
   get attached(): boolean {
-    return this.circuit !== null && this.cpu !== null;
+    return this.ram !== null;
+  }
+
+  /** True when a transistor Z80CPU is wired for Gates speeds. */
+  get attachedGate(): boolean {
+    return this.circuit !== null && this.cpu !== null && this.tick !== null;
   }
 
   /** Machine RAM when attached (for I/O map / soft console). */
@@ -737,6 +743,11 @@ export class MachineRunner {
   }
 
   setSpeed(speed: RunSpeed): void {
+    // Soft-only sessions (post-reload) have no gate CPU — stay on soft.
+    if (speed !== 'soft' && !this.attachedGate) {
+      this.speed = 'soft';
+      return;
+    }
     const prev = this.speed;
     this.speed = speed;
     // Soft attach defers transistor boot — complete it the first time Gates is selected.
@@ -857,6 +868,32 @@ export class MachineRunner {
     this.gateBootPending = false;
   }
 
+  /**
+   * Soft-only reattach after project restore / TTY open (folded canvas has
+   * RAM but no live Z80Cpu handle). Enables Run / Reboot / Load demo without
+   * re-placing Inputs for the gate path.
+   */
+  attachSoft(ram: RamComponent, opts?: { library?: ChipLibrary | null }): void {
+    this.detach();
+    this.circuit = null;
+    this.library = opts?.library ?? null;
+    this.cpu = null;
+    this.ram = ram;
+    this.tick = null;
+    this.readPin = null;
+    this.booted = false;
+    this.running = false;
+    this.soft = null;
+    this.devices = createSoftDevices();
+    this.spectrum = null;
+    this.spectrumMmu = null;
+    this.spectrumTape = null;
+    this.softDesynced = false;
+    this.softError = null;
+    this.gateBootPending = false;
+    this.speed = 'soft';
+  }
+
   detach(): void {
     this.running = false;
     this.booted = false;
@@ -888,11 +925,13 @@ export class MachineRunner {
 
   /** Gate-level boot (FSM seed, reset, first fetch) + soft CPU reset. */
   boot(): void {
-    if (!this.tick || !this.cpu || this.booted) return;
+    if (this.booted) return;
 
-      // Soft is the interactive default — skip multi-second flatten/step pulses
+    // Soft is the interactive default — skip multi-second flatten/step pulses
     // until the user actually selects a Gates speed (see setSpeed).
+    // Soft-only restore has RAM but no gate CPU/tick — still boot the interpreter.
     if (this.isSoft) {
+      if (!this.ram) return;
       this.booted = true;
       this.soft = createSoftZ80(this.softStackTop());
       // Keep SoftDisks + SoftCpm / realCpm across reboot so CP/M files survive.
@@ -909,10 +948,11 @@ export class MachineRunner {
       this.devices.realCpm = prevReal;
       this.softDesynced = false;
       this.softError = null;
-      this.gateBootPending = true;
+      this.gateBootPending = this.attachedGate;
       return;
     }
 
+    if (!this.tick || !this.cpu) return;
     const tick = this.tick;
     const pulse = (sig: InputComponent) => {
       sig.value = 1;
@@ -978,7 +1018,15 @@ export class MachineRunner {
       return;
     }
 
-    if (!this.tick || !this.cpu) return;
+    // Soft-only (post-reload): reset the interpreter against attached RAM.
+    if (!this.tick || !this.cpu) {
+      this.booted = false;
+      this.soft = null;
+      this.boot();
+      if (wasRunning) this.running = true;
+      return;
+    }
+
     this.booted = false;
     this.reset.value = 1;
     this.aReset.value = 1;
@@ -1017,15 +1065,17 @@ export class MachineRunner {
     if (wr && !this.lastGateIoWrite) {
       let addr = 0;
       let data = 0;
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < this.cpu.ioPortAddr.length; i++) {
         if (this.readPin(this.cpu.ioPortAddr[i]!) === 1) addr |= 1 << i;
+      }
+      for (let i = 0; i < 8; i++) {
         if (this.readPin(this.cpu.ioPortDataOut[i]!) === 1) data |= 1 << i;
       }
       this.devices.portOut(this.ram.bytes, addr, data);
     }
     if (rd && !this.lastGateIoRead) {
       let addr = 0;
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < this.cpu.ioPortAddr.length; i++) {
         if (this.readPin(this.cpu.ioPortAddr[i]!) === 1) addr |= 1 << i;
       }
       // Side-effect ports (e.g. CONDAT / key clear); data stays on cpu.ioPortDataIn Inputs.
@@ -1066,6 +1116,11 @@ export class MachineRunner {
     if (this.isSpectrum) this.mirrorSpectrumToGateRam();
     this.syncSpectrumGateInt();
     for (let i = 0; i < 10; i++) this.stepPhase();
+    // Nested 4-T bus may hold the instruction ring — burn extra phases until idle.
+    for (let guard = 0; guard < 16; guard++) {
+      if (!this.cpu || !this.readPin || this.readPin(this.cpu.busBusy) !== 1) break;
+      this.stepPhase();
+    }
     this.clearSpectrumIrqIfAccepted(irqWasPending, iff1WasOn);
     if (this.isSpectrum) this.writeBackSpectrumDisplayFromGateRam();
     this.stopIfGateHalted();

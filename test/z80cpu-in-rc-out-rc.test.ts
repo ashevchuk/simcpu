@@ -51,7 +51,7 @@ describe('buildZ80Cpu — x=01, z=0/z=1: IN r,(C) / OUT (C),r', () => {
     h.runPhases(4);
     expect(h.readPin(h.cpu.ioRead)).toBe(1);
     expect(h.readPin(h.cpu.ioWrite)).toBe(0);
-    expect(h.readReg(h.cpu.ioPortAddr)).toBe(0x42);
+    expect(h.readReg(h.cpu.ioPortAddr)).toBe(0x0042); // BC = B:C Soft parity
     h.runPhases(6);
     expect(h.readReg(h.cpu.a)).toBe(0x99);
     expect(h.readReg(h.cpu.f)).toBe(F_FROM_99);
@@ -66,7 +66,7 @@ describe('buildZ80Cpu — x=01, z=0/z=1: IN r,(C) / OUT (C),r', () => {
     h.runPhases(4);
     expect(h.readPin(h.cpu.ioWrite)).toBe(1);
     expect(h.readPin(h.cpu.ioRead)).toBe(0);
-    expect(h.readReg(h.cpu.ioPortAddr)).toBe(0x42);
+    expect(h.readReg(h.cpu.ioPortAddr)).toBe(0xab42);
     expect(h.readReg(h.cpu.ioPortDataOut)).toBe(0xab);
     h.runPhases(6);
     expect(h.readReg(h.cpu.rB.q)).toBe(0xab);
@@ -75,7 +75,7 @@ describe('buildZ80Cpu — x=01, z=0/z=1: IN r,(C) / OUT (C),r', () => {
     // --- OUT (C),0 ---
     h.runPhases(4);
     expect(h.readPin(h.cpu.ioWrite)).toBe(1);
-    expect(h.readReg(h.cpu.ioPortAddr)).toBe(0x42);
+    expect(h.readReg(h.cpu.ioPortAddr)).toBe(0xab42);
     expect(h.readReg(h.cpu.ioPortDataOut)).toBe(0);
     h.runPhases(6);
     expect(h.readReg(h.cpu.pc)).toBe(11);
@@ -88,7 +88,7 @@ describe('buildZ80Cpu — x=01, z=0/z=1: IN r,(C) / OUT (C),r', () => {
     // --- IN 0,(C): flags only ---
     h.runPhases(4);
     expect(h.readPin(h.cpu.ioRead)).toBe(1);
-    expect(h.readReg(h.cpu.ioPortAddr)).toBe(0x42);
+    expect(h.readReg(h.cpu.ioPortAddr)).toBe(0xab42);
     h.runPhases(6);
     expect(h.readReg(h.cpu.a)).toBe(0x55); // y=6 never writes a register
     expect(h.readReg(h.cpu.f)).toBe(F_FROM_99);

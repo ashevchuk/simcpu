@@ -177,6 +177,38 @@
       }
       .menu.open > .menu-panel { display: block; }
       .menu-panel.align-right { left: auto; right: 0; }
+      /* Nested File → Demo flyout (overflow visible so the child panel is not clipped). */
+      .menu[data-menu="file"] > .menu-panel {
+        overflow: visible;
+        max-height: none;
+      }
+      .menu-sub {
+        position: relative;
+      }
+      .menu-sub > .menu-sub-trigger {
+        cursor: default;
+      }
+      .menu-sub > .menu-sub-trigger .kbd {
+        margin-left: auto;
+      }
+      .menu-sub-panel {
+        display: none;
+        position: absolute;
+        left: calc(100% - 2px);
+        top: -6px;
+        min-width: 260px;
+        max-width: 340px;
+        padding: 6px 0;
+        background: #171a22;
+        border: 1px solid #303646;
+        border-radius: 8px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.03);
+        z-index: 5200;
+      }
+      .menu-sub:hover > .menu-sub-panel,
+      .menu-sub.open > .menu-sub-panel {
+        display: block;
+      }
       .menu-section {
         padding: 4px 12px 2px;
         font: 10px/1.2 ui-monospace, monospace;
@@ -1363,6 +1395,32 @@
               Open examples…
             </button>
             <div class="menu-sep"></div>
+            <div class="menu-sub" data-submenu="demo">
+              <button type="button" class="menu-item menu-sub-trigger" title="Ready-to-run machines and lab demos">
+                Demo<span class="kbd">▸</span>
+              </button>
+              <div class="menu-sub-panel">
+                <div class="menu-section">Lab I/O</div>
+                <button type="button" class="menu-item" id="add-led-blink" title="Z80 + LED blink demo ROM (OUT port 0x40 → canvas LED)">
+                  LED blink…<span class="item-desc">OUT 0x40 → lab LED</span>
+                </button>
+                <button type="button" class="menu-item" id="add-port-tty" title="Z80 + port TTY demo ROM (OUT port 0x01 → host console)">
+                  Port TTY…<span class="item-desc">OUT 0x01 → console</span>
+                </button>
+                <button type="button" class="menu-item" id="add-lab-reg" title="Z80 + REG8/COUNTER4 Soft Lab ports 0x41/0x42">
+                  Lab REG/COUNTER…<span class="item-desc">OUT 0x41 / 0x42 → Soft Lab</span>
+                </button>
+                <div class="menu-sep"></div>
+                <div class="menu-section">Spectrum</div>
+                <button type="button" class="menu-item" id="add-spectrum" title="Z80 + 64K RAM + soft Spectrum 48K (opens TTY, Spectrum tab)">
+                  Spectrum 48K…<span class="item-desc">One-click ZX machine</span>
+                </button>
+                <button type="button" class="menu-item" id="add-spectrum128" title="Z80 + 64K RAM + soft Spectrum 128K">
+                  Spectrum 128K…<span class="item-desc">Banking + AY</span>
+                </button>
+              </div>
+            </div>
+            <div class="menu-sep"></div>
             <button type="button" class="menu-item" id="export-chip" title="Select one chip instance, then download its definition (and every chip it depends on) as a JSON file">
               Export chip…
             </button>
@@ -1500,18 +1558,6 @@
             </button>
             <button type="button" class="menu-item" id="add-z80cpu" title="Insert a Z80-opcode CPU (asks for RAM address bits, then program bytes)">
               Z80 CPU…<span class="item-desc">Real Z80 opcode subset</span>
-            </button>
-            <button type="button" class="menu-item" id="add-led-blink" title="Z80 + LED blink demo ROM (OUT port 0x40 → canvas LED)">
-              LED blink…<span class="item-desc">Soft port → lab LED</span>
-            </button>
-            <button type="button" class="menu-item" id="add-port-tty" title="Z80 + port TTY demo ROM (OUT port 0x01 → host console)">
-              Port TTY…<span class="item-desc">OUT 0x01 → console</span>
-            </button>
-            <button type="button" class="menu-item" id="add-spectrum" title="Z80 + 64K RAM + soft Spectrum 48K (opens TTY, Spectrum tab)">
-              Spectrum 48K…<span class="item-desc">One-click ZX machine</span>
-            </button>
-            <button type="button" class="menu-item" id="add-spectrum128" title="Z80 + 64K RAM + soft Spectrum 128K">
-              Spectrum 128K…<span class="item-desc">Banking + AY</span>
             </button>
           </div>
         </div>

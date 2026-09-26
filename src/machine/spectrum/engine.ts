@@ -264,7 +264,7 @@ export class SpectrumEngine {
       },
       irqPending: () => ula.irqPending,
       clearIrq: () => ula.clearIrq(),
-      // Soft INTACK wait ≈ gate PHASE0 ack + PHASE1 wait (~2 T-states).
+      // Soft INTACK wait ≈ nested 4-T bus ack (Soft↔gate parity).
       intAckWaits: (n) => {
         contended.waitUnits += n;
       },
