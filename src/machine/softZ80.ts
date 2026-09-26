@@ -1168,27 +1168,81 @@ function execOpcode(
 }
 
 /**
+ * Dispatch one opcode byte (after fetch / IM0 bus sample). Shared by softStep
+ * and softAcceptIrq IM0. Returns false only for HALT (softStep parity).
+ */
+function softExecOp(
+  cpu: SoftZ80State,
+  ram: Uint8Array,
+  op: number,
+  hooks?: SoftMemHooks,
+): boolean {
+  if (op === 0xcb) {
+    const cb = fetch(cpu, ram, hooks);
+    bumpR(cpu);
+    const z = cb & 7;
+    const ea = z === 6 ? hl(cpu) : null;
+    execCb(cpu, ram, cb, ea, hooks);
+    return true;
+  }
+  if (op === 0xed) {
+    execEd(cpu, ram, hooks);
+    return true;
+  }
+  if (op === 0xdd || op === 0xfd) {
+    const idx: IndexReg = op === 0xdd ? 'ix' : 'iy';
+    const nop = fetch(cpu, ram, hooks);
+    bumpR(cpu);
+
+    if (nop === 0xcb) {
+      const d = s8(fetch(cpu, ram, hooks));
+      const cb = fetch(cpu, ram, hooks);
+      const ea = u16(indexAddr(cpu, idx) + d);
+      if ((cb & 7) !== 6) {
+        throw new Error(
+          `soft Z80: ${idx.toUpperCase()} CB 0x${cb.toString(16)} non-(I${idx === 'ix' ? 'X' : 'Y'}+d) unsupported`,
+        );
+      }
+      execCb(cpu, ram, cb, ea, hooks);
+      return true;
+    }
+    if (nop === 0xdd || nop === 0xfd || nop === 0xed) {
+      throw new Error(
+        `soft Z80: nested prefix 0x${op.toString(16)} 0x${nop.toString(16)} unsupported`,
+      );
+    }
+    return execOpcode(cpu, ram, nop, hooks, idx);
+  }
+  return execOpcode(cpu, ram, op, hooks, null);
+}
+
+/**
  * Accept a pending maskable IRQ.
- * IM 1 → RST 38H; IM 2 → word at (I<<8 | busByte), Spectrum bus defaults to 0xFF.
- * IM 0 is not implemented (returns false, leaves pending).
+ * IM 0 → execute irqBusByte as an opcode (after push); IM 1 → RST 38H;
+ * IM 2 → word at (I<<8 | busByte), Spectrum bus defaults to 0xFF.
  * Leaves pending uncleared when IFF1 is off, EI delay, or unsupported mode.
  */
 export function softAcceptIrq(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): boolean {
   if (!hooks?.irqPending?.()) return false;
   if (!cpu.iff1 || cpu.eiDelay > 0) return false;
-  if (cpu.im !== 1 && cpu.im !== 2) return false;
+  if (cpu.im !== 0 && cpu.im !== 1 && cpu.im !== 2) return false;
   cpu.halted = false;
   cpu.iff1 = false;
   cpu.iff2 = false;
   pushReturn(cpu, ram, cpu.pc, hooks);
   if (cpu.im === 1) {
     cpu.pc = uAddr(0x0038, hooks);
-  } else {
+  } else if (cpu.im === 2) {
     const bus = (hooks.irqBusByte?.() ?? 0xff) & 0xff;
     const vec = uAddr(((cpu.i & 0xff) << 8) | bus, hooks);
     const lo = memRead(ram, vec, hooks);
     const hi = memRead(ram, (vec + 1) & 0xffff, hooks);
     cpu.pc = uAddr(lo | (hi << 8), hooks);
+  } else {
+    // IM 0: sample data bus as an inserted opcode (bumpR once, then dispatch).
+    const op = (hooks.irqBusByte?.() ?? 0xff) & 0xff;
+    bumpR(cpu);
+    softExecOp(cpu, ram, op, hooks);
   }
   hooks.clearIrq?.();
   return true;
@@ -1212,44 +1266,7 @@ export function softStep(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHook
   if (hooks?.hostTrap?.(cpu, ram)) return true;
   const op = fetch(cpu, ram, hooks);
   bumpR(cpu);
-
-  let ok = true;
-  if (op === 0xcb) {
-    const cb = fetch(cpu, ram, hooks);
-    bumpR(cpu);
-    const z = cb & 7;
-    const ea = z === 6 ? hl(cpu) : null;
-    execCb(cpu, ram, cb, ea, hooks);
-  } else if (op === 0xed) {
-    execEd(cpu, ram, hooks);
-  } else if (op === 0xdd || op === 0xfd) {
-    const idx: IndexReg = op === 0xdd ? 'ix' : 'iy';
-    const nop = fetch(cpu, ram, hooks);
-    bumpR(cpu);
-
-    if (nop === 0xcb) {
-      const d = s8(fetch(cpu, ram, hooks));
-      const cb = fetch(cpu, ram, hooks);
-      const ea = u16(indexAddr(cpu, idx) + d);
-      // Only (IX+d)/(IY+d) form (z=6); undocumented register forms unsupported
-      if ((cb & 7) !== 6) {
-        throw new Error(
-          `soft Z80: ${idx.toUpperCase()} CB 0x${cb.toString(16)} non-(I${idx === 'ix' ? 'X' : 'Y'}+d) unsupported`,
-        );
-      }
-      execCb(cpu, ram, cb, ea, hooks);
-    } else if (nop === 0xdd || nop === 0xfd || nop === 0xed) {
-      // Nested/ignored prefixes: treat as new prefix start by rewinding one and re-fetching
-      // Common soft approach: ignore and continue with latest — here throw clearly
-      throw new Error(
-        `soft Z80: nested prefix 0x${op.toString(16)} 0x${nop.toString(16)} unsupported`,
-      );
-    } else {
-      ok = execOpcode(cpu, ram, nop, hooks, idx);
-    }
-  } else {
-    ok = execOpcode(cpu, ram, op, hooks, null);
-  }
+  const ok = softExecOp(cpu, ram, op, hooks);
 
   // EI delay: countdown hits 0 after the instruction that *followed* EI.
   if (cpu.eiDelay > 0) {

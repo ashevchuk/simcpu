@@ -458,8 +458,10 @@ function makeZ80GatePlacer(library: ChipLibrary): CircuitGatePlacer {
  *   sels: selHl, selStackWrite, selRead, selBc, selDe, selNnLow, selNnHigh,
  *         selExSpHlLow, selExSpHlHigh, selLdBlockRead, selLdBlockWrite,
  *         selCpBlockRead, selInBlockWrite, selOutBlockRead,
- *         selRrdRldRead, selRrdRldWrite, selEdNnPcPlus1, selIxDisp, selIyDisp
- *   data: pc, hl, bc, de, sp, nn, nnPlus1, spPlus1, pcPlus1, ixDisp, iyDisp
+ *         selRrdRldRead, selRrdRldWrite, selEdNnPcPlus1, selIxDisp, selIyDisp,
+ *         selIm2Lo, selIm2Hi
+ *   data: pc, hl, bc, de, sp, nn, nnPlus1, spPlus1, pcPlus1, ixDisp, iyDisp,
+ *         im2Vec, im2VecPlus1
  *   out
  */
 function makeRamAddrBitChip(library: ChipLibrary): ChipDef {
@@ -517,6 +519,11 @@ function makeRamAddrBitChip(library: ChipLibrary): ChipDef {
   wire(scratch, edNnPcPlus1Mux.out, ixDispAddrMux.in0);
   const iyDispAddrMux = placeMux(3400, 0);
   wire(scratch, ixDispAddrMux.out, iyDispAddrMux.in0);
+  // IM2 vector fetch: (I<<8)|irqBus then +1 for the high ISR byte.
+  const im2LoMux = placeMux(3600, 0);
+  wire(scratch, iyDispAddrMux.out, im2LoMux.in0);
+  const im2HiMux = placeMux(3800, 0);
+  wire(scratch, im2LoMux.out, im2HiMux.in0);
 
   // Shared data overrides fan out from one exposed pin each (same nets as
   // the former multi-wire of the same register bit into several mux in1s).
@@ -549,6 +556,8 @@ function makeRamAddrBitChip(library: ChipLibrary): ChipDef {
     { pin: edNnPcPlus1Mux.sel, isOutput: false }, // selEdNnPcPlus1
     { pin: ixDispAddrMux.sel, isOutput: false }, // selIxDisp
     { pin: iyDispAddrMux.sel, isOutput: false }, // selIyDisp
+    { pin: im2LoMux.sel, isOutput: false }, // selIm2Lo
+    { pin: im2HiMux.sel, isOutput: false }, // selIm2Hi
     { pin: hlMux.in0, isOutput: false }, // pc
     { pin: hlMux.in1, isOutput: false }, // hl
     { pin: bcMux.in1, isOutput: false }, // bc
@@ -560,7 +569,9 @@ function makeRamAddrBitChip(library: ChipLibrary): ChipDef {
     { pin: edNnPcPlus1Mux.in1, isOutput: false }, // pcPlus1
     { pin: ixDispAddrMux.in1, isOutput: false }, // ixDisp
     { pin: iyDispAddrMux.in1, isOutput: false }, // iyDisp
-    { pin: iyDispAddrMux.out, isOutput: true }, // out
+    { pin: im2LoMux.in1, isOutput: false }, // im2Vec
+    { pin: im2HiMux.in1, isOutput: false }, // im2VecPlus1
+    { pin: im2HiMux.out, isOutput: true }, // out
   ]);
 }
 
@@ -1196,18 +1207,24 @@ export interface Z80Cpu {
   aP: Register; // A' — real Z80's own shadow accumulator, same *seed*-path contract as rB..rL: external d/we seed its first value, EX AF,AF' drives it internally from then on (see "x=00: EX AF,AF'")
   fP: Register; // F' — A''s own shadow flags, identical contract
   rI: Pin[]; // I — interrupt vector base (q only); LD I,A / LD A,I (see "x=01, z=7, y=0..3"). No external seed — program `LD I,A` is the write path (avoids a floating we on every pre-existing test).
-  rR: Pin[]; // R — refresh counter (q only); LD R,A / LD A,R. Soft bumps R on M1; gate does not yet (Known Simplifications).
+  rR: Pin[]; // R — refresh counter (q only); LD R,A / LD A,R; auto-inc on M1 (PHASE0 fetch / prefix second byte), bit7 sticky — soft bumpR parity.
   rIXH: Register; // IX high — seed-path contract like rB; DD LD IX,nn / POP IX write internally (see "DD: IX")
   rIXL: Register; // IX low — same contract
   rIYH: Register; // IY high — seed-path contract like rIXH; FD LD IY,nn / POP IY write internally (see "FD: IY")
   rIYL: Register; // IY low — same contract
-  iff1: Pin[]; // IFF1 (q only) — EI-commit/DI/INT-accept/RETI write it; no external seed (same contract as rI)
-  iff2: Pin[]; // IFF2 (q only) — EI-commit/DI/INT-accept write it; RETI copies iff2→iff1
-  im1: Pin[]; // IM 1 latch (q only) — `ED 0x56` sets it
-  /** HALT latch (q only) — set by opcode 0x76; cleared by INT accept / CPU_RESET. */
+  iff1: Pin[]; // IFF1 (q only) — EI-commit/DI/INT-accept/NMI-accept/RETI/RETN write it; no external seed (same contract as rI)
+  iff2: Pin[]; // IFF2 (q only) — EI-commit/DI/INT-accept write it; RETI/RETN copy iff2→iff1; NMI leaves it
+  im0: Pin[]; // IM 0 latch (q only) — `ED 0x46`/`0x66` sets it (clears im1/im2)
+  im1: Pin[]; // IM 1 latch (q only) — `ED 0x56`/`0x76` sets it (clears im0/im2)
+  im2: Pin[]; // IM 2 latch (q only) — `ED 0x5E`/`0x7E` sets it (clears im0/im1); gate accept + vector→PC
+  /** HALT latch (q only) — set by opcode 0x76; cleared by INT/NMI accept / CPU_RESET. */
   halted: Pin[];
   int: Pin; // maskable-INT net (active high), driven by the internal `intDrive` Input (defaults to 0)
   intDrive: { value: 0 | 1 }; // raise/clear INT by writing `.value` (same Input contract clocks use)
+  nmi: Pin; // non-maskable-INT net (active high), driven by internal `nmiDrive` (defaults to 0)
+  nmiDrive: { value: 0 | 1 }; // pulse/raise NMI via `.value` (edge-sampled at PHASE0)
+  /** INTACK data-bus sample for IM0/IM2; eight Inputs defaulting to 1 → 0xFF. */
+  irqBusDrive: { value: 0 | 1 }[];
   bP: Register; // B'/C'/D'/E'/H'/L' — EXX's own shadow register-pair set, identical seed-path contract (see "x=11: EXX")
   cP: Register;
   dP: Register;
@@ -2350,8 +2367,8 @@ function buildZ80CpuInner(
   // I/R — real Z80's interrupt-vector and refresh registers. Built here
   // alongside the other CPU state; `LD I,A`/`LD R,A`/`LD A,I`/`LD A,R`
   // (see "x=01, z=7, y=0..3" below) are the only ops that touch them.
-  // No auto-increment of R on FETCH yet (soft bumps R on each M1). P/V on LD A,I/R copies IFF2 (soft parity).
-  // NMI / IM0 / IM2 remain Known Simplifications.
+  // R auto-increments on M1 (soft bumpR parity). P/V on LD A,I/R copies IFF2.
+  // I is also the high byte of the IM2 vector address (see IRQ accept).
   const regI = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 3800 });
   const regR = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 4600 });
   // IX — real Z80's first index register, as two 8-bit halves (same shape
@@ -2363,21 +2380,27 @@ function buildZ80CpuInner(
   const rIXL = buildRegister(parent, library, 8, { x: pos.x + 1400, y: pos.y + 4600 });
   const rIYH = buildRegister(parent, library, 8, { x: pos.x + 800, y: pos.y + 3800 });
   const rIYL = buildRegister(parent, library, 8, { x: pos.x + 800, y: pos.y + 4600 });
-  // Thin IM1 IRQ state — IFF1/IFF2, IM 1 latch, HALT latch, EI delay arms,
-  // and a one-instruction "serving" latch that suppresses PHASE1's PC
-  // advance while RST 38h reuses the existing stack/jump path. Seed
-  // contract matches rB (external d/we); INT is a genuine external sink
-  // like ioPortDataIn.
+  // IRQ/NMI state — IFF1/IFF2, IM 0/1/2 latches, HALT, EI delay arms,
+  // and one-instruction "serving" latches that suppress PHASE1's PC
+  // advance while INT (RST 38h / IM0 bus opcode / IM2 push+vector) or
+  // NMI (push+$0066) run. INT/NMI are genuine external sinks like ioPortDataIn.
   const iff1 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 3800 });
   const iff2 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4000 });
+  const im0 = buildRegister(parent, library, 1, { x: pos.x + 1800, y: pos.y + 4200 });
   const im1 = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4200 });
+  const im2 = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 4200 });
   const intServing = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4400 });
+  const nmiServing = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 4400 });
+  const im2Serving = buildRegister(parent, library, 1, { x: pos.x + 2400, y: pos.y + 4400 });
+  // Rising-edge NMI: `nmiPrev` samples the pin every PHASE0; accept when
+  // pin high and prev low (soft is an explicit pulse — same one-shot feel).
+  const nmiPrev = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 4600 });
   // Soft-style one-instruction EI delay: EI arms arm1; next PHASE0 moves
   // arm1→arm2; following PHASE0 commits IFF (arm2.q from prior cycle).
-  // HALT sticks until INT-accept / CPU_RESET.
+  // HALT sticks until INT/NMI-accept / CPU_RESET.
   const halted = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4800 });
-  const eiArm1 = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 3800 });
-  const eiArm2 = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 4000 });
+  const eiArm1 = buildRegister(parent, library, 1, { x: pos.x + 2400, y: pos.y + 3800 });
+  const eiArm2 = buildRegister(parent, library, 1, { x: pos.x + 2400, y: pos.y + 4000 });
   const alu = buildAlu(parent, library, 8, { x: pos.x + 3400, y: pos.y + 2400 });
   const fsm = buildRingCounter(parent, library, 10, { x: pos.x, y: pos.y + 3600 }); // FETCH/INCREMENT/EXEC1-EXEC8 — see the doc comment above ("x=11: SP, PUSH/POP, RET, RST n" for why a 4th phase exists; "x=00, z=1: LD dd,nn" for why a 5th and 6th do too; "x=11: CALL nn" for why a 7th and 8th do too; DD/FD CB SET/RES/rot (IX+d)/(IY+d) for why a 9th and 10th do too — BIT fit in 8, but read+write after op needs PHASE8 and op-advance moved to PHASE9). Widening is, again, a pure parameter change — buildRingCounter is fully generic (any N>=2), and every existing PHASE0-PHASE7 label keeps its exact ring position, the two new phases appended after EXEC6, before the wrap back to FETCH.
   const dec = buildZ80Decoder(parent, ir.q, { x: pos.x + 8600, y: pos.y });
@@ -2472,16 +2495,21 @@ function buildZ80CpuInner(
   // as 13 separate long lines.
   fsm.phase.forEach((p, k) => tieToLabel(`PHASE${k}`, p!, { x: pos.x + k * 100, y: pos.y + 3500 }));
 
-  // --- Thin IM1 IRQ accept ------------------------------------------------
-  // Maskable INT is accepted only when IFF1, IM1, and the external `int`
-  // pin are all high at FETCH. Force IR to `0xFF` (RST 38h) on that edge,
-  // latch `intServing` so PHASE1 does not advance PC (the pushed return
-  // address must be the interrupted instruction's own PC), clear both
-  // IFFs, then let the existing RST push/jump path run. No INTACK cycle,
-  // no IM0/IM2 — see Known Simplifications.
+  // --- IRQ / NMI accept ---------------------------------------------------
+  // Maskable INT when IFF1, (IM0∨IM1∨IM2), and external `int` are high at FETCH.
+  // IM1 forces IR←0xFF (RST 38h); IM0 forces IR←irqBus; IM2 forces IR←NOP
+  // then push+vector-fetch via im2Serving (softAcceptIrq IM2 parity).
+  // NMI is rising-edge at PHASE0: clear IFF1 only, force IR←NOP, push PC and
+  // jump $0066 via nmiServing (NMI wins over INT in the same FETCH).
+  const im0OrIm1 = buildOr(parent, { x: pos.x + 2000, y: pos.y + 4580 });
+  wire(parent, im0.q[0]!, im0OrIm1.a);
+  wire(parent, im1.q[0]!, im0OrIm1.b);
+  const intModeOk = buildOr(parent, { x: pos.x + 2025, y: pos.y + 4580 });
+  wire(parent, im0OrIm1.out, intModeOk.a);
+  wire(parent, im2.q[0]!, intModeOk.b);
   const intIffAndIm = buildAnd(parent, { x: pos.x + 2050, y: pos.y + 4600 });
   wire(parent, iff1.q[0]!, intIffAndIm.a);
-  wire(parent, im1.q[0]!, intIffAndIm.b);
+  wire(parent, intModeOk.out, intIffAndIm.b);
   const intPending = buildAnd(parent, { x: pos.x + 2100, y: pos.y + 4600 });
   wire(parent, intIffAndIm.out, intPending.a);
   // Default INT low via an internal Input — every FETCH samples this, so a
@@ -2490,19 +2518,114 @@ function buildZ80CpuInner(
   const intDrive = makeInput(parent, 0, { x: pos.x + 1950, y: pos.y + 4600 });
   wire(parent, intDrive.pins.out, intPending.b);
   const intPin = intDrive.pins.out;
-  const intAcceptNow = buildAnd(parent, { x: pos.x + 2150, y: pos.y + 4600 });
-  wire(parent, intPending.out, intAcceptNow.a);
-  tieToLabel('PHASE0', intAcceptNow.b, { x: pos.x + 2050, y: pos.y + 4620 });
-  tieToLabel('INT_ACCEPT_NOW', intAcceptNow.out, { x: pos.x + 2250, y: pos.y + 4600 }); // anchor — IR force mux, IFF clear, intServing we/d
-  // Every FETCH writes intServing: 1 on accept, 0 otherwise — so it powers
-  // on clean (not Z) and clears itself on the next instruction's FETCH
-  // without a separate PHASE7 term.
+  // NMI pin + edge detect (prev sampled every PHASE0).
+  const nmiDrive = makeInput(parent, 0, { x: pos.x + 1950, y: pos.y + 4680 });
+  const nmiPin = nmiDrive.pins.out;
+  const notNmiPrev = buildNot(parent, { x: pos.x + 2050, y: pos.y + 4680 });
+  wire(parent, nmiPrev.q[0]!, notNmiPrev.in);
+  const nmiEdge = buildAnd(parent, { x: pos.x + 2100, y: pos.y + 4680 });
+  wire(parent, nmiPin, nmiEdge.a);
+  wire(parent, notNmiPrev.out, nmiEdge.b);
+  const nmiAcceptNow = buildAnd(parent, { x: pos.x + 2150, y: pos.y + 4680 });
+  wire(parent, nmiEdge.out, nmiAcceptNow.a);
+  tieToLabel('PHASE0', nmiAcceptNow.b, { x: pos.x + 2050, y: pos.y + 4700 });
+  tieToLabel('NMI_ACCEPT_NOW', nmiAcceptNow.out, { x: pos.x + 2250, y: pos.y + 4680 });
+  tieToLabel('PHASE0', nmiPrev.we, { x: pos.x + 2150, y: pos.y + 4620 });
+  wire(parent, nmiPin, nmiPrev.d[0]!);
+  // INT accept suppressed when NMI wins this FETCH.
+  const notNmiAccept = buildNot(parent, { x: pos.x + 2200, y: pos.y + 4640 });
+  wire(parent, nmiAcceptNow.out, notNmiAccept.in);
+  const intAcceptGate = buildAnd(parent, { x: pos.x + 2150, y: pos.y + 4620 });
+  wire(parent, intPending.out, intAcceptGate.a);
+  wire(parent, notNmiAccept.out, intAcceptGate.b);
+  const intAcceptNow = buildAnd(parent, { x: pos.x + 2200, y: pos.y + 4600 });
+  wire(parent, intAcceptGate.out, intAcceptNow.a);
+  tieToLabel('PHASE0', intAcceptNow.b, { x: pos.x + 2100, y: pos.y + 4620 });
+  tieToLabel('INT_ACCEPT_NOW', intAcceptNow.out, { x: pos.x + 2300, y: pos.y + 4600 });
+  // Split accept: IM0/IM1 inject an opcode into IR; IM2 runs a NOP shell
+  // and fetches the ISR address from RAM[(I<<8)|irqBus].
+  const im01AcceptNow = buildAnd(parent, { x: pos.x + 2250, y: pos.y + 4560 });
+  wire(parent, intAcceptNow.out, im01AcceptNow.a);
+  wire(parent, im0OrIm1.out, im01AcceptNow.b);
+  tieToLabel('IM01_ACCEPT_NOW', im01AcceptNow.out, { x: pos.x + 2350, y: pos.y + 4560 });
+  const im2AcceptNow = buildAnd(parent, { x: pos.x + 2250, y: pos.y + 4540 });
+  wire(parent, intAcceptNow.out, im2AcceptNow.a);
+  wire(parent, im2.q[0]!, im2AcceptNow.b);
+  tieToLabel('IM2_ACCEPT_NOW', im2AcceptNow.out, { x: pos.x + 2350, y: pos.y + 4540 });
+  const irqAcceptAny = buildOr(parent, { x: pos.x + 2350, y: pos.y + 4640 });
+  wire(parent, intAcceptNow.out, irqAcceptAny.a);
+  wire(parent, nmiAcceptNow.out, irqAcceptAny.b);
+  tieToLabel('IRQ_ACCEPT_ANY', irqAcceptAny.out, { x: pos.x + 2450, y: pos.y + 4640 }); // R-inc suppress, IR force
+  // INTACK bus sample — eight Inputs default 1 (0xFF). Used by IM0 IR force
+  // and as the low byte of the IM2 vector address.
+  const irqBusDrive = Array.from({ length: 8 }, (_, i) =>
+    makeInput(parent, 1, { x: pos.x + 1850, y: pos.y + 4800 + i * 20 }),
+  );
+  irqBusDrive.forEach((inp, i) => {
+    tieToLabel(`IRQBUS${i}`, inp.pins.out, { x: pos.x + 1900, y: pos.y + 4800 + i * 20 });
+  });
+  // Serving latches: written every FETCH (1 on accept, else 0).
   tieToLabel('PHASE0', intServing.we, { x: pos.x + 2050, y: pos.y + 4480 });
-  wire(parent, intAcceptNow.out, intServing.d[0]!);
-  const notIntServing = buildNot(parent, { x: pos.x + 2200, y: pos.y + 4440 });
-  wire(parent, intServing.q[0]!, notIntServing.in);
-  tieToLabel('NOT_INT_SERVING', notIntServing.out, { x: pos.x + 2300, y: pos.y + 4440 }); // anchor — pcHold's PHASE1 term
-  tieToLabel('INT_SERVING', intServing.q[0]!, { x: pos.x + 2300, y: pos.y + 4420 });
+  wire(parent, im01AcceptNow.out, intServing.d[0]!);
+  tieToLabel('PHASE0', nmiServing.we, { x: pos.x + 2250, y: pos.y + 4480 });
+  wire(parent, nmiAcceptNow.out, nmiServing.d[0]!);
+  tieToLabel('PHASE0', im2Serving.we, { x: pos.x + 2450, y: pos.y + 4480 });
+  wire(parent, im2AcceptNow.out, im2Serving.d[0]!);
+  const irqServingIntNmi = buildOr(parent, { x: pos.x + 2300, y: pos.y + 4440 });
+  wire(parent, intServing.q[0]!, irqServingIntNmi.a);
+  wire(parent, nmiServing.q[0]!, irqServingIntNmi.b);
+  const irqServingAny = buildOr(parent, { x: pos.x + 2350, y: pos.y + 4440 });
+  wire(parent, irqServingIntNmi.out, irqServingAny.a);
+  wire(parent, im2Serving.q[0]!, irqServingAny.b);
+  const notIntServing = buildNot(parent, { x: pos.x + 2450, y: pos.y + 4440 });
+  wire(parent, irqServingAny.out, notIntServing.in);
+  tieToLabel('NOT_INT_SERVING', notIntServing.out, { x: pos.x + 2550, y: pos.y + 4440 }); // PC PHASE1 suppress
+  tieToLabel('INT_SERVING', intServing.q[0]!, { x: pos.x + 2550, y: pos.y + 4420 });
+  tieToLabel('NMI_SERVING', nmiServing.q[0]!, { x: pos.x + 2550, y: pos.y + 4400 });
+  tieToLabel('IM2_SERVING', im2Serving.q[0]!, { x: pos.x + 2550, y: pos.y + 4380 });
+  // NMI micro-ops: PHASE2 push PC (reuse stack write + PC bus bank), PHASE3 → $0066.
+  const nmiPushNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4400 });
+  wire(parent, nmiServing.q[0]!, nmiPushNow.a);
+  tieToLabel('PHASE2', nmiPushNow.b, { x: pos.x + 2500, y: pos.y + 4400 });
+  tieToLabel('NMI_PUSH_NOW', nmiPushNow.out, { x: pos.x + 2700, y: pos.y + 4400 });
+  const nmiJumpNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4360 });
+  wire(parent, nmiServing.q[0]!, nmiJumpNow.a);
+  tieToLabel('PHASE3', nmiJumpNow.b, { x: pos.x + 2500, y: pos.y + 4360 });
+  tieToLabel('NMI_JUMP_NOW', nmiJumpNow.out, { x: pos.x + 2700, y: pos.y + 4360 });
+  // IM2 micro-ops (soft pushReturn + word-at-vector): PHASE2 push PC,
+  // PHASE3 read ISR lo at vec, PHASE4 read ISR hi at vec+1 into PC.
+  const im2PushNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4320 });
+  wire(parent, im2Serving.q[0]!, im2PushNow.a);
+  tieToLabel('PHASE2', im2PushNow.b, { x: pos.x + 2500, y: pos.y + 4320 });
+  tieToLabel('IM2_PUSH_NOW', im2PushNow.out, { x: pos.x + 2700, y: pos.y + 4320 });
+  const im2ReadLoNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4280 });
+  wire(parent, im2Serving.q[0]!, im2ReadLoNow.a);
+  tieToLabel('PHASE3', im2ReadLoNow.b, { x: pos.x + 2500, y: pos.y + 4280 });
+  tieToLabel('IM2_READ_LO_NOW', im2ReadLoNow.out, { x: pos.x + 2700, y: pos.y + 4280 });
+  const im2ReadHiNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4240 });
+  wire(parent, im2Serving.q[0]!, im2ReadHiNow.a);
+  tieToLabel('PHASE4', im2ReadHiNow.b, { x: pos.x + 2500, y: pos.y + 4240 });
+  tieToLabel('IM2_READ_HI_NOW', im2ReadHiNow.out, { x: pos.x + 2700, y: pos.y + 4240 });
+  // Vector address = (I<<8)|irqBus, truncated to addrBits (I zero-extends
+  // into bits above 8 when addrBits>8; bits above I's width stay GND).
+  const im2VecPlusOne = buildAlu(parent, library, addrBits, { x: pos.x + 1750, y: pos.y + 5000 });
+  tiePowerRail(parent, 'GND', im2VecPlusOne.op0);
+  tiePowerRail(parent, 'GND', im2VecPlusOne.op1);
+  tiePowerRail(parent, 'VCC', im2VecPlusOne.cin);
+  for (let i = 0; i < addrBits; i++) {
+    if (i < 8) {
+      tieToLabel(`IRQBUS${i}`, im2VecPlusOne.a[i]!, { x: pos.x + 1650, y: pos.y + 5000 + i * 20 });
+      tieToLabel(`IM2VEC${i}`, im2VecPlusOne.a[i]!, { x: pos.x + 1850, y: pos.y + 5000 + i * 20 });
+    } else if (i - 8 < 8) {
+      wire(parent, regI.q[i - 8]!, im2VecPlusOne.a[i]!);
+      tieToLabel(`IM2VEC${i}`, im2VecPlusOne.a[i]!, { x: pos.x + 1850, y: pos.y + 5000 + i * 20 });
+    } else {
+      tiePowerRail(parent, 'GND', im2VecPlusOne.a[i]!);
+      tieToLabel(`IM2VEC${i}`, im2VecPlusOne.a[i]!, { x: pos.x + 1850, y: pos.y + 5000 + i * 20 });
+    }
+    tiePowerRail(parent, 'GND', im2VecPlusOne.b[i]!);
+    tieToLabel(`IM2VEC1_${i}`, im2VecPlusOne.out[i]!, { x: pos.x + 1950, y: pos.y + 5000 + i * 20 });
+  }
 
   // --- CB/ED/DD/FD prefix bytes --------------------------------------
   // Real Z80 puts all four prefix opcodes in x=11's own z=3/z=5 columns —
@@ -4922,29 +5045,75 @@ function buildZ80CpuInner(
   wire(parent, ldARNow.out, ldAIrNow.b);
   tieToLabel('LDAIR_NOW', ldAIrNow.out, { x: pos.x - 700, y: pos.y - 5730 }); // anchor — A's we/mux + F we/layer
 
-  // Thin IRQ: `IM 1` (ED 0x56 — y=2, z=6) and `RETI` (ED 0x4D — y=1, z=5).
-  // Both commit on PHASE4 like every other ED x=01 body. RETI reuses RET's
-  // stack-pop/PC-capture path (widened below); IM 1 only sets the mode latch.
-  const isIm1 = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5780 });
-  const isIm1Stage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5780 });
-  wire(parent, isEdX1Active.out, isIm1Stage.a);
-  wire(parent, dec.y[2]!, isIm1Stage.b);
-  wire(parent, isIm1Stage.out, isIm1.a);
-  wire(parent, dec.z[6]!, isIm1.b);
-  const im1Now = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5780 });
+  // IRQ modes + RETI/RETN: `IM 0/1/2` (ED z=6) and `RETI`/`RETN` (ED z=5).
+  // Soft aliases: IM0=46/66, IM1=56/76, IM2=5E/7E; RETN=(op&0xc7)==0x45,
+  // RETI=(op&0xc7)==0x4D. Gate documents y=0/2/3 (+ aliases y=4/6/7) and
+  // RETN y=0 / RETI y=1. Both RET* commit on PHASE4; RET* reuse RET's
+  // stack-pop/PC-capture and IFF1←IFF2.
+  const isImZ6 = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5780 });
+  wire(parent, isEdX1Active.out, isImZ6.a);
+  wire(parent, dec.z[6]!, isImZ6.b);
+  const isIm0Y = buildOr(parent, { x: pos.x - 900, y: pos.y - 5760 });
+  wire(parent, dec.y[0]!, isIm0Y.a);
+  wire(parent, dec.y[4]!, isIm0Y.b);
+  const isIm0 = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5760 });
+  wire(parent, isImZ6.out, isIm0.a);
+  wire(parent, isIm0Y.out, isIm0.b);
+  const im0Now = buildAnd(parent, { x: pos.x - 800, y: pos.y - 5760 });
+  wire(parent, isIm0.out, im0Now.a);
+  tieToLabel('PHASE4', im0Now.b, { x: pos.x - 900, y: pos.y - 5740 });
+  tieToLabel('IM0_NOW', im0Now.out, { x: pos.x - 750, y: pos.y - 5760 });
+  const isIm1Y = buildOr(parent, { x: pos.x - 900, y: pos.y - 5780 });
+  wire(parent, dec.y[2]!, isIm1Y.a);
+  wire(parent, dec.y[6]!, isIm1Y.b);
+  const isIm1 = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5780 });
+  wire(parent, isImZ6.out, isIm1.a);
+  wire(parent, isIm1Y.out, isIm1.b);
+  const im1Now = buildAnd(parent, { x: pos.x - 800, y: pos.y - 5780 });
   wire(parent, isIm1.out, im1Now.a);
-  tieToLabel('PHASE4', im1Now.b, { x: pos.x - 950, y: pos.y - 5760 });
-  tieToLabel('IM1_NOW', im1Now.out, { x: pos.x - 800, y: pos.y - 5780 }); // anchor — im1's own write mux
-  const isReti = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5800 });
-  const isRetiStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5800 });
+  tieToLabel('PHASE4', im1Now.b, { x: pos.x - 900, y: pos.y - 5760 });
+  tieToLabel('IM1_NOW', im1Now.out, { x: pos.x - 750, y: pos.y - 5780 });
+  const isIm2Y = buildOr(parent, { x: pos.x - 900, y: pos.y - 5800 });
+  wire(parent, dec.y[3]!, isIm2Y.a);
+  wire(parent, dec.y[7]!, isIm2Y.b);
+  const isIm2 = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5800 });
+  wire(parent, isImZ6.out, isIm2.a);
+  wire(parent, isIm2Y.out, isIm2.b);
+  const im2Now = buildAnd(parent, { x: pos.x - 800, y: pos.y - 5800 });
+  wire(parent, isIm2.out, im2Now.a);
+  tieToLabel('PHASE4', im2Now.b, { x: pos.x - 900, y: pos.y - 5780 });
+  tieToLabel('IM2_NOW', im2Now.out, { x: pos.x - 750, y: pos.y - 5800 });
+  const imAnyNow = buildOr(parent, { x: pos.x - 700, y: pos.y - 5770 });
+  wire(parent, im0Now.out, imAnyNow.a);
+  wire(parent, im1Now.out, imAnyNow.b);
+  const imAnyNow2 = buildOr(parent, { x: pos.x - 650, y: pos.y - 5770 });
+  wire(parent, imAnyNow.out, imAnyNow2.a);
+  wire(parent, im2Now.out, imAnyNow2.b);
+  tieToLabel('IM_ANY_NOW', imAnyNow2.out, { x: pos.x - 600, y: pos.y - 5770 }); // mode latch we
+  const isReti = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5820 });
+  const isRetiStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5820 });
   wire(parent, isEdX1Active.out, isRetiStage.a);
   wire(parent, dec.y[1]!, isRetiStage.b);
   wire(parent, isRetiStage.out, isReti.a);
   wire(parent, dec.z[5]!, isReti.b);
-  const retiNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5800 });
+  const retiNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5820 });
   wire(parent, isReti.out, retiNow.a);
-  tieToLabel('PHASE4', retiNow.b, { x: pos.x - 950, y: pos.y - 5780 });
-  tieToLabel('RETI_NOW', retiNow.out, { x: pos.x - 800, y: pos.y - 5800 }); // anchor — readNow / retMux / IFF1←IFF2
+  tieToLabel('PHASE4', retiNow.b, { x: pos.x - 950, y: pos.y - 5800 });
+  tieToLabel('RETI_NOW', retiNow.out, { x: pos.x - 800, y: pos.y - 5820 });
+  const isRetn = buildAnd(parent, { x: pos.x - 900, y: pos.y - 5840 });
+  const isRetnStage = buildAnd(parent, { x: pos.x - 950, y: pos.y - 5840 });
+  wire(parent, isEdX1Active.out, isRetnStage.a);
+  wire(parent, dec.y[0]!, isRetnStage.b);
+  wire(parent, isRetnStage.out, isRetn.a);
+  wire(parent, dec.z[5]!, isRetn.b);
+  const retnNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5840 });
+  wire(parent, isRetn.out, retnNow.a);
+  tieToLabel('PHASE4', retnNow.b, { x: pos.x - 950, y: pos.y - 5820 });
+  tieToLabel('RETN_NOW', retnNow.out, { x: pos.x - 800, y: pos.y - 5840 });
+  const retiOrRetnNow = buildOr(parent, { x: pos.x - 750, y: pos.y - 5830 });
+  wire(parent, retiNow.out, retiOrRetnNow.a);
+  wire(parent, retnNow.out, retiOrRetnNow.b);
+  tieToLabel('RETI_OR_RETN_NOW', retiOrRetnNow.out, { x: pos.x - 700, y: pos.y - 5830 }); // IFF1←IFF2 + pop
 
   // x=01, z=7, y=4/y=5: RRD/RLD (real 0xED 0x67/0x6F) — a 12-bit BCD
   // nibble rotate spanning `A`'s own low nibble and both of `(HL)`'s,
@@ -5365,22 +5534,34 @@ function buildZ80CpuInner(
   }
   pc.q.forEach((q, i) => tieToLabel(`REGPC${i}`, q, { x: pos.x - 100, y: pos.y - 40 - i * 20 }));
 
-  // FETCH (phase 0): RAM drives the bus; IR captures it — unless thin IM1
-  // IRQ accept forces every IR bit to 1 (`0xFF` = RST 38h) on that same
-  // edge. The shared `BUS*` net stays on the RAM side of the mux so every
-  // other bus driver/reader is unchanged; only IR's own `d` sees the force.
-  // `ir.we` itself is wired above (`irWe`) — PHASE0 unconditionally, plus
-  // a second, later term for the CB/ED/DD/FD prefix bytes' own second-byte
-  // recapture — not a bare label anchor here anymore. (ram.pins.oe/we are
-  // wired below, once the decode logic that gates them exists.)
+  // FETCH (phase 0): RAM drives the bus; IR captures it — unless IRQ/NMI
+  // accept forces IR: NMI/IM2→0x00 (NOP), IM0→irqBus, IM1→0xFF (RST 38h).
+  // Priority: NMI > IM2 > IM01. The shared `BUS*` net stays on the RAM side.
   ramDataPins(ram).forEach((p, i) => {
     tieToLabel(`BUS${i}`, p, { x: pos.x + 2500, y: pos.y - 60 - i * 20 });
-    const irForceMux = makeChipInstance(parent, muxDef, { x: pos.x + 2550, y: pos.y - 60 - i * 100 });
-    tieToLabel('INT_ACCEPT_NOW', irForceMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2450, y: pos.y - 60 - i * 100 });
-    wire(parent, p, irForceMux.pins[muxDef.ports[1]!]!); // in0: normal FETCH from RAM
-    tiePowerRail(parent, 'VCC', irForceMux.pins[muxDef.ports[2]!]!); // in1: force 1 (RST 38h)
-    wire(parent, irForceMux.pins[muxDef.ports[3]!]!, ir.d[i]!);
+    // intForce: IM0 ? irqBus : VCC (IM1 RST 38h) — only IM0/IM1 accept
+    const im0ForceMux = makeChipInstance(parent, muxDef, { x: pos.x + 2520, y: pos.y - 60 - i * 100 });
+    tieToLabel('IM0', im0ForceMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2420, y: pos.y - 60 - i * 100 });
+    tiePowerRail(parent, 'VCC', im0ForceMux.pins[muxDef.ports[1]!]!); // in0: IM1 → 1
+    tieToLabel(`IRQBUS${i}`, im0ForceMux.pins[muxDef.ports[2]!]!, { x: pos.x + 2420, y: pos.y - 40 - i * 100 }); // in1: IM0 bus
+    const intForceMux = makeChipInstance(parent, muxDef, { x: pos.x + 2550, y: pos.y - 60 - i * 100 });
+    tieToLabel('IM01_ACCEPT_NOW', intForceMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2450, y: pos.y - 60 - i * 100 });
+    wire(parent, p, intForceMux.pins[muxDef.ports[1]!]!); // in0: normal FETCH from RAM
+    wire(parent, im0ForceMux.pins[muxDef.ports[3]!]!, intForceMux.pins[muxDef.ports[2]!]!);
+    // IM2: force NOP (same shell as NMI; vector fetch is separate micro-ops)
+    const im2ForceMux = makeChipInstance(parent, muxDef, { x: pos.x + 2570, y: pos.y - 60 - i * 100 });
+    tieToLabel('IM2_ACCEPT_NOW', im2ForceMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2470, y: pos.y - 60 - i * 100 });
+    wire(parent, intForceMux.pins[muxDef.ports[3]!]!, im2ForceMux.pins[muxDef.ports[1]!]!);
+    tiePowerRail(parent, 'GND', im2ForceMux.pins[muxDef.ports[2]!]!);
+    // NMI wins: force 0
+    const nmiForceMux = makeChipInstance(parent, muxDef, { x: pos.x + 2590, y: pos.y - 60 - i * 100 });
+    tieToLabel('NMI_ACCEPT_NOW', nmiForceMux.pins[muxDef.ports[0]!]!, { x: pos.x + 2490, y: pos.y - 60 - i * 100 });
+    wire(parent, im2ForceMux.pins[muxDef.ports[3]!]!, nmiForceMux.pins[muxDef.ports[1]!]!);
+    tiePowerRail(parent, 'GND', nmiForceMux.pins[muxDef.ports[2]!]!);
+    wire(parent, nmiForceMux.pins[muxDef.ports[3]!]!, ir.d[i]!);
   });
+  // Publish IM0 latch for IR force mux (q is far from here).
+  tieToLabel('IM0', im0.q[0]!, { x: pos.x + 1800, y: pos.y + 4220 });
 
   // Real Z80 decode: x=10 (dec.x[2]) is ALU-on-register, x=01 (dec.x[1]) is
   // LD r,r' — see the doc comment above for what each group's y/z mean.
@@ -6875,10 +7056,10 @@ function buildZ80CpuInner(
   wire(parent, retNow.out, readNowStage.b);
   const readNowStageReti = buildOr(parent, { x: pos.x + 10150, y: pos.y + 850 });
   wire(parent, readNowStage.out, readNowStageReti.a);
-  tieToLabel('RETI_NOW', readNowStageReti.b, { x: pos.x + 10050, y: pos.y + 850 });
+  tieToLabel('RETI_OR_RETN_NOW', readNowStageReti.b, { x: pos.x + 10050, y: pos.y + 850 });
   const retOrRetiNow = buildOr(parent, { x: pos.x + 10100, y: pos.y + 920 });
   wire(parent, retNow.out, retOrRetiNow.a);
-  tieToLabel('RETI_NOW', retOrRetiNow.b, { x: pos.x + 10000, y: pos.y + 920 });
+  tieToLabel('RETI_OR_RETN_NOW', retOrRetiNow.b, { x: pos.x + 10000, y: pos.y + 920 });
   tieToLabel('RET_OR_RETI_NOW', retOrRetiNow.out, { x: pos.x + 10200, y: pos.y + 920 }); // anchor — PC's own retMux (far)
   // RST pushes PC on EXEC1, then jumps to its fixed target on EXEC2 — NOT
   // both on the same edge. First version did both on EXEC1: the push-data
@@ -7467,10 +7648,16 @@ function buildZ80CpuInner(
   const stackWriteNow = buildOr(parent, { x: pos.x + 10200, y: pos.y + 970 });
   wire(parent, stackWriteNowStage3.out, stackWriteNow.a);
   wire(parent, pushIxIyWriteAny.out, stackWriteNow.b);
-  tieToLabel('STACK_WRITE_NOW', stackWriteNow.out, { x: pos.x + 10250, y: pos.y + 920 }); // anchor — the far address-mux writeMux.sel below reads this via the label, not a ~9000-unit wire
-  tieToLabel('READ_NOW', readNow.out, { x: pos.x + 10250, y: pos.y + 820 }); // same anchor idea for readMux.sel
-  const stackActive = buildOr(parent, { x: pos.x + 10300, y: pos.y + 950 }); // anything in x=11 currently driving SP/RAM
-  wire(parent, stackWriteNow.out, stackActive.a);
+  const stackWriteNowNmi = buildOr(parent, { x: pos.x + 10250, y: pos.y + 970 });
+  wire(parent, stackWriteNow.out, stackWriteNowNmi.a);
+  tieToLabel('NMI_PUSH_NOW', stackWriteNowNmi.b, { x: pos.x + 10150, y: pos.y + 990 });
+  const stackWriteNowIrq = buildOr(parent, { x: pos.x + 10300, y: pos.y + 970 });
+  wire(parent, stackWriteNowNmi.out, stackWriteNowIrq.a);
+  tieToLabel('IM2_PUSH_NOW', stackWriteNowIrq.b, { x: pos.x + 10200, y: pos.y + 990 });
+  tieToLabel('STACK_WRITE_NOW', stackWriteNowIrq.out, { x: pos.x + 10350, y: pos.y + 920 }); // anchor — the far address-mux writeMux.sel below reads this via the label, not a ~9000-unit wire
+  tieToLabel('READ_NOW', readNow.out, { x: pos.x + 10350, y: pos.y + 820 }); // same anchor idea for readMux.sel
+  const stackActive = buildOr(parent, { x: pos.x + 10400, y: pos.y + 950 }); // anything in x=11 currently driving SP/RAM
+  wire(parent, stackWriteNowIrq.out, stackActive.a);
   wire(parent, readNow.out, stackActive.b);
 
   // busActive: the WIDE union — anything that might be driving the shared
@@ -7589,7 +7776,7 @@ function buildZ80CpuInner(
   const ramWeOr = makeChipInstance(parent, ramWeOrDef, { x: pos.x + 9600, y: pos.y + 300 });
   const ramWeIn = (idx: number) => ramWeOr.pins[ramWeOrDef.ports[idx]!]!;
   wire(parent, ramWriteNow.out, ramWeIn(0));
-  wire(parent, stackWriteNow.out, ramWeIn(1));
+  wire(parent, stackWriteNowIrq.out, ramWeIn(1));
   tieToLabel('LDBCA_NOW', ramWeIn(2), { x: pos.x + 9500, y: pos.y + 350 });
   tieToLabel('LDDEA_NOW', ramWeIn(3), { x: pos.x + 9500, y: pos.y + 400 });
   tieToLabel('LDNNA_NOW', ramWeIn(4), { x: pos.x + 9500, y: pos.y + 450 });
@@ -7734,9 +7921,9 @@ function buildZ80CpuInner(
   tieToLabel('FDIY_HL8_IMM_READ_NOW', ddFdHl8ImmOe.b, { x: pos.x + 10550, y: pos.y + 190 });
   // RAM OE OR — sequential left-associated OR of every read enable (same
   // order as the former ramOeStage…ramOeFinal5 chain). Side-folds above feed
-  // as single inputs; RRDRLD_READ_NOW is deliberately the *last* term so OE
-  // path depth for RRD/RLD stays unchanged.
-  const ramOeOrDef = getOrNChip(library, 36, 'RAM_OE_OR');
+  // as single inputs; IM2 vector reads are last so OE path depth for earlier
+  // terms stays unchanged.
+  const ramOeOrDef = getOrNChip(library, 37, 'RAM_OE_OR');
   const ramOeOr = makeChipInstance(parent, ramOeOrDef, { x: pos.x + 9600, y: pos.y - 400 });
   const ramOeIn = (idx: number) => ramOeOr.pins[ramOeOrDef.ports[idx]!]!;
   wire(parent, fetchRead.out, ramOeIn(0));
@@ -7775,7 +7962,11 @@ function buildZ80CpuInner(
   wire(parent, ddFdDispOe.out, ramOeIn(33));
   wire(parent, ddFdHl8ImmOe.out, ramOeIn(34));
   tieToLabel('RRDRLD_READ_NOW', ramOeIn(35), { x: pos.x + 10650, y: pos.y + 125 });
-  wire(parent, ramOeOr.pins[ramOeOrDef.ports[36]!]!, ram.pins.oe!);
+  const im2ReadAny = buildOr(parent, { x: pos.x + 10650, y: pos.y + 145 });
+  tieToLabel('IM2_READ_LO_NOW', im2ReadAny.a, { x: pos.x + 10550, y: pos.y + 145 });
+  tieToLabel('IM2_READ_HI_NOW', im2ReadAny.b, { x: pos.x + 10550, y: pos.y + 165 });
+  wire(parent, im2ReadAny.out, ramOeIn(36));
+  wire(parent, ramOeOr.pins[ramOeOrDef.ports[37]!]!, ram.pins.oe!);
 
   // SP's own +-1 adder: a *second* buildAlu instance (width addrBits, not
   // 8), permanently in ADD mode, b fanned from spWantDec to every bit —
@@ -8000,19 +8191,23 @@ function buildZ80CpuInner(
     tieToLabel('EDNN_IMM_HIGH_NOW', port(16), { x: pos.x + 3600, y: pos.y - 320 - i * 100 });
     tieToLabel('IXDISP_ADDR_NOW', port(17), { x: pos.x + 3800, y: pos.y - 320 - i * 100 });
     tieToLabel('IYDISP_ADDR_NOW', port(18), { x: pos.x + 4000, y: pos.y - 320 - i * 100 });
+    tieToLabel('IM2_READ_LO_NOW', port(19), { x: pos.x + 4200, y: pos.y - 320 - i * 100 });
+    tieToLabel('IM2_READ_HI_NOW', port(20), { x: pos.x + 4400, y: pos.y - 320 - i * 100 });
     // data
-    wire(parent, pc.q[i]!, port(19));
-    wire(parent, hlBit, port(20));
-    wire(parent, bcBit, port(21));
-    wire(parent, deBit, port(22));
-    tieToLabel(`SP_Q${i}`, port(23), { x: pos.x + 800, y: pos.y - 280 - i * 100 });
-    wire(parent, nnAddr.q[i]!, port(24));
-    wire(parent, nnAddrPlusOne.out[i]!, port(25));
-    tieToLabel(`SPPLUS1_${i}`, port(26), { x: pos.x + 2200, y: pos.y - 280 - i * 100 });
-    tieToLabel(`PCPLUS1_${i}`, port(27), { x: pos.x + 3600, y: pos.y - 280 - i * 100 });
-    tieToLabel(`IXDISPADD${i}`, port(28), { x: pos.x + 3800, y: pos.y - 280 - i * 100 });
-    tieToLabel(`IYDISPADD${i}`, port(29), { x: pos.x + 4000, y: pos.y - 280 - i * 100 });
-    wire(parent, port(30), p);
+    wire(parent, pc.q[i]!, port(21));
+    wire(parent, hlBit, port(22));
+    wire(parent, bcBit, port(23));
+    wire(parent, deBit, port(24));
+    tieToLabel(`SP_Q${i}`, port(25), { x: pos.x + 800, y: pos.y - 280 - i * 100 });
+    wire(parent, nnAddr.q[i]!, port(26));
+    wire(parent, nnAddrPlusOne.out[i]!, port(27));
+    tieToLabel(`SPPLUS1_${i}`, port(28), { x: pos.x + 2200, y: pos.y - 280 - i * 100 });
+    tieToLabel(`PCPLUS1_${i}`, port(29), { x: pos.x + 3600, y: pos.y - 280 - i * 100 });
+    tieToLabel(`IXDISPADD${i}`, port(30), { x: pos.x + 3800, y: pos.y - 280 - i * 100 });
+    tieToLabel(`IYDISPADD${i}`, port(31), { x: pos.x + 4000, y: pos.y - 280 - i * 100 });
+    tieToLabel(`IM2VEC${i}`, port(32), { x: pos.x + 4200, y: pos.y - 280 - i * 100 });
+    tieToLabel(`IM2VEC1_${i}`, port(33), { x: pos.x + 4400, y: pos.y - 280 - i * 100 });
+    wire(parent, port(34), p);
   });
 
   // PC+1 ripple incrementer for ED LD (nn),dd's high-immediate address
@@ -8355,7 +8550,37 @@ function buildZ80CpuInner(
     wire(parent, inBlockRepeatMux.pins[muxDef.ports[3]!]!, outBlockRepeatMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
     wire(parent, pcMinus2Adder.out[i]!, outBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
 
-    wire(parent, outBlockRepeatMux.pins[muxDef.ports[3]!]!, pc.d[i]!);
+    // NMI jump to $0066 (bits 1,2,5,6 set). Final layer after block repeats.
+    const nmiJumpMux = makeChipInstance(parent, muxDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
+    tieToLabel('NMI_JUMP_NOW', nmiJumpMux.pins[muxDef.ports[0]!]!, { x: pos.x + 650, y: pos.y - 320 - i * 100 });
+    wire(parent, outBlockRepeatMux.pins[muxDef.ports[3]!]!, nmiJumpMux.pins[muxDef.ports[1]!]!);
+    // 0x66 = 0b1100110
+    if (i === 1 || i === 2 || i === 5 || i === 6) {
+      tiePowerRail(parent, 'VCC', nmiJumpMux.pins[muxDef.ports[2]!]!);
+    } else {
+      tiePowerRail(parent, 'GND', nmiJumpMux.pins[muxDef.ports[2]!]!);
+    }
+
+    // IM2 vector → PC: PHASE3 loads lo from bus (RET shape); PHASE4 loads
+    // hi bits when addrBits>8 (hold the other half).
+    const im2LoMux = makeChipInstance(parent, muxDef, { x: pos.x + 750, y: pos.y - 300 - i * 100 });
+    tieToLabel('IM2_READ_LO_NOW', im2LoMux.pins[muxDef.ports[0]!]!, { x: pos.x + 700, y: pos.y - 320 - i * 100 });
+    wire(parent, nmiJumpMux.pins[muxDef.ports[3]!]!, im2LoMux.pins[muxDef.ports[1]!]!);
+    if (i < 8) {
+      tieToLabel(`BUS${i}`, im2LoMux.pins[muxDef.ports[2]!]!, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
+    } else {
+      wire(parent, pc.q[i]!, im2LoMux.pins[muxDef.ports[2]!]!); // hold high while lo loads
+    }
+    const im2HiMux = makeChipInstance(parent, muxDef, { x: pos.x + 800, y: pos.y - 300 - i * 100 });
+    tieToLabel('IM2_READ_HI_NOW', im2HiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 750, y: pos.y - 320 - i * 100 });
+    wire(parent, im2LoMux.pins[muxDef.ports[3]!]!, im2HiMux.pins[muxDef.ports[1]!]!);
+    if (i < 8) {
+      wire(parent, pc.q[i]!, im2HiMux.pins[muxDef.ports[2]!]!); // hold lo while hi loads
+    } else {
+      tieToLabel(`BUS${i - 8}`, im2HiMux.pins[muxDef.ports[2]!]!, { x: pos.x + 750, y: pos.y - 300 - i * 100 });
+    }
+
+    wire(parent, im2HiMux.pins[muxDef.ports[3]!]!, pc.d[i]!);
   });
 
   // Operand bus: shares ir.d/ram.data with FETCH (mutually exclusive by
@@ -8519,6 +8744,21 @@ function buildZ80CpuInner(
     tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 1900 + i * 20 });
     wire(parent, rstNow.out, buf.pins[bufDef.ports[1]!]!);
     tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 1900 + i * 20 });
+  });
+  // NMI push data: same PC→bus bank as RST, gated by NMI_PUSH_NOW (PHASE2
+  // while nmiServing — PC still at the interrupted instruction).
+  pc.q.forEach((_, i) => {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 2050 + i * 20 });
+    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 2050 + i * 20 });
+    tieToLabel('NMI_PUSH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 2070 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 2050 + i * 20 });
+  });
+  // IM2 push data: identical PC→bus bank, gated by IM2_PUSH_NOW.
+  pc.q.forEach((_, i) => {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 1970 + i * 20 });
+    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 1970 + i * 20 });
+    tieToLabel('IM2_PUSH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 1990 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 1970 + i * 20 });
   });
 
   // CALL nn's own push data: the identical bank, gated by CALL_PUSH_NOW
@@ -9228,11 +9468,33 @@ function buildZ80CpuInner(
   // that register" path already uses.
   const rIExt = wrapWithPairCommit(regI, 'LDIA_NOW', 'AOLD', { x: pos.x + 11850, y: pos.y - 700 });
   const rRExt = wrapWithPairCommit(regR, 'LDRA_NOW', 'AOLD', { x: pos.x + 11850, y: pos.y - 300 });
+  // R M1 auto-increment (soft bumpR parity): (R & 0x80) | ((R+1) & 0x7f).
+  // Fires on PHASE0 FETCH when not accepting INT/NMI, and on PREFIX_READ_NOW.
+  const notIrqAcceptForR = buildNot(parent, { x: pos.x + 11700, y: pos.y - 200 });
+  tieToLabel('IRQ_ACCEPT_ANY', notIrqAcceptForR.in, { x: pos.x + 11600, y: pos.y - 200 });
+  const rincFetch = buildAnd(parent, { x: pos.x + 11750, y: pos.y - 180 });
+  tieToLabel('PHASE0', rincFetch.a, { x: pos.x + 11650, y: pos.y - 180 });
+  wire(parent, notIrqAcceptForR.out, rincFetch.b);
+  const rincNow = buildOr(parent, { x: pos.x + 11800, y: pos.y - 160 });
+  wire(parent, rincFetch.out, rincNow.a);
+  tieToLabel('PREFIX_READ_NOW', rincNow.b, { x: pos.x + 11700, y: pos.y - 160 });
+  tieToLabel('RINC_NOW', rincNow.out, { x: pos.x + 11900, y: pos.y - 160 });
+  // Low 7 bits: +1 ripple; bit7 sticky from current R (carry must not enter bit7).
+  let rincCin: Pin = railPin(parent, 'VCC', { x: pos.x + 11550, y: pos.y - 100 });
+  for (let i = 0; i < 7; i++) {
+    const ha = buildHalfAdder(parent, { x: pos.x + 11600, y: pos.y - 100 + i * 40 });
+    wire(parent, regR.q[i]!, ha.a);
+    wire(parent, rincCin, ha.b);
+    tieToLabel(`RINC${i}`, ha.sum, { x: pos.x + 11750, y: pos.y - 100 + i * 40 });
+    rincCin = ha.cout;
+  }
+  tieToLabel('RINC7', regR.q[7]!, { x: pos.x + 11750, y: pos.y - 100 + 7 * 40 });
+  const rRExt2 = wrapWithPairCommit(rRExt, 'RINC_NOW', 'RINC', { x: pos.x + 12150, y: pos.y - 300 });
   // Hold the external-seed `we` at 0 — I/R have no seed contract (every
   // pre-existing test would otherwise leave these floating). Writes go
-  // only through LDIA_NOW / LDRA_NOW.
+  // only through LDIA_NOW / LDRA_NOW / RINC_NOW.
   tiePowerRail(parent, 'GND', rIExt.we);
-  tiePowerRail(parent, 'GND', rRExt.we);
+  tiePowerRail(parent, 'GND', rRExt2.we);
   // DD: IX write-back — LD IX,nn then POP IX, each a wrapWithPairCommit
   // layer with BUS as the value (labels BUS0..7 already exist). Seed path
   // stays on the outermost `.d`/`.we` (same contract as rB).
@@ -9269,12 +9531,10 @@ function buildZ80CpuInner(
   aP.q.forEach((q, i) => tieToLabel(`APOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 700 + i * 20 })); // anchor — A's own write mux (far) reads this
   fP.q.forEach((q, i) => tieToLabel(`FPOLD${i}`, q, { x: pos.x + 11800, y: pos.y - 300 + i * 20 })); // anchor — F's own write mux (far) reads this
 
-  // Thin IRQ: IFF1/IFF2/IM1 write-back — seed path on the exposed Register,
-  // internal commits via DI/EI-commit/INT-accept/RETI/IM1_NOW. Mux priority for
-  // IFF1: clear (DI|accept) > EI_COMMIT=1 > RETI←IFF2 > seed. IFF2 omits RETI.
-  // Soft-parity EI delay: eiArm1 is the pending latch. Every PHASE2 writes
-  // d←EI_NOW (1 only on the EI instruction); EI_COMMIT = PHASE2 ∧ pending ∧ ¬EI_NOW
-  // so IFF sets on the following instruction's PHASE2 (same edge that clears pending).
+  // Thin IRQ: IFF1/IFF2/IM0/1/2 write-back — seed path on the exposed Register,
+  // internal commits via DI/EI-commit/INT-accept/NMI-accept/RETI/RETN/IM*_NOW.
+  // Mux priority for IFF1: clear (DI|INT|NMI) > EI_COMMIT=1 > RETI/RETN←IFF2 > seed.
+  // IFF2 clears on DI|INT only (NMI leaves IFF2). Soft-parity EI delay unchanged.
   const notEi = buildNot(parent, { x: pos.x + 12000, y: pos.y - 1000 });
   tieToLabel('EI_NOW', notEi.in, { x: pos.x + 11900, y: pos.y - 1000 });
   const eiCommitGate = buildAnd(parent, { x: pos.x + 12050, y: pos.y - 980 });
@@ -9298,9 +9558,9 @@ function buildZ80CpuInner(
   tiePowerRail(parent, 'GND', eiArm2.we);
   tiePowerRail(parent, 'GND', eiArm2.d[0]!);
 
-  // HALT latch — set on HALT_NOW; clear on INT accept / reset.
+  // HALT latch — set on HALT_NOW; clear on INT/NMI accept / reset.
   const haltClear = buildOr(parent, { x: pos.x + 11950, y: pos.y - 860 });
-  tieToLabel('INT_ACCEPT_NOW', haltClear.a, { x: pos.x + 11850, y: pos.y - 860 });
+  tieToLabel('IRQ_ACCEPT_ANY', haltClear.a, { x: pos.x + 11850, y: pos.y - 860 });
   tieToLabel('CPU_RESET', haltClear.b, { x: pos.x + 11850, y: pos.y - 840 });
   const haltWe = buildOr(parent, { x: pos.x + 12050, y: pos.y - 860 });
   tieToLabel('HALT_NOW', haltWe.a, { x: pos.x + 11950, y: pos.y - 860 });
@@ -9310,9 +9570,9 @@ function buildZ80CpuInner(
 
   const iff1Clear = buildOr(parent, { x: pos.x + 12100, y: pos.y - 900 });
   tieToLabel('DI_NOW', iff1Clear.a, { x: pos.x + 12000, y: pos.y - 900 });
-  tieToLabel('INT_ACCEPT_NOW', iff1Clear.b, { x: pos.x + 12000, y: pos.y - 880 });
+  tieToLabel('IRQ_ACCEPT_ANY', iff1Clear.b, { x: pos.x + 12000, y: pos.y - 880 });
   const iff1RetiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 900 });
-  tieToLabel('RETI_NOW', iff1RetiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 900 });
+  tieToLabel('RETI_OR_RETN_NOW', iff1RetiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 900 });
   const iff1SeedD = iff1RetiMux.pins[muxDef.ports[1]!]!; // in0: seed (or fall-through)
   wire(parent, iff2.q[0]!, iff1RetiMux.pins[muxDef.ports[2]!]!); // in1: IFF2
   const iff1EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12300, y: pos.y - 900 });
@@ -9329,17 +9589,16 @@ function buildZ80CpuInner(
   tieToLabel('EI_COMMIT', iff1We1.b, { x: pos.x + 12000, y: pos.y - 800 });
   const iff1We2 = buildOr(parent, { x: pos.x + 12200, y: pos.y - 820 });
   wire(parent, iff1We1.out, iff1We2.a);
-  tieToLabel('INT_ACCEPT_NOW', iff1We2.b, { x: pos.x + 12100, y: pos.y - 800 });
+  tieToLabel('IRQ_ACCEPT_ANY', iff1We2.b, { x: pos.x + 12100, y: pos.y - 800 });
   const iff1We3 = buildOr(parent, { x: pos.x + 12300, y: pos.y - 820 });
   wire(parent, iff1We2.out, iff1We3.a);
-  tieToLabel('RETI_NOW', iff1We3.b, { x: pos.x + 12200, y: pos.y - 800 });
-  // No OR(..., GND) identity — EI/DI/accept/RETI only (same as I/R).
+  tieToLabel('RETI_OR_RETN_NOW', iff1We3.b, { x: pos.x + 12200, y: pos.y - 800 });
   wire(parent, iff1We3.out, iff1.we);
   tiePowerRail(parent, 'GND', iff1SeedD);
 
   const iff2Clear = buildOr(parent, { x: pos.x + 12100, y: pos.y - 700 });
   tieToLabel('DI_NOW', iff2Clear.a, { x: pos.x + 12000, y: pos.y - 700 });
-  tieToLabel('INT_ACCEPT_NOW', iff2Clear.b, { x: pos.x + 12000, y: pos.y - 680 });
+  tieToLabel('INT_ACCEPT_NOW', iff2Clear.b, { x: pos.x + 12000, y: pos.y - 680 }); // NMI leaves IFF2
   const iff2EiMux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 700 });
   tieToLabel('EI_COMMIT', iff2EiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 700 });
   const iff2SeedD = iff2EiMux.pins[muxDef.ports[1]!]!;
@@ -9358,13 +9617,30 @@ function buildZ80CpuInner(
   wire(parent, iff2We2.out, iff2.we);
   tiePowerRail(parent, 'GND', iff2SeedD);
 
-  const im1Mux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 500 });
-  tieToLabel('IM1_NOW', im1Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 500 });
+  // IM mode latches: setting one clears the others on PHASE4 (IM_ANY_NOW).
+  const im0Mux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 520 });
+  tieToLabel('IM0_NOW', im0Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 520 });
+  const im0SeedD = im0Mux.pins[muxDef.ports[1]!]!;
+  tiePowerRail(parent, 'VCC', im0Mux.pins[muxDef.ports[2]!]!);
+  wire(parent, im0Mux.pins[muxDef.ports[3]!]!, im0.d[0]!);
+  tieToLabel('IM_ANY_NOW', im0.we, { x: pos.x + 12200, y: pos.y - 500 });
+  tiePowerRail(parent, 'GND', im0SeedD);
+
+  const im1Mux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 480 });
+  tieToLabel('IM1_NOW', im1Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 480 });
   const im1SeedD = im1Mux.pins[muxDef.ports[1]!]!;
   tiePowerRail(parent, 'VCC', im1Mux.pins[muxDef.ports[2]!]!);
   wire(parent, im1Mux.pins[muxDef.ports[3]!]!, im1.d[0]!);
-  tieToLabel('IM1_NOW', im1.we, { x: pos.x + 12200, y: pos.y - 500 });
+  tieToLabel('IM_ANY_NOW', im1.we, { x: pos.x + 12200, y: pos.y - 460 });
   tiePowerRail(parent, 'GND', im1SeedD);
+
+  const im2Mux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 440 });
+  tieToLabel('IM2_NOW', im2Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 12100, y: pos.y - 440 });
+  const im2SeedD = im2Mux.pins[muxDef.ports[1]!]!;
+  tiePowerRail(parent, 'VCC', im2Mux.pins[muxDef.ports[2]!]!);
+  wire(parent, im2Mux.pins[muxDef.ports[3]!]!, im2.d[0]!);
+  tieToLabel('IM_ANY_NOW', im2.we, { x: pos.x + 12200, y: pos.y - 420 });
+  tiePowerRail(parent, 'GND', im2SeedD);
 
   // INC r/DEC r (x=00, z=4/z=5 — see the doc comment above) needs a
   // *fourth* layer on top: `wrapWithPairCommit` is generic enough to reuse
@@ -10791,13 +11067,18 @@ function buildZ80CpuInner(
   tieToLabel('CLK', rIXL.clk, { x: pos.x + 1400, y: pos.y + 4540 });
   tieToLabel('CLK', rIYH.clk, { x: pos.x + 800, y: pos.y + 3740 }); // same checklist — see "FD: IY"
   tieToLabel('CLK', rIYL.clk, { x: pos.x + 800, y: pos.y + 4540 });
-  tieToLabel('CLK', iff1.clk, { x: pos.x + 2000, y: pos.y + 3740 }); // thin IM1 IRQ — same checklist, every register
+  tieToLabel('CLK', iff1.clk, { x: pos.x + 2000, y: pos.y + 3740 }); // IRQ/NMI — same checklist, every register
   tieToLabel('CLK', iff2.clk, { x: pos.x + 2000, y: pos.y + 3940 });
+  tieToLabel('CLK', im0.clk, { x: pos.x + 1800, y: pos.y + 4140 });
   tieToLabel('CLK', im1.clk, { x: pos.x + 2000, y: pos.y + 4140 });
+  tieToLabel('CLK', im2.clk, { x: pos.x + 2200, y: pos.y + 4140 });
   tieToLabel('CLK', intServing.clk, { x: pos.x + 2000, y: pos.y + 4340 });
+  tieToLabel('CLK', nmiServing.clk, { x: pos.x + 2200, y: pos.y + 4340 });
+  tieToLabel('CLK', im2Serving.clk, { x: pos.x + 2400, y: pos.y + 4340 });
+  tieToLabel('CLK', nmiPrev.clk, { x: pos.x + 2200, y: pos.y + 4540 });
   tieToLabel('CLK', halted.clk, { x: pos.x + 2000, y: pos.y + 4740 });
-  tieToLabel('CLK', eiArm1.clk, { x: pos.x + 2200, y: pos.y + 3740 });
-  tieToLabel('CLK', eiArm2.clk, { x: pos.x + 2200, y: pos.y + 3940 });
+  tieToLabel('CLK', eiArm1.clk, { x: pos.x + 2400, y: pos.y + 3740 });
+  tieToLabel('CLK', eiArm2.clk, { x: pos.x + 2400, y: pos.y + 3940 });
   tieToLabel('CLK', bP.clk, { x: pos.x + 5000, y: pos.y + 3740 }); // same checklist item, every time, no exceptions — see "x=11: EXX" below
   tieToLabel('CLK', cP.clk, { x: pos.x + 5000, y: pos.y + 4540 });
   tieToLabel('CLK', dP.clk, { x: pos.x + 6200, y: pos.y + 3740 });
@@ -11030,10 +11311,15 @@ function buildZ80CpuInner(
     rIYL: rIYLExt7,
     iff1: iff1.q,
     iff2: iff2.q,
+    im0: im0.q,
     im1: im1.q,
+    im2: im2.q,
     halted: halted.q,
     int: intPin,
     intDrive,
+    nmi: nmiPin,
+    nmiDrive,
+    irqBusDrive,
     bP: bPExt,
     cP: cPExt,
     dP: dPExt,

@@ -37,6 +37,10 @@ export interface Z80Harness {
   ioDevice?: { value: 0 | 1 }[];
   /** Live Input wired to maskable INT (`cpu.intDrive`). Default 0. */
   intInput: { value: 0 | 1 };
+  /** Live Input wired to NMI (`cpu.nmiDrive`). Default 0; edge-sampled at PHASE0. */
+  nmiInput: { value: 0 | 1 };
+  /** INTACK data-bus Inputs (`cpu.irqBusDrive`), default 0xFF. */
+  irqBusInputs: { value: 0 | 1 }[];
   phaseClk: { value: 0 | 1 };
   dataClk: { value: 0 | 1 };
 }
@@ -157,6 +161,8 @@ export function makeZ80Harness(
     levelAt: (pinId) => levelAt(state, netMap, pinId),
     ioDevice,
     intInput: cpu.intDrive,
+    nmiInput: cpu.nmiDrive,
+    irqBusInputs: cpu.irqBusDrive,
     phaseClk,
     dataClk,
   };

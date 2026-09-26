@@ -6,6 +6,11 @@ import { makeZ80Harness } from './z80Harness.js';
  * ARCHITECTURE.md. Round-trip A through I and R; flags on the A← loads
  * (S/Z/X/Y from the byte, H=N=0, P/V←IFF2, C held).
  *
+ * Gate R auto-increments on each M1 (soft bumpR parity), so after
+ * `LD R,A` the prefetch of the next opcode bumps R once, and `LD A,R`
+ * itself bumps on the ED + 0x5F fetches before the transfer — A receives
+ * 0x5D, not the 0x5A that was written (matches soft).
+ *
  * 0:  0x3E,0xA5       LD A,0xA5
  * 2:  0xED,0x47       LD I,A
  * 4:  0x3E,0x00       LD A,0x00
@@ -13,7 +18,7 @@ import { makeZ80Harness } from './z80Harness.js';
  * 8:  0x3E,0x5A       LD A,0x5A
  * 10: 0xED,0x4F       LD R,A
  * 12: 0x3E,0x00       LD A,0x00
- * 14: 0xED,0x5F       LD A,R      A←0x5A; F from 0x5A with P/V←IFF2(=0)
+ * 14: 0xED,0x5F       LD A,R      A←0x5D after M1 bumps; F from 0x5D
  */
 describe('buildZ80Cpu — x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R', () => {
   const PROGRAM = (() => {
@@ -31,8 +36,8 @@ describe('buildZ80Cpu — x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R',
 
   // 0xA5 = 1010_0101 → S=1,Z=0,Y=1,H=0,X=0,P/V=0,N=0,C=0
   const F_FROM_A5 = 0b10100000;
-  // 0x5A = 0101_1010 → S=0,Z=0,Y=0,H=0,X=1,P/V=0,N=0,C=0
-  const F_FROM_5A = 0b00001000;
+  // 0x5D = 0101_1101 → S=0,Z=0,Y=0,H=0,X=1,P/V=0,N=0,C=0
+  const F_FROM_5D = 0b00001000;
 
   it('round-trips A through I and R and sets flags on LD A,I/R', () => {
     const h = makeZ80Harness(PROGRAM);
@@ -55,15 +60,15 @@ describe('buildZ80Cpu — x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R',
     h.runInstruction(); // LD A,0x5A
     expect(h.readReg(h.cpu.a)).toBe(0x5a);
 
-    h.runInstruction(); // LD R,A
-    expect(h.readReg(h.cpu.rR)).toBe(0x5a);
+    h.runInstruction(); // LD R,A — writes 0x5A then prefetch bumps low 7
+    expect(h.readReg(h.cpu.rR)).toBe(0x5b);
 
     h.runInstruction(); // LD A,0x00
     expect(h.readReg(h.cpu.a)).toBe(0);
 
     h.runInstruction(); // LD A,R
-    expect(h.readReg(h.cpu.a)).toBe(0x5a);
-    expect(h.readReg(h.cpu.f)).toBe(F_FROM_5A);
+    expect(h.readReg(h.cpu.a)).toBe(0x5d);
+    expect(h.readReg(h.cpu.f)).toBe(F_FROM_5D);
     expect(h.readReg(h.cpu.rI)).toBe(0xa5); // I untouched by the R path
     expect(h.readReg(h.cpu.pc)).toBe(16);
   });
@@ -88,5 +93,28 @@ describe('buildZ80Cpu — x=01, z=7, y=0..3: LD I,A / LD R,A / LD A,I / LD A,R',
     h.runInstruction(); // LD A,I
     expect(h.readReg(h.cpu.a)).toBe(0xa5);
     expect(h.readReg(h.cpu.f) & 0x04).toBe(0x04); // P/V
+  });
+
+  it('R auto-increments on M1 with bit7 sticky', () => {
+    const bytes = new Uint8Array(128);
+    bytes.set([0x3e, 0x80], 0); // LD A,0x80
+    bytes.set([0xed, 0x4f], 2); // LD R,A
+    bytes.set([0x00], 4); // NOP
+    bytes.set([0x00], 5); // NOP
+    const h = makeZ80Harness(bytes);
+    h.runInstruction(); // LD A,0x80
+    h.runInstruction(); // LD R,A — R←0x80, prefetch NOP bumps → 0x81
+    expect(h.readReg(h.cpu.rR)).toBe(0x81);
+    h.runInstruction(); // NOP — prefetch next NOP → 0x82
+    expect(h.readReg(h.cpu.rR)).toBe(0x82);
+    // Wrap low 7 bits; bit7 stays set: 0xFF then prefetch → 0x80
+    const bytes2 = new Uint8Array(128);
+    bytes2.set([0x3e, 0xff], 0);
+    bytes2.set([0xed, 0x4f], 2);
+    bytes2.set([0x00], 4);
+    const h2 = makeZ80Harness(bytes2);
+    h2.runInstruction();
+    h2.runInstruction(); // LD R,A → 0xFF then prefetch → 0x80
+    expect(h2.readReg(h2.cpu.rR)).toBe(0x80);
   });
 });

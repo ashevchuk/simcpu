@@ -4016,36 +4016,48 @@ until a refresh model exists (Known Simplifications).
 
 Verified with `z80cpu-ld-i-r.test.ts` — before the full suite.
 
-### Thin IM1 IRQ
+### Thin IM1 IRQ / NMI / IM modes
 
-Maskable interrupt support, deliberately thin: only **IM 1**, no INTACK
-bus cycle, no IM0/IM2, no NMI/`RETN`.
+Maskable interrupt support plus NMI/`RETN`, with **IM 0** and **IM 1**
+accept on the gate (IM 2 mode latch only — vector fetch is TODO).
 
-**State.** `IFF1`/`IFF2` and an `IM1` latch (q-only, like `I`/`R` — no
-external seed; `CPU_RESET` clears them to 0). External INT is an internal
-`Input` defaulting to 0 (`cpu.intDrive.value` raises it).
+**State.** `IFF1`/`IFF2`, `IM0`/`IM1`/`IM2` latches (q-only, like `I`/`R` —
+no external seed; setting one mode clears the others on `PHASE4`). External
+INT / NMI are internal `Input`s defaulting to 0 (`cpu.intDrive` /
+`cpu.nmiDrive`). INTACK data bus is eight Inputs defaulting to 1
+(`cpu.irqBusDrive` → `0xFF`).
 
 **`EI`/`DI`** (`0xFB`/`0xF3`, `x=11 z=3 y=7/6`): `DI` clears both IFFs on
 `PHASE2`. Soft-parity **EI delay**: `EI` arms a pending latch; IFF1/IFF2
 set on `PHASE2` of the *following* instruction (`EI_COMMIT`), so INT cannot
 interrupt that following instruction.
 
-**`IM 1`** (`ED 0x56`): `PHASE4` sets the mode latch. Other `IM` encodings
-stay inert.
+**`IM 0/1/2`** (`ED 0x46`/`0x56`/`0x5E` and soft aliases): `PHASE4` sets the
+matching latch and clears the other two.
 
-**Accept.** At `PHASE0`, if `IFF1 ∧ IM1 ∧ INT`, force `IR←0xFF` (RST 38h)
-via a mux ahead of `ir.d` (the shared `BUS*` net stays on the RAM side),
-latch `intServing`, clear both IFFs, and suppress `PHASE1`'s PC advance so
-the existing RST push/jump path pushes the interrupted instruction's own
-PC and jumps to `0x38`.
+**INT accept.** At `PHASE0`, if `IFF1 ∧ (IM0∨IM1∨IM2) ∧ INT` (and no NMI edge),
+clear both IFFs and suppress `PHASE1` PC advance. Mode split:
+- **IM0/IM1** (`im01Accept`): force IR from the bus sample — IM1 → `0xFF`
+  (RST 38h), IM0 → `irqBusDrive`; latch `intServing` for the injected opcode.
+- **IM2** (`im2Accept`): force IR←NOP, latch `im2Serving`; `PHASE2` pushes
+  PC (same stack write + PC→bus bank as NMI), `PHASE3` reads ISR lo from
+  RAM at `(I<<8)|irqBus` (truncated to `addrBits`) into PC, `PHASE4` reads
+  ISR hi at `vec+1` into PC bits `8+` when `addrBits>8`. Soft:
+  `softAcceptIrq` IM2 (push then word-at-vector).
 
-**`RETI`** (`ED 0x4D`): same stack-pop/PC-capture as `RET` (widened
-`readNow` / `retMux`), plus `IFF1←IFF2` on `PHASE4`.
+**NMI accept.** Rising edge on `nmi` at `PHASE0`: clear IFF1 only (keep
+IFF2), clear HALT, force IR←NOP, latch `nmiServing`, push PC on `PHASE2`,
+jump `$0066` on `PHASE3`. Soft: `softNmi`.
 
-Verified with `z80cpu-irq-im1.test.ts`. Soft↔gate EI delay and HALT latch
-parity: `soft-gate-ei-halt.test.ts`. Remaining IRQ gaps (no INTACK, no
-IM0/IM2, no NMI/`RETN`, no `R` auto-increment on M1) stay Known
-Simplifications.
+**`RETI`/`RETN`** (`ED 0x4D` / `0x45`): same stack-pop/PC-capture as `RET`,
+plus `IFF1←IFF2` on `PHASE4`. Soft `RETI` is unchanged (Spectrum); soft
+`RETN` restores IFF1←IFF2. Soft's `(op&0xc7)===0x45` RETN check also
+matches RETI encodings first — leave as-is.
+
+Verified with `z80cpu-irq-im1.test.ts`, `z80cpu-irq-im0.test.ts` (includes
+gate IM2), `z80cpu-nmi-retn.test.ts`. Soft↔gate EI delay and HALT latch
+parity: `soft-gate-ei-halt.test.ts`. Remaining deliberate gap: no full
+INTACK multi-cycle timing model.
 
 ### CB x=01: BIT y,r / BIT y,(HL)
 
@@ -4836,14 +4848,17 @@ section's own success story.
   z=6`) are real too, reusing `x=10`'s own op-select/`cin`/`bInv`
   machinery unchanged (`dec.y` alone selects the operation, never
   `dec.x`). `DI`/`EI` (`x=11, z=3, y=6/7`) now drive real `IFF1`/`IFF2`
-  flip-flops as part of the thin IM1 IRQ layer (see "Thin IM1 IRQ" above) —
+  flip-flops as part of the IRQ/NMI layer (see "Thin IM1 IRQ / NMI / IM modes" above) —
   no longer the permanent gap this paragraph once described. Soft↔gate now
   share one-instruction EI delay and a HALT latch (`soft-gate-ei-halt.test.ts`).
-  Remaining IRQ gaps are deliberate: no INTACK cycle, no IM0/IM2, no
-  NMI/`RETN`, no `R` auto-increment on `M1`. `P/V←IFF2` on `LD A,I`/`LD A,R`
+  Remaining IRQ gaps are deliberate: no full INTACK multi-cycle timing.
+  Soft and gate both implement IM0/IM1/IM2 accept (gate IM2: push + word
+  at `(I<<8)|bus` → PC). Soft and gate
+  both auto-increment `R` on M1 (bit7 sticky). `P/V←IFF2` on `LD A,I`/`LD A,R`
   is real on both soft and gate. Soft Run and gate both honour
   one-instruction EI delay; Soft Run stops on `HALT` (`0x76`), and the gate
-  latches `halted` (MachineRunner can stop-clock). `H` (half-carry) and the two undocumented flag bits are real
+  latches `halted` (MachineRunner can stop-clock). NMI/`RETN` and IM0 are
+  wired on both (see "Thin IM1 IRQ / NMI / IM modes" above). `H` (half-carry) and the two undocumented flag bits are real
   now for the `x=10`/`x=11` ALU group, `INC r`/`DEC r`, and `DAA` itself
   (see "Closing the half-carry gap" above) — `ADD HL,rr` and the
   `RLCA`/`RRCA`/`RLA`/`RRA`/`CPL`/`SCF`/`CCF` group still leave them
@@ -4893,8 +4908,8 @@ section's own success story.
   `dec.x` at all (see "A decode gap found across all sixteen
   block-instruction gates" above) — fixed before `NEG` landed, rather
   than propagating the same gap into a seventeenth gate. `ED` also has
-  thin IM1 IRQ (`IM 1`/`RETI`, plus unprefixed `EI`/`DI` — see "Thin IM1
-  IRQ" above). `CB` is closed for `BIT`/`SET`/`RES`/rotates (see above).
+  thin IRQ/NMI (`IM 0/1`/`RETI`/`RETN`/`NMI`, plus unprefixed `EI`/`DI` — see "Thin IM1
+  IRQ / NMI / IM modes" above). `CB` is closed for `BIT`/`SET`/`RES`/rotates (see above).
   `DD` has an index-register slice (`IX`, `LD IX,nn`, `PUSH IX`,
   `POP IX`, plus HL-clone ADD/INC/DEC/JP/LD SP/EX and `(IX+d)` LD /
   INC/DEC / ALU `A,(IX+d)`, `DD CB` BIT/SET/RES/rot, and H→IXH remap —
