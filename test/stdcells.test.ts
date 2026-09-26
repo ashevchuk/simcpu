@@ -122,6 +122,99 @@ describe('seedStandardCells — placed chip instances behave like the raw gates 
     expect(levelAt(state, netMap, inst.pins[def.ports[3]!]!.id)).toBe(1); // sel=1 -> in1
   });
 
+  it('MUX2 / XOR / FULL_ADDER / D_FF dive to gate chips; AND/TRI_BUF/MUX2_TG keep CMOS', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+
+    const and = getDef(library, 'AND');
+    const andKinds = [...and.circuit.components.values()].map((c) => c.kind);
+    expect(andKinds).toContain('transistor');
+    expect(andKinds).not.toContain('chip');
+    expect([...and.circuit.wires.values()].length).toBeGreaterThan(0);
+
+    const mux = getDef(library, 'MUX2');
+    const muxChips = [...mux.circuit.components.values()].filter((c) => c.kind === 'chip');
+    const muxNames = muxChips.map((c) => library.get(c.defId)!.name).sort();
+    expect(muxNames).toEqual(['AND', 'AND', 'NOT', 'OR']);
+    expect([...mux.circuit.components.values()].some((c) => c.kind === 'transistor')).toBe(false);
+
+    const xor = getDef(library, 'XOR');
+    const xorNames = [...xor.circuit.components.values()]
+      .filter((c) => c.kind === 'chip')
+      .map((c) => library.get(c.defId)!.name);
+    expect(xorNames).toEqual(['NAND', 'NAND', 'NAND', 'NAND']);
+
+    const fa = getDef(library, 'FULL_ADDER');
+    const faNames = [...fa.circuit.components.values()]
+      .filter((c) => c.kind === 'chip')
+      .map((c) => library.get(c.defId)!.name)
+      .sort();
+    expect(faNames).toEqual(['AND', 'AND', 'OR', 'XOR', 'XOR']);
+
+    const mux4 = getDef(library, 'MUX4');
+    const mux4Names = [...mux4.circuit.components.values()]
+      .filter((c) => c.kind === 'chip')
+      .map((c) => library.get(c.defId)!.name);
+    expect(mux4Names).toEqual(['MUX2', 'MUX2', 'MUX2']);
+
+    const latch = getDef(library, 'D_LATCH');
+    const latchNames = [...latch.circuit.components.values()]
+      .filter((c) => c.kind === 'chip')
+      .map((c) => library.get(c.defId)!.name)
+      .sort();
+    expect(latchNames).toEqual(['NAND', 'NAND', 'NAND', 'NAND', 'NOT']);
+
+    const dff = getDef(library, 'D_FF');
+    const dffNames = [...dff.circuit.components.values()]
+      .filter((c) => c.kind === 'chip')
+      .map((c) => library.get(c.defId)!.name)
+      .sort();
+    expect(dffNames).toEqual(['D_LATCH', 'D_LATCH', 'NOT']);
+    expect([...dff.circuit.components.values()].some((c) => c.kind === 'source')).toBe(false);
+    expect([...mux.circuit.components.values()].some((c) => c.kind === 'source')).toBe(false);
+    expect([...xor.circuit.components.values()].some((c) => c.kind === 'source')).toBe(false);
+
+    // CMOS primitives still keep rail Sources (joined to VCC/GND by name).
+    expect([...and.circuit.components.values()].some((c) => c.kind === 'source')).toBe(true);
+
+    const tri = getDef(library, 'TRI_BUF');
+    expect([...tri.circuit.components.values()].some((c) => c.kind === 'transistor')).toBe(true);
+    expect([...tri.circuit.components.values()].some((c) => c.kind === 'chip')).toBe(false);
+    expect([...tri.circuit.components.values()].some((c) => c.kind === 'label' && c.name.startsWith('_N'))).toBe(
+      false,
+    );
+
+    const tg = getDef(library, 'MUX2_TG');
+    expect([...tg.circuit.components.values()].filter((c) => c.kind === 'transistor').length).toBeGreaterThanOrEqual(
+      6,
+    );
+    expect([...tg.circuit.components.values()].some((c) => c.kind === 'chip')).toBe(false);
+
+    const counter = getDef(library, 'COUNTER4');
+    expect(
+      [...counter.circuit.components.values()].some((c) => c.kind === 'label' && c.name.startsWith('_N')),
+    ).toBe(false);
+  });
+
+  it('MUX2_TG selects like MUX2', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const def = getDef(library, 'MUX2_TG');
+    const parent = new Circuit();
+    const inst = makeChipInstance(parent, def);
+    const sel = makeInput(parent, 1);
+    const in0 = makeInput(parent, 0);
+    const in1 = makeInput(parent, 1);
+    wire(parent, sel.pins.out, inst.pins[def.ports[0]!]!);
+    wire(parent, in0.pins.out, inst.pins[def.ports[1]!]!);
+    wire(parent, in1.pins.out, inst.pins[def.ports[2]!]!);
+
+    const flat = flatten(parent, library);
+    const netMap = flat.computeNets();
+    const state = tick(flat, netMap, initialState());
+    expect(levelAt(state, netMap, inst.pins[def.ports[3]!]!.id)).toBe(1);
+  });
+
   it('FULL_ADDER', () => {
     const library = new ChipLibrary();
     seedStandardCells(library);

@@ -171,7 +171,7 @@ const SECTIONS: Section[] = [
     body:
       'Library lists every ChipDef in this session. Ctrl+L focuses search.\n\n' +
       'Filters:\n' +
-      '  Gates — NOT NAND AND NOR OR XOR MUX2/4 HALF_ADDER FULL_ADDER D_LATCH D_FF TRI_BUF\n' +
+      '  Gates — NOT NAND AND NOR OR XOR MUX2 MUX2_TG MUX4 HALF_ADDER FULL_ADDER D_LATCH D_FF TRI_BUF\n' +
       '  Lab — Soft Lab packs (COUNTER, REG, ALU, BUF8, SOFT_RAM16, …)\n' +
       '  74xx — 7400-family aliases\n' +
       '  User — chips you folded\n\n' +

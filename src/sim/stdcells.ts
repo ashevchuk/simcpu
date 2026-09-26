@@ -12,6 +12,7 @@ import {
   buildFullAdder,
   buildHalfAdder,
   buildMux2,
+  buildMux2Tg,
   buildMux4,
   buildNand,
   buildNor,
@@ -19,7 +20,10 @@ import {
   buildOr,
   buildTriStateBuffer,
   buildXor,
+  makeChipGatePlacer,
   makeSource,
+  setCircuitGatePlacer,
+  type CircuitGatePlacer,
   type TwoInputGate,
 } from './library.js';
 import { seedLabCells, isLabcellName } from './labcells.js';
@@ -32,7 +36,70 @@ function scratch(): Circuit {
   return circuit;
 }
 
-function seedTwoInputGate(
+function requireDef(library: ChipLibrary, name: string): ChipDef {
+  const def = library.findByName(name);
+  if (!def) throw new Error(`seedStandardCells: expected ${name} to be registered first`);
+  return def;
+}
+
+/** Gate placers for composites — primitives must already be in the library. */
+function primitiveGatePlacer(library: ChipLibrary): CircuitGatePlacer {
+  return makeChipGatePlacer({
+    not: requireDef(library, 'NOT'),
+    nand: requireDef(library, 'NAND'),
+    and: requireDef(library, 'AND'),
+    nor: requireDef(library, 'NOR'),
+    or: requireDef(library, 'OR'),
+    // xor omitted → expands to 4× NAND chips while seeding XOR itself
+  });
+}
+
+function fullGatePlacer(library: ChipLibrary): CircuitGatePlacer {
+  return makeChipGatePlacer({
+    not: requireDef(library, 'NOT'),
+    nand: requireDef(library, 'NAND'),
+    and: requireDef(library, 'AND'),
+    nor: requireDef(library, 'NOR'),
+    or: requireDef(library, 'OR'),
+    xor: requireDef(library, 'XOR'),
+  });
+}
+
+function muxTreePlacer(library: ChipLibrary): CircuitGatePlacer {
+  return makeChipGatePlacer({
+    not: requireDef(library, 'NOT'),
+    nand: requireDef(library, 'NAND'),
+    and: requireDef(library, 'AND'),
+    nor: requireDef(library, 'NOR'),
+    or: requireDef(library, 'OR'),
+    xor: requireDef(library, 'XOR'),
+    mux2: requireDef(library, 'MUX2'),
+  });
+}
+
+function dffGatePlacer(library: ChipLibrary): CircuitGatePlacer {
+  return makeChipGatePlacer({
+    not: requireDef(library, 'NOT'),
+    nand: requireDef(library, 'NAND'),
+    and: requireDef(library, 'AND'),
+    nor: requireDef(library, 'NOR'),
+    or: requireDef(library, 'OR'),
+    xor: requireDef(library, 'XOR'),
+    dLatch: requireDef(library, 'D_LATCH'),
+  });
+}
+
+function withPlacer<T>(circuit: Circuit, placer: CircuitGatePlacer, build: () => T): T {
+  setCircuitGatePlacer(circuit, placer);
+  try {
+    return build();
+  } finally {
+    setCircuitGatePlacer(circuit, null);
+  }
+}
+
+/** CMOS primitives: transistor schematic, drawn wires kept. */
+function seedCmosTwoInput(
   library: ChipLibrary,
   name: string,
   build: (circuit: Circuit) => TwoInputGate,
@@ -40,14 +107,11 @@ function seedTwoInputGate(
   if (library.findByName(name)) return undefined;
   const circuit = scratch();
   const g = build(circuit);
-  // NAND/NOR are CMOS primitives — keep drawn wires. AND/OR/XOR are
-  // composites of those; labelize their interconnects.
-  const labelize = name !== 'NAND' && name !== 'NOR';
   return foldExposing(circuit, name, library, [
     { pin: g.a, isOutput: false, portName: 'a' },
     { pin: g.b, isOutput: false, portName: 'b' },
     { pin: g.out, isOutput: true, portName: 'out' },
-  ], { labelize });
+  ], { labelize: false });
 }
 
 /**
@@ -98,6 +162,7 @@ export const STDCELL_NAMES = new Set([
   'OR',
   'XOR',
   'MUX2',
+  'MUX2_TG',
   'MUX4',
   'HALF_ADDER',
   'FULL_ADDER',
@@ -110,7 +175,16 @@ export function isStdcellName(name: string): boolean {
   return STDCELL_NAMES.has(name) || isLabcellName(name);
 }
 
-/** Registers NOT, NAND, AND, NOR, OR, XOR, MUX2, MUX4, HALF_ADDER, FULL_ADDER, D_LATCH, D_FF and TRI_BUF as placeable chips. Idempotent by name. */
+/**
+ * Registers NOT, NAND, AND, NOR, OR, XOR, MUX2, MUX2_TG, MUX4, HALF_ADDER,
+ * FULL_ADDER, D_LATCH, D_FF and TRI_BUF as placeable chips. Idempotent by name.
+ *
+ * Dive layers:
+ *   CMOS primitives (NOT/NAND/AND/NOR/OR/TRI_BUF/MUX2_TG) → transistor schematic
+ *   XOR / MUX2 / adders → gate chip instances → dive again for CMOS
+ *   D_LATCH → NOT/NAND chips; D_FF → NOT + two D_LATCH
+ *   MUX4 → three MUX2 chips
+ */
 export function seedStandardCells(library: ChipLibrary): void {
   if (!library.findByName('NOT')) {
     const circuit = scratch();
@@ -121,26 +195,46 @@ export function seedStandardCells(library: ChipLibrary): void {
     ], { labelize: false });
   }
 
-  seedTwoInputGate(library, 'NAND', buildNand);
-  seedTwoInputGate(library, 'AND', buildAnd);
-  seedTwoInputGate(library, 'NOR', buildNor);
-  seedTwoInputGate(library, 'OR', buildOr);
-  seedTwoInputGate(library, 'XOR', buildXor);
+  seedCmosTwoInput(library, 'NAND', buildNand);
+  seedCmosTwoInput(library, 'AND', buildAnd);
+  seedCmosTwoInput(library, 'NOR', buildNor);
+  seedCmosTwoInput(library, 'OR', buildOr);
+
+  if (!library.findByName('XOR')) {
+    const circuit = scratch();
+    const g = withPlacer(circuit, primitiveGatePlacer(library), () => buildXor(circuit));
+    foldExposing(circuit, 'XOR', library, [
+      { pin: g.a, isOutput: false, portName: 'a' },
+      { pin: g.b, isOutput: false, portName: 'b' },
+      { pin: g.out, isOutput: true, portName: 'out' },
+    ], { labelize: false });
+  }
 
   if (!library.findByName('MUX2')) {
     const circuit = scratch();
-    const m = buildMux2(circuit);
+    const m = withPlacer(circuit, primitiveGatePlacer(library), () => buildMux2(circuit));
     foldExposing(circuit, 'MUX2', library, [
       { pin: m.sel, isOutput: false, portName: 'sel' },
       { pin: m.in0, isOutput: false, portName: 'in0' },
       { pin: m.in1, isOutput: false, portName: 'in1' },
       { pin: m.out, isOutput: true, portName: 'out' },
-    ]);
+    ], { labelize: false });
+  }
+
+  if (!library.findByName('MUX2_TG')) {
+    const circuit = scratch();
+    const m = buildMux2Tg(circuit);
+    foldExposing(circuit, 'MUX2_TG', library, [
+      { pin: m.sel, isOutput: false, portName: 'sel' },
+      { pin: m.in0, isOutput: false, portName: 'in0' },
+      { pin: m.in1, isOutput: false, portName: 'in1' },
+      { pin: m.out, isOutput: true, portName: 'out' },
+    ], { labelize: false });
   }
 
   if (!library.findByName('MUX4')) {
     const circuit = scratch();
-    const m = buildMux4(circuit);
+    const m = withPlacer(circuit, muxTreePlacer(library), () => buildMux4(circuit));
     foldExposing(circuit, 'MUX4', library, [
       { pin: m.sel0, isOutput: false, portName: 'sel0' },
       { pin: m.sel1, isOutput: false, portName: 'sel1' },
@@ -154,7 +248,7 @@ export function seedStandardCells(library: ChipLibrary): void {
 
   if (!library.findByName('HALF_ADDER')) {
     const circuit = scratch();
-    const h = buildHalfAdder(circuit);
+    const h = withPlacer(circuit, fullGatePlacer(library), () => buildHalfAdder(circuit));
     foldExposing(circuit, 'HALF_ADDER', library, [
       { pin: h.a, isOutput: false, portName: 'a' },
       { pin: h.b, isOutput: false, portName: 'b' },
@@ -165,7 +259,7 @@ export function seedStandardCells(library: ChipLibrary): void {
 
   if (!library.findByName('FULL_ADDER')) {
     const circuit = scratch();
-    const f = buildFullAdder(circuit);
+    const f = withPlacer(circuit, fullGatePlacer(library), () => buildFullAdder(circuit));
     foldExposing(circuit, 'FULL_ADDER', library, [
       { pin: f.a, isOutput: false, portName: 'a' },
       { pin: f.b, isOutput: false, portName: 'b' },
@@ -177,24 +271,24 @@ export function seedStandardCells(library: ChipLibrary): void {
 
   if (!library.findByName('D_LATCH')) {
     const circuit = scratch();
-    const l = buildDLatch(circuit);
+    const l = withPlacer(circuit, primitiveGatePlacer(library), () => buildDLatch(circuit));
     foldExposing(circuit, 'D_LATCH', library, [
       { pin: l.d, isOutput: false, portName: 'd' },
       { pin: l.en, isOutput: false, portName: 'en' },
       { pin: l.q, isOutput: true, portName: 'q' },
       { pin: l.qn, isOutput: true, portName: 'qn' },
-    ]);
+    ], { labelize: false });
   }
 
   if (!library.findByName('D_FF')) {
     const circuit = scratch();
-    const f = buildDFlipFlop(circuit);
+    const f = withPlacer(circuit, dffGatePlacer(library), () => buildDFlipFlop(circuit));
     foldExposing(circuit, 'D_FF', library, [
       { pin: f.d, isOutput: false, portName: 'd' },
       { pin: f.clk, isOutput: false, portName: 'clk' },
       { pin: f.q, isOutput: true, portName: 'q' },
       { pin: f.qn, isOutput: true, portName: 'qn' },
-    ]);
+    ], { labelize: false });
   }
 
   if (!library.findByName('TRI_BUF')) {
@@ -204,7 +298,7 @@ export function seedStandardCells(library: ChipLibrary): void {
       { pin: b.a, isOutput: false, portName: 'a' },
       { pin: b.en, isOutput: false, portName: 'en' },
       { pin: b.out, isOutput: true, portName: 'out' },
-    ]);
+    ], { labelize: false });
   }
 
   // Pack A/B/C hierarchical lab cells + 74xx aliases (idempotent by name).

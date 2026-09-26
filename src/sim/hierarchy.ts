@@ -1,6 +1,6 @@
 import type { ChipDef, ChipLibrary } from './ChipLibrary.js';
 import { bumpStructureVersion, Circuit, currentStructureVersion, GLOBAL_NET_NAMES, nextId } from './Circuit.js';
-import { makeChipInstance, makeInput, makePort, makeProbe, makeSource, pinSidesFromDef } from './library.js';
+import { LAYOUT, makeChipInstance, makeInput, makePort, makeProbe, makeSource, pinSidesFromDef } from './library.js';
 import { tidyLibraryCircuit } from './labelWires.js';
 import { orthoWaypoints } from './wireRoute.js';
 import { importChipDef, serializeChipDef } from './serialize.js';
@@ -125,6 +125,7 @@ export function foldExposing(
 
   // Mid/high library cells: replace interconnect spaghetti with net labels.
   // CMOS primitives (NOT/NAND/NOR) pass labelize:false so G/D/S wires stay.
+  stripOrphanRailArtifacts(def.circuit);
   if (opts?.labelize !== false) {
     tidyLibraryCircuit(def.circuit);
   } else {
@@ -134,30 +135,80 @@ export function foldExposing(
 }
 
 /**
- * Park boundary ports around a CMOS transistor schematic like a real sheet:
- * inputs on the left next to their gate nets, output on the right of the
- * drain bus. Tuck folded-in rail Sources onto the VCC/GND lines so they
- * don't sit at the origin.
+ * Scratch circuits always get VCC/GND Sources for CMOS builders. Gate-layer
+ * composites (XOR = 4× NAND chips, …) never touch those rails — power lives
+ * inside the nested chips — so the Sources become floating schematic junk.
+ * Drop Sources/labels whose rail net has no real load (transistor, chip, …).
+ */
+function stripOrphanRailArtifacts(circuit: Circuit): void {
+  const pinOwner = new Map<string, { id: string; kind: string }>();
+  for (const c of circuit.components.values()) {
+    for (const p of Object.values(c.pins) as Pin[]) {
+      pinOwner.set(p.id, { id: c.id, kind: c.kind });
+    }
+  }
+  const nets = circuit.computeNets();
+  const netHasLoad = (netId: string | undefined): boolean => {
+    if (!netId) return false;
+    for (const [pinId, nid] of nets.netOf) {
+      if (nid !== netId) continue;
+      const owner = pinOwner.get(pinId);
+      if (!owner) continue;
+      if (owner.kind === 'source' || owner.kind === 'label' || owner.kind === 'port') continue;
+      return true;
+    }
+    return false;
+  };
+
+  for (const c of [...circuit.components.values()]) {
+    if (c.kind === 'source') {
+      if (!netHasLoad(nets.netOf.get(c.pins.out.id))) circuit.removeComponent(c.id);
+    } else if (c.kind === 'label' && (c.name === 'VCC' || c.name === 'GND')) {
+      if (!netHasLoad(nets.netOf.get(c.pins.net.id))) circuit.removeComponent(c.id);
+    }
+  }
+}
+
+/**
+ * Park boundary ports around a CMOS / gate-layer schematic like a real sheet:
+ * inputs on the left next to their nets, output on the right of the cluster.
+ * Anchors are transistors and nested chip instances. Unused scratch rail
+ * Sources are stripped before this runs (see stripOrphanRailArtifacts).
  */
 function layoutCmosPrimitivePorts(def: ChipDef): void {
-  const transistors = [...def.circuit.components.values()].filter((c) => c.kind === 'transistor');
-  if (transistors.length === 0) return;
+  const anchors = [...def.circuit.components.values()].filter(
+    (c) => c.kind === 'transistor' || c.kind === 'chip',
+  );
+  if (anchors.length === 0) return;
 
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
-  for (const t of transistors) {
+  for (const t of anchors) {
     minX = Math.min(minX, t.pos.x);
     maxX = Math.max(maxX, t.pos.x);
     minY = Math.min(minY, t.pos.y);
     maxY = Math.max(maxY, t.pos.y);
   }
+  // Chip boxes extend past their origin — widen the right/bottom a bit.
+  const hasChips = anchors.some((c) => c.kind === 'chip');
+  if (hasChips) {
+    maxX += 48;
+    minX -= 48;
+  }
   const midX = (minX + maxX) / 2;
 
   const nets = def.circuit.computeNets();
-  const inputPorts = def.ports.filter((n) => n !== 'out' && !n.startsWith('out'));
-  const outputPorts = def.ports.filter((n) => n === 'out' || n.startsWith('out'));
+  const isOutPort = (n: string) =>
+    n === 'out' ||
+    n.startsWith('out') ||
+    n === 'sum' ||
+    n === 'cout' ||
+    n === 'q' ||
+    n === 'qn';
+  const inputPorts = def.ports.filter((n) => !isOutPort(n));
+  const outputPorts = def.ports.filter(isOutPort);
 
   const pinOnNet = (netId: string | undefined): Point | undefined => {
     if (!netId) return undefined;
@@ -197,7 +248,9 @@ function layoutCmosPrimitivePorts(def: ChipDef): void {
     } else {
       c.pos = { x: midX, y: maxY + 56 };
     }
-    c.pins.out.pos = { x: c.pos.x, y: c.pos.y + 15 };
+    // VCC pin hangs below the bar (+Y); GND pin sits above the earth bars (-Y).
+    const pinDy = c.value === 1 ? LAYOUT.source.out[1]! : LAYOUT.source.gndOut[1]!;
+    c.pins.out.pos = { x: c.pos.x, y: c.pos.y + pinDy };
   }
 }
 

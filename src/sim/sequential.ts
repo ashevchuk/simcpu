@@ -4,7 +4,16 @@
 // the eventual CPU is one of these, replicated and wired to a shared clock.
 
 import type { Circuit } from './Circuit.js';
-import { buildMux2, buildNand, buildNot, buildSrLatch, wire } from './library.js';
+import {
+  buildMux2,
+  buildNand,
+  buildNot,
+  buildSrLatch,
+  GATE_CHIP_PITCH_X,
+  GATE_CHIP_PITCH_Y,
+  getCircuitGatePlacer,
+  wire,
+} from './library.js';
 import type { Pin, Point } from './types.js';
 
 export interface DLatch {
@@ -25,12 +34,20 @@ export interface DLatch {
  * `en=1` → n1=¬d, n2=d → set when d=1, reset when d=0 (transparent).
  * `en=0` → n1=n2=1 → both latch inputs inactive → hold (the SR latch's own
  * cross-coupled feedback keeps whatever level it last saw).
+ *
+ * With `placer.dLatch` this places a D_LATCH chip; with a gate placer it
+ * expands to NOT/NAND chips (dive layer before CMOS).
  */
 export function buildDLatch(circuit: Circuit, pos: Point = { x: 0, y: 0 }): DLatch {
+  const placer = getCircuitGatePlacer(circuit);
+  if (placer?.dLatch) return placer.dLatch(circuit, pos);
+
+  const px = GATE_CHIP_PITCH_X;
+  const py = GATE_CHIP_PITCH_Y;
   const notD = buildNot(circuit, pos);
-  const nand1 = buildNand(circuit, { x: pos.x + 150, y: pos.y });
-  const nand2 = buildNand(circuit, { x: pos.x + 150, y: pos.y + 150 });
-  const latch = buildSrLatch(circuit, { x: pos.x + 350, y: pos.y });
+  const nand1 = buildNand(circuit, { x: pos.x + px, y: pos.y });
+  const nand2 = buildNand(circuit, { x: pos.x + px, y: pos.y + py });
+  const latch = buildSrLatch(circuit, { x: pos.x + 2 * px, y: pos.y });
 
   wire(circuit, notD.in, nand1.a); // external D also feeds the inverter's input directly
   wire(circuit, notD.out, nand2.a);
@@ -56,11 +73,14 @@ export interface DFlipFlop {
  * it last saw, and the slave opens onto exactly that frozen value — no
  * explicit sequencing needed, it falls out of the topology, the same way
  * buildSrLatch's feedback loop needs no special-casing in the solver.
+ *
+ * With a `dLatch` placer this is NOT + two D_LATCH chips.
  */
 export function buildDFlipFlop(circuit: Circuit, pos: Point = { x: 0, y: 0 }): DFlipFlop {
+  const px = GATE_CHIP_PITCH_X;
   const clkInv = buildNot(circuit, pos);
-  const master = buildDLatch(circuit, { x: pos.x + 150, y: pos.y });
-  const slave = buildDLatch(circuit, { x: pos.x + 800, y: pos.y });
+  const master = buildDLatch(circuit, { x: pos.x + px, y: pos.y });
+  const slave = buildDLatch(circuit, { x: pos.x + 3 * px, y: pos.y });
 
   wire(circuit, clkInv.out, master.en); // master transparent while CLK=0
   wire(circuit, clkInv.in, slave.en); // slave transparent while CLK=1
@@ -88,7 +108,7 @@ export interface RegisterBit {
  */
 export function buildRegisterBit(circuit: Circuit, pos: Point = { x: 0, y: 0 }): RegisterBit {
   const mux = buildMux2(circuit, pos);
-  const dff = buildDFlipFlop(circuit, { x: pos.x + 1200, y: pos.y });
+  const dff = buildDFlipFlop(circuit, { x: pos.x + 4 * GATE_CHIP_PITCH_X, y: pos.y });
 
   wire(circuit, mux.out, dff.d);
   wire(circuit, dff.q, mux.in0); // WE=0: hold (feed Q back into D)

@@ -24,6 +24,7 @@ import {
   buildXor,
   chipInstanceHeight,
   makeChipInstance,
+  makeChipGatePlacer,
   makeInput,
   makeLabel,
   makeRam,
@@ -35,7 +36,6 @@ import {
   tiePowerRail,
   wire,
   type CircuitGatePlacer,
-  type NotGate,
   type TwoInputGate,
 } from './library.js';
 import { buildRegisterBit } from './sequential.js';
@@ -257,10 +257,26 @@ function makeHalfAdderChip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
   makeSource(scratch, 1); // rail driver
   makeSource(scratch, 0);
-  const ha = buildHalfAdder(scratch);
+  const not = library.findByName('NOT');
+  const nand = library.findByName('NAND');
+  const and = library.findByName('AND');
+  const nor = library.findByName('NOR');
+  const or = library.findByName('OR');
+  const xor = library.findByName('XOR');
+  let ha;
+  if (not && nand && and && nor && or && xor) {
+    setCircuitGatePlacer(scratch, makeChipGatePlacer({ not, nand, and, nor, or, xor }));
+    try {
+      ha = buildHalfAdder(scratch);
+    } finally {
+      setCircuitGatePlacer(scratch, null);
+    }
+  } else {
+    ha = buildHalfAdder(scratch);
+  }
   // Port names must match seedStandardCells / Soft Lab (`sum`/`cout`). Default
   // fold names `out0`/`out1` leave Soft Lab's HALF_ADDER model undriven, so PC
-  // never increments. labelize:false keeps transistor guts intact when expanded.
+  // never increments. labelize:false keeps gate/transistor guts when expanded.
   return foldExposing(scratch, 'HALF_ADDER', library, [
     { pin: ha.a, isOutput: false, portName: 'a' },
     { pin: ha.b, isOutput: false, portName: 'b' },
@@ -274,7 +290,22 @@ function makeMux2Chip(library: ChipLibrary): ChipDef {
   const scratch = new Circuit();
   makeSource(scratch, 1); // rail driver
   makeSource(scratch, 0);
-  const m = buildMux2(scratch);
+  const not = library.findByName('NOT');
+  const nand = library.findByName('NAND');
+  const and = library.findByName('AND');
+  const nor = library.findByName('NOR');
+  const or = library.findByName('OR');
+  let m;
+  if (not && nand && and && nor && or) {
+    setCircuitGatePlacer(scratch, makeChipGatePlacer({ not, nand, and, nor, or }));
+    try {
+      m = buildMux2(scratch);
+    } finally {
+      setCircuitGatePlacer(scratch, null);
+    }
+  } else {
+    m = buildMux2(scratch);
+  }
   // Names must match seedStandardCells / Soft Lab 74157_1 (sel/in0/in1/out).
   // Default fold would yield a/b/c/out and break aliasChip('74157_1','MUX2').
   return foldExposing(scratch, 'MUX2', library, [
@@ -282,7 +313,7 @@ function makeMux2Chip(library: ChipLibrary): ChipDef {
     { pin: m.in0, isOutput: false, portName: 'in0' },
     { pin: m.in1, isOutput: false, portName: 'in1' },
     { pin: m.out, isOutput: true, portName: 'out' },
-  ]);
+  ], { labelize: false });
 }
 
 // One def each per ChipLibrary — see the identical reasoning on
@@ -321,7 +352,7 @@ function makeNotChip(library: ChipLibrary): ChipDef {
   ], { labelize: false });
 }
 
-/** Fold a 2-input gate. NAND/NOR keep wires; AND/OR/XOR labelize interconnects. */
+/** Fold a 2-input gate. CMOS primitives keep drawn wires (labelize:false). */
 function makeTwoInputGateChip(
   library: ChipLibrary,
   name: string,
@@ -330,13 +361,32 @@ function makeTwoInputGateChip(
   const scratch = new Circuit();
   makeSource(scratch, 1);
   makeSource(scratch, 0);
-  const g = build(scratch);
-  const labelize = name !== 'NAND' && name !== 'NOR';
+  // XOR fallback: 4× NAND chips when NAND is already in the library.
+  let g: TwoInputGate;
+  if (name === 'XOR') {
+    const nand = library.findByName('NAND');
+    const not = library.findByName('NOT');
+    const and = library.findByName('AND');
+    const nor = library.findByName('NOR');
+    const or = library.findByName('OR');
+    if (nand && not && and && nor && or) {
+      setCircuitGatePlacer(scratch, makeChipGatePlacer({ not, nand, and, nor, or }));
+      try {
+        g = build(scratch);
+      } finally {
+        setCircuitGatePlacer(scratch, null);
+      }
+    } else {
+      g = build(scratch);
+    }
+  } else {
+    g = build(scratch);
+  }
   return foldExposing(scratch, name, library, [
     { pin: g.a, isOutput: false, portName: 'a' },
     { pin: g.b, isOutput: false, portName: 'b' },
     { pin: g.out, isOutput: true, portName: 'out' },
-  ], { labelize });
+  ], { labelize: false });
 }
 
 const notChipDefs = new WeakMap<ChipLibrary, ChipDef>();
@@ -358,11 +408,6 @@ function getNamedGateChip(
     cache.set(library, def);
   }
   return def;
-}
-
-function placeNotChip(circuit: Circuit, def: ChipDef, pos: Point): NotGate {
-  const inst = makeChipInstance(circuit, def, pos);
-  return { in: inst.pins[def.ports[0]!]!, out: inst.pins[def.ports[1]!]! };
 }
 
 function placeTwoInputChip(circuit: Circuit, def: ChipDef, pos: Point): TwoInputGate {
@@ -392,14 +437,14 @@ function makeZ80GatePlacer(library: ChipLibrary): CircuitGatePlacer {
   const xorDef = getNamedGateChip(library, xorChipDefs, 'XOR', (lib) =>
     makeTwoInputGateChip(lib, 'XOR', buildXor),
   );
-  return {
-    not: (c, pos) => placeNotChip(c, notDef, pos),
-    nand: (c, pos) => placeTwoInputChip(c, nandDef, pos),
-    and: (c, pos) => placeTwoInputChip(c, andDef, pos),
-    nor: (c, pos) => placeTwoInputChip(c, norDef, pos),
-    or: (c, pos) => placeTwoInputChip(c, orDef, pos),
-    xor: (c, pos) => placeTwoInputChip(c, xorDef, pos),
-  };
+  return makeChipGatePlacer({
+    not: notDef,
+    nand: nandDef,
+    and: andDef,
+    nor: norDef,
+    or: orDef,
+    xor: xorDef,
+  });
 }
 
 /**

@@ -272,6 +272,18 @@ describe('seedLabCells', () => {
     expect(levelAt(state, netMap, inst.pins.q2!.id)).toBe(1);
   });
 
+  it('gate-layer labcells have no inline transistors', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    for (const name of ['SR_LATCH', 'DECODER_2_4', 'DECODER_3_8', 'MUX2', 'D_FF', 'FULL_ADDER', 'T_FF']) {
+      const def = getDef(library, name);
+      expect(
+        [...def.circuit.components.values()].some((c) => c.kind === 'transistor'),
+        name,
+      ).toBe(false);
+    }
+  });
+
   it('DECODER_2_4 is one-hot', () => {
     const library = new ChipLibrary();
     seedStandardCells(library);

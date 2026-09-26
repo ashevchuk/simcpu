@@ -17,12 +17,15 @@ import {
   buildDecoder,
   buildSrLatch,
   chipInstanceHeight,
+  makeChipGatePlacer,
   makeChipInstance,
   makePort,
   makeSource,
   railPin,
+  setCircuitGatePlacer,
   tiePowerRail,
   wire,
+  type CircuitGatePlacer,
 } from './library.js';
 import type { Pin, Point, PortDir } from './types.js';
 
@@ -37,6 +40,27 @@ function requireDef(library: ChipLibrary, name: string): ChipDef {
   const def = library.findByName(name);
   if (!def) throw new Error(`labcells: missing base stdcell "${name}" — call seedStandardCells first`);
   return def;
+}
+
+/** Gate-layer placer so builders like buildSrLatch/buildDecoder don't inline FETs. */
+function gatePlacer(library: ChipLibrary): CircuitGatePlacer {
+  return makeChipGatePlacer({
+    not: requireDef(library, 'NOT'),
+    nand: requireDef(library, 'NAND'),
+    and: requireDef(library, 'AND'),
+    nor: requireDef(library, 'NOR'),
+    or: requireDef(library, 'OR'),
+    xor: requireDef(library, 'XOR'),
+  });
+}
+
+function withGatePlacer<T>(library: ChipLibrary, circuit: Circuit, build: () => T): T {
+  setCircuitGatePlacer(circuit, gatePlacer(library));
+  try {
+    return build();
+  } finally {
+    setCircuitGatePlacer(circuit, null);
+  }
 }
 
 function place(circuit: Circuit, library: ChipLibrary, name: string, pos: Point): ReturnType<typeof makeChipInstance> {
@@ -58,7 +82,7 @@ function foldIfAbsent(
 ): void {
   if (library.findByName(name)) return;
   const { circuit, ports } = build();
-  foldExposing(circuit, name, library, ports, { labelize: true });
+  foldExposing(circuit, name, library, ports, { labelize: false });
 }
 
 /** Wrap an existing lab/stdcell under a new display name (74xx aliases, SIPO8, …). */
@@ -74,7 +98,7 @@ function aliasChip(library: ChipLibrary, aliasName: string, targetName: string):
     isOutput: dirs.get(portName) === 'out',
     portName,
   }));
-  foldExposing(circuit, aliasName, library, ports, { labelize: true });
+  foldExposing(circuit, aliasName, library, ports, { labelize: false });
 }
 
 function notPin(circuit: Circuit, library: ChipLibrary, a: Pin, pos: Point): Pin {
@@ -183,7 +207,7 @@ function seedSrLatch(library: ChipLibrary): void {
   foldIfAbsent(library, 'SR_LATCH', () => {
     // Active-high S/R: invert into classic NAND SR (active-low set/reset).
     const circuit = scratch();
-    const latch = buildSrLatch(circuit, { x: 400, y: 0 });
+    const latch = withGatePlacer(library, circuit, () => buildSrLatch(circuit, { x: 400, y: 0 }));
     const sPort = place(circuit, library, 'NOT', { x: 80, y: 0 });
     const rPort = place(circuit, library, 'NOT', { x: 80, y: 150 });
     wire(circuit, sPort.pins.out!, latch.setPin);
@@ -481,7 +505,7 @@ function seedCounter8(library: ChipLibrary): void {
 function seedDecoder(library: ChipLibrary, bits: number, name: string): void {
   foldIfAbsent(library, name, () => {
     const circuit = scratch();
-    const dec = buildDecoder(circuit, bits, { x: 0, y: 0 });
+    const dec = withGatePlacer(library, circuit, () => buildDecoder(circuit, bits, { x: 0, y: 0 }));
     // Active-high enable: when en=0 all y*=0.
     let en!: Pin;
     const gated: Pin[] = [];

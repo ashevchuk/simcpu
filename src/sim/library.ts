@@ -126,6 +126,12 @@ export const LAYOUT = {
 export const CMOS_STACK_PITCH = 64;
 /** Horizontal pitch between parallel CMOS columns (NAND/NOR). */
 export const CMOS_COL_PITCH = 80;
+/** Horizontal gap from NAND/NOR stack to the trailing inverter in CMOS AND/OR. */
+export const CMOS_AND_INV_GAP = 200;
+/** Horizontal pitch between gate-layer chip instances in composite stdcells. */
+export const GATE_CHIP_PITCH_X = 180;
+/** Vertical pitch between gate-layer chip instances in composite stdcells. */
+export const GATE_CHIP_PITCH_Y = 120;
 
 export function transistorPinOffsets(type: TransistorType): {
   gate: [number, number];
@@ -989,9 +995,10 @@ export interface TwoInputGate {
 /**
  * Optional per-circuit gate placers. When set (see `setCircuitGatePlacer`),
  * `buildAnd`/`buildOr`/`buildNot`/… place chip instances instead of inline
- * transistors — used by `buildZ80Cpu` to keep place-time netlists hierarchical.
- * Scratch circuits used while folding stdcells never set a placer, so their
- * guts stay real transistors.
+ * transistors — used by `buildZ80Cpu` and by stdcell composites (MUX2/XOR/…)
+ * so dive shows a gate layer before CMOS guts.
+ * CMOS primitives (NOT/NAND/NOR/AND/OR) fold without a placer so their
+ * ChipDefs stay real transistor schematics.
  */
 export interface CircuitGatePlacer {
   not: (circuit: Circuit, pos: Point) => NotGate;
@@ -1000,6 +1007,10 @@ export interface CircuitGatePlacer {
   nor: (circuit: Circuit, pos: Point) => TwoInputGate;
   or: (circuit: Circuit, pos: Point) => TwoInputGate;
   xor: (circuit: Circuit, pos: Point) => TwoInputGate;
+  /** When set, `buildMux2` places a MUX2 chip (MUX4 tree) instead of SOP gates. */
+  mux2?: (circuit: Circuit, pos: Point) => Mux2;
+  /** When set, `buildDLatch` places a D_LATCH chip (D_FF master/slave). */
+  dLatch?: (circuit: Circuit, pos: Point) => { d: Pin; en: Pin; q: Pin; qn: Pin };
 }
 
 const circuitGatePlacers = new WeakMap<Circuit, CircuitGatePlacer>();
@@ -1008,6 +1019,71 @@ const circuitGatePlacers = new WeakMap<Circuit, CircuitGatePlacer>();
 export function setCircuitGatePlacer(circuit: Circuit, placer: CircuitGatePlacer | null): void {
   if (placer) circuitGatePlacers.set(circuit, placer);
   else circuitGatePlacers.delete(circuit);
+}
+
+/** Current gate placer for `circuit`, if any. */
+export function getCircuitGatePlacer(circuit: Circuit): CircuitGatePlacer | undefined {
+  return circuitGatePlacers.get(circuit);
+}
+
+/** Chip-instance placers from already-registered library defs (seed / Z80). */
+export function makeChipGatePlacer(defs: {
+  not: ChipDef;
+  nand: ChipDef;
+  and: ChipDef;
+  nor: ChipDef;
+  or: ChipDef;
+  /** When omitted, `xor` expands to a 4-NAND network (for seeding XOR itself). */
+  xor?: ChipDef;
+  mux2?: ChipDef;
+  dLatch?: ChipDef;
+}): CircuitGatePlacer {
+  const placeNot = (circuit: Circuit, def: ChipDef, pos: Point): NotGate => {
+    const inst = makeChipInstance(circuit, def, pos);
+    return { in: inst.pins[def.ports[0]!]!, out: inst.pins[def.ports[1]!]! };
+  };
+  const placeTwo = (circuit: Circuit, def: ChipDef, pos: Point): TwoInputGate => {
+    const inst = makeChipInstance(circuit, def, pos);
+    return {
+      a: inst.pins[def.ports[0]!]!,
+      b: inst.pins[def.ports[1]!]!,
+      out: inst.pins[def.ports[2]!]!,
+    };
+  };
+  const placeMux = (circuit: Circuit, def: ChipDef, pos: Point): Mux2 => {
+    const inst = makeChipInstance(circuit, def, pos);
+    return {
+      sel: inst.pins[def.ports[0]!]!,
+      in0: inst.pins[def.ports[1]!]!,
+      in1: inst.pins[def.ports[2]!]!,
+      out: inst.pins[def.ports[3]!]!,
+    };
+  };
+  const placeLatch = (
+    circuit: Circuit,
+    def: ChipDef,
+    pos: Point,
+  ): { d: Pin; en: Pin; q: Pin; qn: Pin } => {
+    const inst = makeChipInstance(circuit, def, pos);
+    return {
+      d: inst.pins[def.ports[0]!]!,
+      en: inst.pins[def.ports[1]!]!,
+      q: inst.pins[def.ports[2]!]!,
+      qn: inst.pins[def.ports[3]!]!,
+    };
+  };
+  return {
+    not: (c, pos) => placeNot(c, defs.not, pos),
+    nand: (c, pos) => placeTwo(c, defs.nand, pos),
+    and: (c, pos) => placeTwo(c, defs.and, pos),
+    nor: (c, pos) => placeTwo(c, defs.nor, pos),
+    or: (c, pos) => placeTwo(c, defs.or, pos),
+    xor: defs.xor
+      ? (c, pos) => placeTwo(c, defs.xor!, pos)
+      : (c, pos) => buildXorNetwork(c, pos),
+    mux2: defs.mux2 ? (c, pos) => placeMux(c, defs.mux2!, pos) : undefined,
+    dLatch: defs.dLatch ? (c, pos) => placeLatch(c, defs.dLatch!, pos) : undefined,
+  };
 }
 
 /** Short local VCC/GND stub via a rail label (joins Source drivers by name). */
@@ -1088,14 +1164,21 @@ export function buildNand(
   return { a: p1.pins.gate, b: p2.pins.gate, out: p1.pins.drain };
 }
 
-/** NAND followed by an inverter. */
+/**
+ * CMOS AND = NAND + inverter (textbook two-stage schematic).
+ * Layout keeps a clear gap and an ortho out→in hop so dive stays readable.
+ */
 export function buildAnd(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
   const placer = circuitGatePlacers.get(circuit);
   if (placer) return placer.and(circuit, pos);
 
   const nand = buildNand(circuit, pos);
-  const inv = buildNot(circuit, { x: pos.x + 120, y: pos.y });
-  wire(circuit, nand.out, inv.in);
+  const inv = buildNot(circuit, { x: pos.x + CMOS_AND_INV_GAP, y: pos.y });
+  const midX = (nand.out.pos.x + inv.in.pos.x) / 2;
+  wire(circuit, nand.out, inv.in, [
+    { x: midX, y: nand.out.pos.y },
+    { x: midX, y: inv.in.pos.y },
+  ]);
   return { a: nand.a, b: nand.b, out: inv.out };
 }
 
@@ -1153,30 +1236,35 @@ export function buildNor(
   return { a: p1.pins.gate, b: p2.pins.gate, out: p2.pins.drain };
 }
 
-/** NOR followed by an inverter. */
+/**
+ * CMOS OR = NOR + inverter (textbook two-stage schematic).
+ * Same spacing discipline as `buildAnd`.
+ */
 export function buildOr(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
   const placer = circuitGatePlacers.get(circuit);
   if (placer) return placer.or(circuit, pos);
 
   const nor = buildNor(circuit, pos);
-  const inv = buildNot(circuit, { x: pos.x + 120, y: pos.y });
-  wire(circuit, nor.out, inv.in);
+  const inv = buildNot(circuit, { x: pos.x + CMOS_AND_INV_GAP, y: pos.y });
+  const midX = (nor.out.pos.x + inv.in.pos.x) / 2;
+  wire(circuit, nor.out, inv.in, [
+    { x: midX, y: nor.out.pos.y },
+    { x: midX, y: inv.in.pos.y },
+  ]);
   return { a: nor.a, b: nor.b, out: inv.out };
 }
 
 /**
- * The classic 4-NAND XOR: n1 = NAND(a,b); out = NAND(NAND(a,n1), NAND(b,n1)).
- * Cheaper (16 transistors) than composing it out of AND/OR/NOT (22+), and it
- * keeps XOR built from the same NAND primitive as everything else here.
+ * Classic 4-NAND XOR network (transistor or chip-NAND via placer.nand).
+ * Used when folding the XOR stdcell and whenever a placer has no XOR chip yet.
  */
-export function buildXor(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
-  const placer = circuitGatePlacers.get(circuit);
-  if (placer) return placer.xor(circuit, pos);
-
+export function buildXorNetwork(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+  const px = GATE_CHIP_PITCH_X;
+  const py = GATE_CHIP_PITCH_Y;
   const g1 = buildNand(circuit, pos); // n1 = NAND(a, b)
-  const g2 = buildNand(circuit, { x: pos.x, y: pos.y + 150 }); // NAND(a, n1)
-  const g3 = buildNand(circuit, { x: pos.x + 150, y: pos.y + 150 }); // NAND(b, n1)
-  const g4 = buildNand(circuit, { x: pos.x + 150, y: pos.y + 300 }); // out
+  const g2 = buildNand(circuit, { x: pos.x, y: pos.y + py }); // NAND(a, n1)
+  const g3 = buildNand(circuit, { x: pos.x + px, y: pos.y + py }); // NAND(b, n1)
+  const g4 = buildNand(circuit, { x: pos.x + px, y: pos.y + 2 * py }); // out
 
   wire(circuit, g1.a, g2.a); // both driven by external input a
   wire(circuit, g1.b, g3.a); // both driven by external input b
@@ -1188,6 +1276,16 @@ export function buildXor(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInpu
   return { a: g1.a, b: g1.b, out: g4.out };
 }
 
+/**
+ * The classic 4-NAND XOR. With a gate placer whose `xor` places an XOR chip
+ * (Z80 / FULL_ADDER), this is one chip instance; otherwise `buildXorNetwork`.
+ */
+export function buildXor(circuit: Circuit, pos: Point = { x: 0, y: 0 }): TwoInputGate {
+  const placer = circuitGatePlacers.get(circuit);
+  if (placer) return placer.xor(circuit, pos);
+  return buildXorNetwork(circuit, pos);
+}
+
 export interface Mux2 {
   sel: Pin;
   in0: Pin;
@@ -1195,12 +1293,21 @@ export interface Mux2 {
   out: Pin;
 }
 
-/** 2:1 multiplexer: out = sel ? in1 : in0, built from NOT/AND/OR (the standard sum-of-products form). */
+/**
+ * 2:1 multiplexer: out = sel ? in1 : in0, built from NOT/AND/OR (SOP).
+ * With a gate placer this yields NOT+AND+AND+OR chip instances; with
+ * `placer.mux2` a single MUX2 chip (used by the MUX4 tree).
+ */
 export function buildMux2(circuit: Circuit, pos: Point = { x: 0, y: 0 }): Mux2 {
+  const placer = circuitGatePlacers.get(circuit);
+  if (placer?.mux2) return placer.mux2(circuit, pos);
+
+  const px = GATE_CHIP_PITCH_X;
+  const py = GATE_CHIP_PITCH_Y;
   const notSel = buildNot(circuit, pos);
-  const and0 = buildAnd(circuit, { x: pos.x + 150, y: pos.y }); // NOT(sel) AND in0
-  const and1 = buildAnd(circuit, { x: pos.x + 150, y: pos.y + 150 }); // sel AND in1
-  const or = buildOr(circuit, { x: pos.x + 350, y: pos.y + 75 });
+  const and0 = buildAnd(circuit, { x: pos.x + px, y: pos.y }); // NOT(sel) AND in0
+  const and1 = buildAnd(circuit, { x: pos.x + px, y: pos.y + py }); // sel AND in1
+  const or = buildOr(circuit, { x: pos.x + 2 * px, y: pos.y + py / 2 });
 
   wire(circuit, notSel.out, and0.a);
   wire(circuit, notSel.in, and1.a); // shares the raw `sel` signal
@@ -1208,6 +1315,36 @@ export function buildMux2(circuit: Circuit, pos: Point = { x: 0, y: 0 }): Mux2 {
   wire(circuit, and1.out, or.b);
 
   return { sel: notSel.in, in0: and0.b, in1: and1.b, out: or.out };
+}
+
+/**
+ * CMOS transmission-gate 2:1 mux — denser teaching schematic than SOP MUX2.
+ * One inverter on `sel`, then two complementary TGs onto a shared `out`.
+ */
+export function buildMux2Tg(circuit: Circuit, pos: Point = { x: 0, y: 0 }): Mux2 {
+  const col = CMOS_COL_PITCH;
+  const stack = CMOS_STACK_PITCH;
+  const notSel = buildNot(circuit, pos);
+
+  // TG0 passes in0 when sel=0 (N←sel_n, P←sel).
+  const n0 = makeTransistor(circuit, 'N', { x: pos.x + 2 * col, y: pos.y + stack });
+  const p0 = makeTransistor(circuit, 'P', { x: pos.x + 2 * col, y: pos.y });
+  // TG1 passes in1 when sel=1 (N←sel, P←sel_n).
+  const n1 = makeTransistor(circuit, 'N', { x: pos.x + 3.5 * col, y: pos.y + stack });
+  const p1 = makeTransistor(circuit, 'P', { x: pos.x + 3.5 * col, y: pos.y });
+
+  wire(circuit, n0.pins.source, p0.pins.source);
+  wire(circuit, n1.pins.source, p1.pins.source);
+  wire(circuit, n0.pins.drain, p0.pins.drain);
+  wire(circuit, n1.pins.drain, p1.pins.drain);
+  wire(circuit, n0.pins.drain, n1.pins.drain);
+
+  wire(circuit, n0.pins.gate, notSel.out);
+  wire(circuit, p0.pins.gate, notSel.in);
+  wire(circuit, n1.pins.gate, notSel.in);
+  wire(circuit, p1.pins.gate, notSel.out);
+
+  return { sel: notSel.in, in0: n0.pins.source, in1: n1.pins.source, out: n0.pins.drain };
 }
 
 export interface HalfAdder {
@@ -1226,7 +1363,7 @@ export interface HalfAdder {
  */
 export function buildHalfAdder(circuit: Circuit, pos: Point = { x: 0, y: 0 }): HalfAdder {
   const xor = buildXor(circuit, pos);
-  const and = buildAnd(circuit, { x: pos.x, y: pos.y + 500 });
+  const and = buildAnd(circuit, { x: pos.x, y: pos.y + 2 * GATE_CHIP_PITCH_Y });
   wire(circuit, xor.a, and.a);
   wire(circuit, xor.b, and.b);
   return { a: xor.a, b: xor.b, sum: xor.out, cout: and.out };
@@ -1245,11 +1382,13 @@ export interface FullAdder {
  * standard two-XOR/two-AND/one-OR form, built entirely from the gates above.
  */
 export function buildFullAdder(circuit: Circuit, pos: Point = { x: 0, y: 0 }): FullAdder {
+  const px = 2 * GATE_CHIP_PITCH_X;
+  const py = 2 * GATE_CHIP_PITCH_Y;
   const xor1 = buildXor(circuit, pos); // a ^ b
-  const xor2 = buildXor(circuit, { x: pos.x + 500, y: pos.y }); // (a ^ b) ^ cin = sum
-  const and1 = buildAnd(circuit, { x: pos.x, y: pos.y + 500 }); // a & b
-  const and2 = buildAnd(circuit, { x: pos.x + 500, y: pos.y + 500 }); // (a ^ b) & cin
-  const or1 = buildOr(circuit, { x: pos.x + 900, y: pos.y + 250 }); // cout
+  const xor2 = buildXor(circuit, { x: pos.x + px, y: pos.y }); // (a ^ b) ^ cin = sum
+  const and1 = buildAnd(circuit, { x: pos.x, y: pos.y + py }); // a & b
+  const and2 = buildAnd(circuit, { x: pos.x + px, y: pos.y + py }); // (a ^ b) & cin
+  const or1 = buildOr(circuit, { x: pos.x + 2 * px, y: pos.y + py / 2 }); // cout
 
   wire(circuit, xor1.a, and1.a); // shared `a`
   wire(circuit, xor1.b, and1.b); // shared `b`
@@ -1274,9 +1413,11 @@ export interface Mux4 {
 
 /** 4:1 multiplexer, a tree of three buildMux2()s: sel1 picks a half, sel0 picks within it. */
 export function buildMux4(circuit: Circuit, pos: Point = { x: 0, y: 0 }): Mux4 {
+  const px = 3 * GATE_CHIP_PITCH_X;
+  const py = 3 * GATE_CHIP_PITCH_Y;
   const low = buildMux2(circuit, pos); // in0/in1 via sel0
-  const high = buildMux2(circuit, { x: pos.x, y: pos.y + 400 }); // in2/in3 via sel0
-  const out = buildMux2(circuit, { x: pos.x + 600, y: pos.y + 200 }); // low/high via sel1
+  const high = buildMux2(circuit, { x: pos.x, y: pos.y + py }); // in2/in3 via sel0
+  const out = buildMux2(circuit, { x: pos.x + px, y: pos.y + py / 2 }); // low/high via sel1
 
   wire(circuit, low.sel, high.sel); // shared sel0
   wire(circuit, low.out, out.in0);
@@ -1313,24 +1454,43 @@ export function buildTriStateBuffer(
   circuit: Circuit,
   pos: Point = { x: 0, y: 0 },
 ): TriStateBuffer {
+  const col = CMOS_COL_PITCH;
+  const stack = CMOS_STACK_PITCH;
+  // Input inverter (always on) and enable complement — spaced like textbook sheets.
   const inv = buildNot(circuit, pos); // inv.out = NOT(a)
-  const enInv = buildNot(circuit, { x: pos.x + 200, y: pos.y }); // enInv.out = NOT(en)
+  const enInv = buildNot(circuit, { x: pos.x, y: pos.y + 2 * stack }); // enInv.out = NOT(en)
 
-  const p1 = makeTransistor(circuit, 'P', { x: pos.x + 100, y: pos.y + 150 });
-  const p2 = makeTransistor(circuit, 'P', { x: pos.x + 100, y: pos.y + 210 });
-  const n2 = makeTransistor(circuit, 'N', { x: pos.x + 100, y: pos.y + 270 });
-  const n1 = makeTransistor(circuit, 'N', { x: pos.x + 100, y: pos.y + 330 });
+  const stageX = pos.x + CMOS_AND_INV_GAP;
+  const p1 = makeTransistor(circuit, 'P', { x: stageX, y: pos.y });
+  const p2 = makeTransistor(circuit, 'P', { x: stageX, y: pos.y + stack });
+  const n2 = makeTransistor(circuit, 'N', { x: stageX, y: pos.y + 2 * stack });
+  const n1 = makeTransistor(circuit, 'N', { x: stageX, y: pos.y + 3 * stack });
 
-  tiePowerRail(circuit, 'VCC', p1.pins.source);
-  wire(circuit, p1.pins.gate, enInv.out); // pull-up path open when en=1
+  stubLocalRail(circuit, 'VCC', p1.pins.source, -18);
   wire(circuit, p1.pins.drain, p2.pins.source);
-  wire(circuit, p2.pins.gate, inv.out); // pulls up when a=1
-
-  wire(circuit, n2.pins.drain, p2.pins.drain); // the shared output node
-  wire(circuit, n2.pins.gate, inv.out); // pulls down when a=0
+  wire(circuit, n2.pins.drain, p2.pins.drain); // shared output node
   wire(circuit, n2.pins.source, n1.pins.drain);
-  wire(circuit, n1.pins.gate, enInv.in); // pull-down path open when en=1
-  tiePowerRail(circuit, 'GND', n1.pins.source);
+  stubLocalRail(circuit, 'GND', n1.pins.source, 18);
+
+  const leftRail = stageX - col / 2;
+  // Outer enable gates: P1 ← NOT(en), N1 ← en.
+  wire(circuit, enInv.out, p1.pins.gate, [
+    { x: leftRail, y: enInv.out.pos.y },
+    { x: leftRail, y: p1.pins.gate.pos.y },
+  ]);
+  wire(circuit, enInv.in, n1.pins.gate, [
+    { x: leftRail - 20, y: enInv.in.pos.y },
+    { x: leftRail - 20, y: n1.pins.gate.pos.y },
+  ]);
+  // Inner data gates: both driven by NOT(a).
+  wire(circuit, inv.out, p2.pins.gate, [
+    { x: leftRail + 20, y: inv.out.pos.y },
+    { x: leftRail + 20, y: p2.pins.gate.pos.y },
+  ]);
+  wire(circuit, inv.out, n2.pins.gate, [
+    { x: leftRail + 20, y: inv.out.pos.y },
+    { x: leftRail + 20, y: n2.pins.gate.pos.y },
+  ]);
 
   return { a: inv.in, en: enInv.in, out: p2.pins.drain };
 }
@@ -1392,7 +1552,7 @@ export interface SrLatch {
  */
 export function buildSrLatch(circuit: Circuit, pos: Point = { x: 0, y: 0 }): SrLatch {
   const g1 = buildNand(circuit, pos); // Q  = NAND(setPin_n, qn)
-  const g2 = buildNand(circuit, { x: pos.x, y: pos.y + 150 }); // Qn = NAND(resetPin_n, q)
+  const g2 = buildNand(circuit, { x: pos.x, y: pos.y + GATE_CHIP_PITCH_Y }); // Qn = NAND(resetPin_n, q)
   wire(circuit, g1.out, g2.b);
   wire(circuit, g2.out, g1.b);
   return { setPin: g1.a, resetPin: g2.a, q: g1.out, qn: g2.out };

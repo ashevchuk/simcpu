@@ -220,6 +220,19 @@ export function draw(
   const nets = circuit.computeNets();
   const netOf = glowNet ? nets.netOf : null;
 
+  // Pins on the hovered / H-highlighted net get the same glow family as wires.
+  const pinGlowNet = hoverNet;
+  const pinGlowStyle: PinGlowStyle | null = pinGlowNet
+    ? pinGlowNet === highlightNet
+      ? 'net'
+      : 'hover'
+    : null;
+  const glowPinIds = pinGlowNet
+    ? new Set(
+        [...nets.netOf.entries()].filter(([, nid]) => nid === pinGlowNet).map(([pid]) => pid),
+      )
+    : null;
+
   // Extended VCC/GND rails through same-net sources sharing a Y.
   drawPowerRailBars(ctx, circuit, nets);
 
@@ -327,7 +340,17 @@ export function draw(
     if (!isComponentVisible(c, visible)) continue;
     const selected = editor.selectedIds.has(c.id);
     const hovered = !selected && editor.hoveredComponentId === c.id && editor.tool.kind === 'select';
-    drawComponent(ctx, c, resolve, selected, hovered, library, opts?.softMode === true);
+    drawComponent(
+      ctx,
+      c,
+      resolve,
+      selected,
+      hovered,
+      library,
+      opts?.softMode === true,
+      glowPinIds,
+      pinGlowStyle,
+    );
   }
 
   // Tutorial target rings (button / LED / wire endpoints / toggle target).
@@ -735,10 +758,29 @@ function drawPowerRailBars(
   ctx.restore();
 }
 
-function drawPinDot(ctx: CanvasRenderingContext2D, pin: Pin, resolve: LevelResolver): void {
+function drawPinDot(
+  ctx: CanvasRenderingContext2D,
+  pin: Pin,
+  resolve: LevelResolver,
+  glow: PinGlowStyle | null = null,
+): void {
   const { level, contended } = resolve(pin.id);
   const color = levelColor(level, contended);
   ctx.save();
+  if (glow) {
+    // Match wire emphasis: cyan for sticky H net, soft grey for pointer hover.
+    ctx.globalAlpha = glow === 'net' ? 0.55 : 0.4;
+    ctx.strokeStyle = glow === 'net' ? '#5ec8ff' : COLOR.hover;
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.arc(pin.pos.x, pin.pos.y, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = glow === 'net' ? 0.35 : 0.25;
+    ctx.fillStyle = glow === 'net' ? '#5ec8ff' : COLOR.hover;
+    ctx.beginPath();
+    ctx.arc(pin.pos.x, pin.pos.y, 7, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.globalAlpha = 0.3;
   ctx.fillStyle = color;
   ctx.beginPath();
@@ -749,6 +791,17 @@ function drawPinDot(ctx: CanvasRenderingContext2D, pin: Pin, resolve: LevelResol
   ctx.arc(pin.pos.x, pin.pos.y, 3.2, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+}
+
+type PinGlowStyle = 'hover' | 'net';
+
+function pinGlow(
+  pin: Pin,
+  glowPinIds: Set<string> | null,
+  style: PinGlowStyle | null,
+): PinGlowStyle | null {
+  if (!glowPinIds || !style) return null;
+  return glowPinIds.has(pin.id) ? style : null;
 }
 
 /** Human-readable pin label for schematic bodies (addr0 → A0, we → WE, …). */
@@ -1063,6 +1116,8 @@ function drawComponent(
   hovered: boolean,
   library: ChipLibrary,
   softMode = false,
+  glowPinIds: Set<string> | null = null,
+  glowStyle: PinGlowStyle | null = null,
 ): void {
   ctx.font = '10px ui-monospace, "SF Mono", monospace';
   ctx.textAlign = 'center';
@@ -1070,6 +1125,7 @@ function drawComponent(
 
   const ringColor = selected ? COLOR.selected : hovered ? COLOR.hover : null;
   const bodyStroke = (defaultColor: string) => (selected ? COLOR.selected : hovered ? COLOR.hover : defaultColor);
+  const dot = (pin: Pin) => drawPinDot(ctx, pin, resolve, pinGlow(pin, glowPinIds, glowStyle));
 
   const stub = (fromX: number, fromY: number, pin: Pin) => {
     ctx.strokeStyle = COLOR.bodyStroke;
@@ -1094,9 +1150,9 @@ function drawComponent(
       const conducting =
         !softMode && (c.type === 'N' ? gateLevel === 1 : gateLevel === 0);
       drawMosfetSymbol(ctx, c, bodyStroke(stroke), selected, hovered, conducting);
-      drawPinDot(ctx, c.pins.gate, resolve);
-      drawPinDot(ctx, c.pins.drain, resolve);
-      drawPinDot(ctx, c.pins.source, resolve);
+      dot(c.pins.gate);
+      dot(c.pins.drain);
+      dot(c.pins.source);
       break;
     }
     case 'source': {
@@ -1159,7 +1215,7 @@ function drawComponent(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(isVcc ? 'VCC' : 'GND', x + labelOff.x, y + labelOff.y);
-      drawPinDot(ctx, c.pins.out, resolve);
+      dot(c.pins.out);
       break;
     }
     case 'input': {
@@ -1174,7 +1230,7 @@ function drawComponent(
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
       stubPin(x, y, w / 2, h / 2, c.pins.out);
-      drawPinDot(ctx, c.pins.out, resolve);
+      dot(c.pins.out);
       ctx.fillStyle = COLOR.text;
       ctx.fillText(String(c.value), x, y);
       break;
@@ -1222,7 +1278,7 @@ function drawComponent(
       ctx.textBaseline = 'middle';
       ctx.fillText(toggle ? 'TOG' : 'MOM', x, y + 11);
       stubPin(x, y, pw / 2, ph / 2, c.pins.out);
-      drawPinDot(ctx, c.pins.out, resolve);
+      dot(c.pins.out);
       break;
     }
     case 'switch': {
@@ -1238,8 +1294,8 @@ function drawComponent(
       ctx.stroke();
       stubPin(x, y, w / 2, h / 2, c.pins.in);
       stubPin(x, y, w / 2, h / 2, c.pins.out);
-      drawPinDot(ctx, c.pins.in, resolve);
-      drawPinDot(ctx, c.pins.out, resolve);
+      dot(c.pins.in);
+      dot(c.pins.out);
       // Knife blade: closed = bridge across, open = lifted toward out side.
       ctx.strokeStyle = c.closed ? '#8fd46a' : '#8a93a8';
       ctx.lineWidth = 2;
@@ -1274,8 +1330,8 @@ function drawComponent(
       ctx.stroke();
       stubPin(x, y, w / 2, h / 2, c.pins.out);
       stubPin(x, y, w / 2, h / 2, c.pins.trig);
-      drawPinDot(ctx, c.pins.out, resolve);
-      drawPinDot(ctx, c.pins.trig, resolve);
+      dot(c.pins.out);
+      dot(c.pins.trig);
       ctx.save();
       ctx.font = '8px ui-monospace, "SF Mono", monospace';
       ctx.fillStyle = COLOR.textDim;
@@ -1308,7 +1364,7 @@ function drawComponent(
         const p = c.pins[`ch${i}`];
         if (!p) continue;
         stubPin(x, y, w / 2, h / 2, p);
-        drawPinDot(ctx, p, resolve);
+        dot(p);
         drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
       }
       ctx.fillStyle = COLOR.selected;
@@ -1340,7 +1396,7 @@ function drawComponent(
           continue;
         }
         stubPin(x, y, w / 2, h / 2, p);
-        drawPinDot(ctx, p, resolve);
+        dot(p);
         drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
         const { level, contended } = resolve(p.id);
         levels.push({ level, contended });
@@ -1418,7 +1474,7 @@ function drawComponent(
           ey = side.y >= 0 ? y + hh : y - hh;
         }
         stub(ex, ey, p);
-        drawPinDot(ctx, p, resolve);
+        dot(p);
         drawBodyPinLabel(ctx, p, x, y, String(i), w, h);
 
         const pad = busSwitchPaddleCenter(c, i);
@@ -1461,12 +1517,12 @@ function drawComponent(
         const pb = c.pins[`b${i}`];
         if (pa) {
           stubPin(x, y, w / 2, h / 2, pa);
-          drawPinDot(ctx, pa, resolve);
+          dot(pa);
           drawBodyPinLabel(ctx, pa, x, y, String(i), w, h);
         }
         if (pb) {
           stubPin(x, y, w / 2, h / 2, pb);
-          drawPinDot(ctx, pb, resolve);
+          dot(pb);
         }
         const pad = busPassPaddleCenter(c, i);
         if (!pad) continue;
@@ -1534,7 +1590,7 @@ function drawComponent(
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
       stubPin(x, y, 11, 11, c.pins.in);
-      drawPinDot(ctx, c.pins.in, resolve);
+      dot(c.pins.in);
       if (c.label) {
         ctx.fillStyle = COLOR.textDim;
         ctx.fillText(c.label, x, y - 20);
@@ -1588,7 +1644,7 @@ function drawComponent(
         const p = c.pins[name];
         if (!p) continue;
         stubPin(x, y, w / 2, h / 2, p);
-        drawPinDot(ctx, p, resolve);
+        dot(p);
       }
       break;
     }
@@ -1613,7 +1669,7 @@ function drawComponent(
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
       stubPin(x, y, 10, 10, c.pins.in);
-      drawPinDot(ctx, c.pins.in, resolve);
+      dot(c.pins.in);
       ctx.fillStyle = levelColor(level, contended);
       ctx.fillText(level === 'Z' ? '?' : String(level), x, y);
       if (c.label) {
@@ -1624,7 +1680,7 @@ function drawComponent(
     }
     case 'label': {
       const { x, y } = c.pos;
-      drawPinDot(ctx, c.pins.net, resolve);
+      dot(c.pins.net);
       ctx.fillStyle = selected || hovered ? COLOR.selected : COLOR.textDim;
       ctx.fillText(c.name, x, y - 12);
       break;
@@ -1672,7 +1728,7 @@ function drawComponent(
         ctx.lineWidth = 1.5;
         ctx.stroke();
       }
-      drawPinDot(ctx, c.pins.io, resolve);
+      dot(c.pins.io);
       ctx.fillStyle = selected || hovered ? COLOR.selected : COLOR.textDim;
       const tag = dir === 'in' ? 'IN ' : dir === 'out' ? 'OUT ' : '';
       ctx.fillText(`${tag}${c.name}`, x, y - 16);
@@ -1694,7 +1750,7 @@ function drawComponent(
       ctx.stroke();
       for (const p of Object.values(c.pins) as Pin[]) {
         stubPin(x, y, w / 2, h / 2, p);
-        drawPinDot(ctx, p, resolve);
+        dot(p);
         let label: string | undefined;
         if (library.has(c.defId)) {
           for (const ic of library.get(c.defId).circuit.components.values()) {
@@ -1775,7 +1831,7 @@ function drawComponent(
       ctx.stroke();
       for (const p of Object.values(c.pins) as Pin[]) {
         stubPin(x, y, w / 2, h / 2, p);
-        drawPinDot(ctx, p, resolve);
+        dot(p);
         drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
       }
       drawChipMarking(ctx, x, y, w, h, `RAM ${1 << c.addrBits}×${c.dataBits}`);
@@ -1797,7 +1853,7 @@ function drawComponent(
       ctx.stroke();
       for (const p of Object.values(c.pins) as Pin[]) {
         stubPin(x, y, w / 2, h / 2, p);
-        drawPinDot(ctx, p, resolve);
+        dot(p);
         drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
       }
       drawChipMarking(ctx, x, y, w, h, `ROM ${1 << c.addrBits}×${c.dataBits}`);
