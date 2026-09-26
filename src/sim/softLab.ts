@@ -219,7 +219,8 @@ function collectSoftLabDescendants(
  * show live levels that match Soft Lab’s exterior behavior. Also expands Soft
  * Lab descendants nested under those defs (COUNTER4 → T_FF). Manual
  * force-expand (inspector) is preserved. Released when leaving the path.
- * @returns def names newly auto-forced this call (for POR seeding)
+ * @returns `{ newly, released }` — newly auto-forced defs (for POR) and
+ * Soft models released when leaving the dive path (stale softState wipe).
  */
 export function syncSoftExpandForDivePath(
   defNamesOnPath: readonly string[],
@@ -228,12 +229,16 @@ export function syncSoftExpandForDivePath(
     has(id: string): boolean;
     get(id: string): { name: string };
   },
-): string[] {
+): { newly: string[]; released: string[] } {
   const newly: string[] = [];
+  const released: string[] = [];
   if (!softLabEnabled) {
-    // Soft Lab off expands everything; drop auto markers only.
-    softExpandAutoDive.clear();
-    return newly;
+    // Soft Lab off expands everything. Drop Soft-model force-expands (auto
+    // *and* orphaned) — clearing only softExpandAutoDive left names stuck in
+    // softExpandForced; Soft Lab ON then kept COUNTER/T_FF as silicon with
+    // floating Q (chips look dead while the clock still animates).
+    clearSoftModelForceExpands();
+    return { newly, released };
   }
 
   const onPath = new Set<string>();
@@ -246,11 +251,10 @@ export function syncSoftExpandForDivePath(
     }
   }
 
-  let released = false;
   for (const name of [...softExpandAutoDive]) {
     if (onPath.has(name)) continue;
     softExpandAutoDive.delete(name);
-    if (softExpandForced.delete(name)) released = true;
+    if (softExpandForced.delete(name)) released.push(name);
   }
 
   for (const name of onPath) {
@@ -260,8 +264,28 @@ export function syncSoftExpandForDivePath(
     newly.push(name);
   }
 
-  if (released || newly.length > 0) bumpStructureVersion();
-  return newly;
+  if (released.length > 0 || newly.length > 0) bumpStructureVersion();
+  return { newly, released };
+}
+
+/**
+ * Drop Soft-model force-expands (auto or orphaned). Dive `syncSoftExpandForDivePath`
+ * re-applies the current path afterward. Call when Soft Lab turns on so a prior
+ * Soft-off-while-dived bug cannot leave COUNTER/T_FF stuck expanded.
+ */
+export function clearSoftModelForceExpands(): void {
+  let released = false;
+  for (const name of [...softExpandForced]) {
+    if (!softLabModelKey(name)) continue;
+    softExpandForced.delete(name);
+    softExpandAutoDive.delete(name);
+    released = true;
+  }
+  if (softExpandAutoDive.size > 0) {
+    softExpandAutoDive.clear();
+    released = true;
+  }
+  if (released) bumpStructureVersion();
 }
 
 export function loadSoftLabPreference(): boolean {
@@ -285,10 +309,40 @@ export function persistSoftLabPreference(): void {
 
 /** Clear Soft Lab sequential state on chip instances in a circuit. */
 export function clearSoftLabState(circuit: { components: Map<string, { kind: string; softState?: SoftLabState }> }): void {
+  let cleared = false;
   for (const c of circuit.components.values()) {
-    if (c.kind === 'chip' && c.softState) delete c.softState;
+    if (c.kind === 'chip' && c.softState) {
+      delete c.softState;
+      cleared = true;
+    }
   }
-  bumpStructureVersion();
+  if (cleared) bumpStructureVersion();
+}
+
+/**
+ * Clear softState on the top circuit and every library ChipDef. Dive-in
+ * force-expand freezes Soft sequential state; without this, leaving a dive
+ * (or Soft↔Gates) can resume Soft with a stale lastClk and Q that never
+ * track the live clock again.
+ */
+export function clearSoftLabStateDeep(
+  circuit: { components: Map<string, { kind: string; softState?: SoftLabState }> },
+  library?: { list(): Iterable<{ circuit: { components: Map<string, { kind: string; softState?: SoftLabState }> } }> },
+): void {
+  let cleared = false;
+  const wipe = (c: { components: Map<string, { kind: string; softState?: SoftLabState }> }) => {
+    for (const comp of c.components.values()) {
+      if (comp.kind === 'chip' && comp.softState) {
+        delete comp.softState;
+        cleared = true;
+      }
+    }
+  };
+  wipe(circuit);
+  if (library) {
+    for (const def of library.list()) wipe(def.circuit);
+  }
+  if (cleared) bumpStructureVersion();
 }
 
 /** Canonical model keys that Soft Lab can evaluate. */
@@ -352,6 +406,9 @@ const ALIAS_TO_MODEL: Record<string, string> = {
 export function softLabModelKey(chipName: string): string | null {
   if (MODEL_BITS[chipName] !== undefined) return chipName;
   if (ALIAS_TO_MODEL[chipName]) return ALIAS_TO_MODEL[chipName]!;
+  // Dive forks: COUNTER4_copy / COUNTER4_copy_2 → same Soft model as the original.
+  const fork = /^(.*)_copy(?:_\d+)?$/.exec(chipName);
+  if (fork?.[1]) return softLabModelKey(fork[1]);
   return null;
 }
 

@@ -123,15 +123,17 @@ export const LAYOUT = {
 } as const;
 
 /** Vertical pitch between stacked CMOS complementary pair centers (drains coincide). */
-export const CMOS_STACK_PITCH = 64;
+export const CMOS_STACK_PITCH = 96;
 /** Horizontal pitch between parallel CMOS columns (NAND/NOR). */
-export const CMOS_COL_PITCH = 80;
+export const CMOS_COL_PITCH = 120;
 /** Horizontal gap from NAND/NOR stack to the trailing inverter in CMOS AND/OR. */
-export const CMOS_AND_INV_GAP = 200;
+export const CMOS_AND_INV_GAP = 260;
 /** Horizontal pitch between gate-layer chip instances in composite stdcells. */
-export const GATE_CHIP_PITCH_X = 180;
+export const GATE_CHIP_PITCH_X = 200;
 /** Vertical pitch between gate-layer chip instances in composite stdcells. */
-export const GATE_CHIP_PITCH_Y = 120;
+export const GATE_CHIP_PITCH_Y = 140;
+/** Side stub for complementary gate ties (NAND/NOR A/B rails). */
+export const CMOS_GATE_STUB = 56;
 
 export function transistorPinOffsets(type: TransistorType): {
   gate: [number, number];
@@ -1103,8 +1105,8 @@ export function buildNot(
   const stack = CMOS_STACK_PITCH;
   const pmos = makeTransistor(circuit, 'P', pos);
   const nmos = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + stack });
-  stubLocalRail(circuit, 'VCC', pmos.pins.source, -18);
-  stubLocalRail(circuit, 'GND', nmos.pins.source, 18);
+  stubLocalRail(circuit, 'VCC', pmos.pins.source, -22);
+  stubLocalRail(circuit, 'GND', nmos.pins.source, 22);
   wire(circuit, pmos.pins.drain, nmos.pins.drain);
   wire(circuit, pmos.pins.gate, nmos.pins.gate);
   return { in: pmos.pins.gate, out: pmos.pins.drain };
@@ -1139,8 +1141,8 @@ export function buildNand(
   const n1 = makeTransistor(circuit, 'N', { x: midX, y: pos.y + stack });
   const n2 = makeTransistor(circuit, 'N', { x: midX, y: pos.y + 2 * stack });
 
-  stubLocalRail(circuit, 'VCC', p1.pins.source, -18);
-  stubLocalRail(circuit, 'VCC', p2.pins.source, -18);
+  stubLocalRail(circuit, 'VCC', p1.pins.source, -22);
+  stubLocalRail(circuit, 'VCC', p2.pins.source, -22);
   // Parallel P drains meet on a horizontal bus; drop to series N stack.
   wire(circuit, p1.pins.drain, p2.pins.drain, [{ x: midX, y: p1.pins.drain.pos.y }]);
   wire(circuit, p1.pins.drain, n1.pins.drain, [
@@ -1148,20 +1150,24 @@ export function buildNand(
     { x: midX, y: n1.pins.drain.pos.y },
   ]);
   wire(circuit, n1.pins.source, n2.pins.drain);
-  stubLocalRail(circuit, 'GND', n2.pins.source, 18);
+  stubLocalRail(circuit, 'GND', n2.pins.source, 22);
 
   // Gate A: left column P to stacked N (HVH via left rail).
+  const stub = CMOS_GATE_STUB;
   wire(circuit, p1.pins.gate, n1.pins.gate, [
-    { x: pos.x - 44, y: p1.pins.gate.pos.y },
-    { x: pos.x - 44, y: n1.pins.gate.pos.y },
+    { x: pos.x - stub, y: p1.pins.gate.pos.y },
+    { x: pos.x - stub, y: n1.pins.gate.pos.y },
   ]);
   // Gate B: right column P down then in to lower N.
   wire(circuit, p2.pins.gate, n2.pins.gate, [
-    { x: pos.x + col + 44, y: p2.pins.gate.pos.y },
-    { x: pos.x + col + 44, y: n2.pins.gate.pos.y },
+    { x: pos.x + col + stub, y: p2.pins.gate.pos.y },
+    { x: pos.x + col + stub, y: n2.pins.gate.pos.y },
   ]);
 
-  return { a: p1.pins.gate, b: p2.pins.gate, out: p1.pins.drain };
+  // Expose A at the left P (short hop from left port) and B at the lower N
+  // (short hop from a bottom-left port). Exposing B at p2.gate forced the
+  // port wire to climb to the top-right then ride the whole right stub.
+  return { a: p1.pins.gate, b: n2.pins.gate, out: p1.pins.drain };
 }
 
 /**
@@ -1210,7 +1216,7 @@ export function buildNor(
   const n1 = makeTransistor(circuit, 'N', { x: pos.x, y: pos.y + 2 * stack });
   const n2 = makeTransistor(circuit, 'N', { x: pos.x + col, y: pos.y + 2 * stack });
 
-  stubLocalRail(circuit, 'VCC', p1.pins.source, -18);
+  stubLocalRail(circuit, 'VCC', p1.pins.source, -22);
   wire(circuit, p1.pins.drain, p2.pins.source);
   // Out bus: P series drain fans to both N drains.
   wire(circuit, p2.pins.drain, n1.pins.drain, [
@@ -1221,19 +1227,22 @@ export function buildNor(
     { x: midX, y: p2.pins.drain.pos.y },
     { x: n2.pins.drain.pos.x, y: p2.pins.drain.pos.y },
   ]);
-  stubLocalRail(circuit, 'GND', n1.pins.source, 18);
-  stubLocalRail(circuit, 'GND', n2.pins.source, 18);
+  stubLocalRail(circuit, 'GND', n1.pins.source, 22);
+  stubLocalRail(circuit, 'GND', n2.pins.source, 22);
 
+  const stub = CMOS_GATE_STUB;
   wire(circuit, p1.pins.gate, n1.pins.gate, [
-    { x: pos.x - 44, y: p1.pins.gate.pos.y },
-    { x: pos.x - 44, y: n1.pins.gate.pos.y },
+    { x: pos.x - stub, y: p1.pins.gate.pos.y },
+    { x: pos.x - stub, y: n1.pins.gate.pos.y },
   ]);
   wire(circuit, p2.pins.gate, n2.pins.gate, [
-    { x: pos.x + col + 44, y: p2.pins.gate.pos.y },
-    { x: pos.x + col + 44, y: n2.pins.gate.pos.y },
+    { x: pos.x + col + stub, y: p2.pins.gate.pos.y },
+    { x: pos.x + col + stub, y: n2.pins.gate.pos.y },
   ]);
 
-  return { a: p1.pins.gate, b: p2.pins.gate, out: p2.pins.drain };
+  // A at left N (bottom-left column), B at right N — short left-port hops.
+  // Series P gates stay tied via the existing stubs.
+  return { a: n1.pins.gate, b: n2.pins.gate, out: p2.pins.drain };
 }
 
 /**

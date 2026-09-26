@@ -4,9 +4,10 @@
 // first hand-building each one from raw transistors. Mirrors the reference
 // project's own ready-made "Library (42 items)" palette.
 
-import type { ChipDef, ChipLibrary } from './ChipLibrary.js';
-import { Circuit } from './Circuit.js';
-import { foldExposing } from './hierarchy.js';
+import type { ChipDef } from './ChipLibrary.js';
+import { ChipLibrary } from './ChipLibrary.js';
+import { bumpStructureVersion, Circuit } from './Circuit.js';
+import { foldExposing, relayoutCmosPrimitivePorts } from './hierarchy.js';
 import {
   buildAnd,
   buildFullAdder,
@@ -28,6 +29,75 @@ import {
 } from './library.js';
 import { seedLabCells, isLabcellName } from './labcells.js';
 import { buildDFlipFlop, buildDLatch } from './sequential.js';
+import type { Pin } from './types.js';
+
+/** When CMOS pitch/port layout changes, existing session defs with a smaller
+ * transistor span are rebuilt in place (same def.id) so autosaves pick it up. */
+function cmosTransistorSpan(def: ChipDef): number {
+  const ys: number[] = [];
+  for (const c of def.circuit.components.values()) {
+    if (c.kind === 'transistor') ys.push(c.pos.y);
+  }
+  if (ys.length < 2) return 0;
+  return Math.max(...ys) - Math.min(...ys);
+}
+
+/** True when two+ input ports share nearly the same Y (the glued IN a/b bug). */
+function cmosInputPortsGlued(def: ChipDef): boolean {
+  const ys: number[] = [];
+  for (const c of def.circuit.components.values()) {
+    if (c.kind !== 'port') continue;
+    if (c.dir === 'out') continue;
+    ys.push(c.pos.y);
+  }
+  if (ys.length < 2) return false;
+  const min = Math.min(...ys);
+  const max = Math.max(...ys);
+  return max - min < 48;
+}
+
+function refreshCmosDef(
+  library: ChipLibrary,
+  name: string,
+  minSpan: number,
+  build: () => { circuit: Circuit; ports: { pin: Pin; isOutput: boolean; portName: string }[] },
+): void {
+  const existing = library.findByName(name);
+  const stale =
+    !existing ||
+    cmosTransistorSpan(existing) + 1 < minSpan ||
+    cmosInputPortsGlued(existing);
+  if (existing && !stale) return;
+
+  const { circuit, ports } = build();
+  if (!existing) {
+    foldExposing(circuit, name, library, ports, { labelize: false });
+    return;
+  }
+  const tmp = new ChipLibrary();
+  const fresh = foldExposing(circuit, name, tmp, ports, { labelize: false });
+  existing.circuit = fresh.circuit;
+  existing.ports = [...fresh.ports];
+  existing.revision = (existing.revision ?? 0) + 1;
+  bumpStructureVersion();
+}
+
+/**
+ * Re-park ports on every transistor-only def (canonical CMOS + dive forks
+ * like NAND_copy). Cheap, and fixes glued IN a/b left behind when a prior
+ * pitch refresh skipped a second port pass.
+ */
+export function relayoutAllCmosLibraryPorts(library: ChipLibrary): void {
+  for (const def of library.list()) {
+    let hasT = false;
+    let hasChip = false;
+    for (const c of def.circuit.components.values()) {
+      if (c.kind === 'transistor') hasT = true;
+      if (c.kind === 'chip') hasChip = true;
+    }
+    if (hasT && !hasChip) relayoutCmosPrimitivePorts(def);
+  }
+}
 
 function scratch(): Circuit {
   const circuit = new Circuit();
@@ -103,15 +173,21 @@ function seedCmosTwoInput(
   library: ChipLibrary,
   name: string,
   build: (circuit: Circuit) => TwoInputGate,
-): ChipDef | undefined {
-  if (library.findByName(name)) return undefined;
-  const circuit = scratch();
-  const g = build(circuit);
-  return foldExposing(circuit, name, library, [
-    { pin: g.a, isOutput: false, portName: 'a' },
-    { pin: g.b, isOutput: false, portName: 'b' },
-    { pin: g.out, isOutput: true, portName: 'out' },
-  ], { labelize: false });
+): void {
+  // Always reseat guts so expose-pin / pitch / port-routing upgrades land on
+  // autosaved libraries (span checks alone missed "new pitch, old B pin").
+  refreshCmosDef(library, name, Number.POSITIVE_INFINITY, () => {
+    const circuit = scratch();
+    const g = build(circuit);
+    return {
+      circuit,
+      ports: [
+        { pin: g.a, isOutput: false, portName: 'a' },
+        { pin: g.b, isOutput: false, portName: 'b' },
+        { pin: g.out, isOutput: true, portName: 'out' },
+      ],
+    };
+  });
 }
 
 /**
@@ -186,14 +262,17 @@ export function isStdcellName(name: string): boolean {
  *   MUX4 → three MUX2 chips
  */
 export function seedStandardCells(library: ChipLibrary): void {
-  if (!library.findByName('NOT')) {
+  refreshCmosDef(library, 'NOT', Number.POSITIVE_INFINITY, () => {
     const circuit = scratch();
     const g = buildNot(circuit);
-    foldExposing(circuit, 'NOT', library, [
-      { pin: g.in, isOutput: false, portName: 'in' },
-      { pin: g.out, isOutput: true, portName: 'out' },
-    ], { labelize: false });
-  }
+    return {
+      circuit,
+      ports: [
+        { pin: g.in, isOutput: false, portName: 'in' },
+        { pin: g.out, isOutput: true, portName: 'out' },
+      ],
+    };
+  });
 
   seedCmosTwoInput(library, 'NAND', buildNand);
   seedCmosTwoInput(library, 'AND', buildAnd);
@@ -221,16 +300,19 @@ export function seedStandardCells(library: ChipLibrary): void {
     ], { labelize: false });
   }
 
-  if (!library.findByName('MUX2_TG')) {
+  refreshCmosDef(library, 'MUX2_TG', Number.POSITIVE_INFINITY, () => {
     const circuit = scratch();
     const m = buildMux2Tg(circuit);
-    foldExposing(circuit, 'MUX2_TG', library, [
-      { pin: m.sel, isOutput: false, portName: 'sel' },
-      { pin: m.in0, isOutput: false, portName: 'in0' },
-      { pin: m.in1, isOutput: false, portName: 'in1' },
-      { pin: m.out, isOutput: true, portName: 'out' },
-    ], { labelize: false });
-  }
+    return {
+      circuit,
+      ports: [
+        { pin: m.sel, isOutput: false, portName: 'sel' },
+        { pin: m.in0, isOutput: false, portName: 'in0' },
+        { pin: m.in1, isOutput: false, portName: 'in1' },
+        { pin: m.out, isOutput: true, portName: 'out' },
+      ],
+    };
+  });
 
   if (!library.findByName('MUX4')) {
     const circuit = scratch();
@@ -291,16 +373,23 @@ export function seedStandardCells(library: ChipLibrary): void {
     ], { labelize: false });
   }
 
-  if (!library.findByName('TRI_BUF')) {
+  refreshCmosDef(library, 'TRI_BUF', Number.POSITIVE_INFINITY, () => {
     const circuit = scratch();
     const b = buildTriStateBuffer(circuit);
-    foldExposing(circuit, 'TRI_BUF', library, [
-      { pin: b.a, isOutput: false, portName: 'a' },
-      { pin: b.en, isOutput: false, portName: 'en' },
-      { pin: b.out, isOutput: true, portName: 'out' },
-    ], { labelize: false });
-  }
+    return {
+      circuit,
+      ports: [
+        { pin: b.a, isOutput: false, portName: 'a' },
+        { pin: b.en, isOutput: false, portName: 'en' },
+        { pin: b.out, isOutput: true, portName: 'out' },
+      ],
+    };
+  });
 
   // Pack A/B/C hierarchical lab cells + 74xx aliases (idempotent by name).
   seedLabCells(library);
+
+  // Always re-park CMOS ports — catches NAND_copy forks and defs that already
+  // had the new transistor pitch but kept glued IN a/IN b from an older pass.
+  relayoutAllCmosLibraryPorts(library);
 }

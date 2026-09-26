@@ -1,6 +1,6 @@
 import type { ChipDef, ChipLibrary } from './ChipLibrary.js';
 import { bumpStructureVersion, Circuit, currentStructureVersion, GLOBAL_NET_NAMES, nextId } from './Circuit.js';
-import { LAYOUT, makeChipInstance, makeInput, makePort, makeProbe, makeSource, pinSidesFromDef } from './library.js';
+import { makeChipInstance, makeInput, makePort, makeProbe, makeSource, pinSidesFromDef } from './library.js';
 import { tidyLibraryCircuit } from './labelWires.js';
 import { orthoWaypoints } from './wireRoute.js';
 import { importChipDef, serializeChipDef } from './serialize.js';
@@ -171,15 +171,27 @@ function stripOrphanRailArtifacts(circuit: Circuit): void {
 
 /**
  * Park boundary ports around a CMOS / gate-layer schematic like a real sheet:
- * inputs on the left next to their nets, output on the right of the cluster.
+ * inputs on the left, outputs on the right, spaced so labels never overlap.
  * Anchors are transistors and nested chip instances. Unused scratch rail
  * Sources are stripped before this runs (see stripOrphanRailArtifacts).
+ *
+ * Important: do NOT snap every input to the first pin on its net — for NAND
+ * both A and B hit parallel PMOS gates at the same Y and glue into "IN a/b".
+ * Prefer N-MOSFET gate Y (series stack has distinct rows), then enforce a
+ * minimum vertical pitch in port-list order.
  */
+export function relayoutCmosPrimitivePorts(def: ChipDef): void {
+  layoutCmosPrimitivePorts(def);
+}
+
 function layoutCmosPrimitivePorts(def: ChipDef): void {
   const anchors = [...def.circuit.components.values()].filter(
     (c) => c.kind === 'transistor' || c.kind === 'chip',
   );
   if (anchors.length === 0) return;
+
+  const PORT_MIN_PITCH = 72;
+  const PORT_EDGE = 110;
 
   let minX = Infinity;
   let maxX = -Infinity;
@@ -191,17 +203,13 @@ function layoutCmosPrimitivePorts(def: ChipDef): void {
     minY = Math.min(minY, t.pos.y);
     maxY = Math.max(maxY, t.pos.y);
   }
-  // Chip boxes extend past their origin — widen the right/bottom a bit.
   const hasChips = anchors.some((c) => c.kind === 'chip');
   if (hasChips) {
     maxX += 48;
     minX -= 48;
   }
-  const midX = (minX + maxX) / 2;
 
   const nets = def.circuit.computeNets();
-  // Prefer dir already set by foldExposing (isOutput). Name heuristics are a
-  // fallback for older defs — include q0/co/y0/… not just bare `q`/`out`.
   const isOutPort = (name: string, dir?: string): boolean => {
     if (dir === 'out') return true;
     if (dir === 'in') return false;
@@ -230,47 +238,103 @@ function layoutCmosPrimitivePorts(def: ChipDef): void {
   const inputPorts = def.ports.filter((n) => !isOutPort(n, portDir(n)));
   const outputPorts = def.ports.filter((n) => isOutPort(n, portDir(n)));
 
-  const pinOnNet = (netId: string | undefined): Point | undefined => {
+  /** Attach Y: leftmost gate on the net (short hop from left ports). */
+  const preferredAttachY = (netId: string | undefined): number | undefined => {
     if (!netId) return undefined;
+    let bestY: number | undefined;
+    let bestX = Infinity;
+    for (const c of def.circuit.components.values()) {
+      if (c.kind !== 'transistor') continue;
+      const g = c.pins.gate;
+      if (nets.netOf.get(g.id) !== netId) continue;
+      if (g.pos.x < bestX - 0.5 || (Math.abs(g.pos.x - bestX) < 0.5 && (bestY === undefined || g.pos.y < bestY))) {
+        bestX = g.pos.x;
+        bestY = g.pos.y;
+      }
+    }
+    if (bestY !== undefined) return bestY;
     for (const c of def.circuit.components.values()) {
       if (c.kind === 'port' || c.kind === 'source' || c.kind === 'label') continue;
       for (const p of Object.values(c.pins) as Pin[]) {
-        if (nets.netOf.get(p.id) === netId) return p.pos;
+        if (nets.netOf.get(p.id) === netId) return p.pos.y;
       }
     }
     return undefined;
   };
 
+  /** Keep port-list order; use hints when already spaced, else even spread. */
+  const spacedYs = (
+    names: string[],
+    fallbackLo: number,
+    fallbackHi: number,
+  ): number[] => {
+    const n = names.length;
+    if (n === 0) return [];
+    const hints = names.map((name) => {
+      for (const c of def.circuit.components.values()) {
+        if (c.kind === 'port' && c.name === name) {
+          return preferredAttachY(nets.netOf.get(c.pins.io.id));
+        }
+      }
+      return undefined;
+    });
+    const usable =
+      hints.every((y) => y !== undefined) &&
+      hints.every((y, i) =>
+        hints.every(
+          (z, j) => i === j || Math.abs((y as number) - (z as number)) >= PORT_MIN_PITCH * 0.85,
+        ),
+      );
+    if (usable) return hints as number[];
+
+    const span = Math.max(
+      fallbackHi - fallbackLo,
+      PORT_MIN_PITCH * Math.max(n - 1, 1),
+    );
+    const mid = (fallbackLo + fallbackHi) / 2;
+    if (n === 1) return [mid];
+    const top = mid - span / 2;
+    return Array.from({ length: n }, (_, i) => top + (i * span) / (n - 1));
+  };
+
+  const inYs = spacedYs(inputPorts, minY, maxY);
+  const outYs = spacedYs(outputPorts, minY, maxY);
+
   for (const c of def.circuit.components.values()) {
     if (c.kind !== 'port') continue;
-    const netId = nets.netOf.get(c.pins.io.id);
-    const target = pinOnNet(netId);
     const isOut = isOutPort(c.name, c.dir);
     if (isOut) {
-      const y = target?.y ?? (minY + maxY) / 2;
-      c.pos = { x: maxX + 72, y };
+      const idx = outputPorts.indexOf(c.name);
+      const y = outYs[idx >= 0 ? idx : 0] ?? (minY + maxY) / 2;
+      c.pos = { x: maxX + PORT_EDGE, y };
       c.dir = 'out';
     } else {
       const idx = inputPorts.indexOf(c.name);
-      const y =
-        target?.y ??
-        minY + ((idx >= 0 ? idx : 0) + 0.5) * ((maxY - minY) / Math.max(inputPorts.length, 1));
-      c.pos = { x: minX - 72, y };
+      const y = inYs[idx >= 0 ? idx : 0] ?? (minY + maxY) / 2;
+      c.pos = { x: minX - PORT_EDGE, y };
       c.dir = 'in';
     }
     c.pins.io.pos = { x: c.pos.x, y: c.pos.y };
   }
 
+  // After moving ports, rebuild ortho stubs that touch a port — otherwise a
+  // leftover HVH path from the old (glued) seat can loop around the sheet.
+  const pinOf = new Map<string, Pin>();
+  const ownerOf = new Map<string, { kind: string }>();
   for (const c of def.circuit.components.values()) {
-    if (c.kind !== 'source') continue;
-    if (c.value === 1) {
-      c.pos = { x: midX, y: minY - 56 };
-    } else {
-      c.pos = { x: midX, y: maxY + 56 };
+    for (const p of Object.values(c.pins) as Pin[]) {
+      pinOf.set(p.id, p);
+      ownerOf.set(p.id, c);
     }
-    // VCC pin hangs below the bar (+Y); GND pin sits above the earth bars (-Y).
-    const pinDy = c.value === 1 ? LAYOUT.source.out[1]! : LAYOUT.source.gndOut[1]!;
-    c.pins.out.pos = { x: c.pos.x, y: c.pos.y + pinDy };
+  }
+  for (const w of def.circuit.wires.values()) {
+    const pa = pinOf.get(w.a);
+    const pb = pinOf.get(w.b);
+    if (!pa || !pb) continue;
+    const touchesPort =
+      ownerOf.get(w.a)?.kind === 'port' || ownerOf.get(w.b)?.kind === 'port';
+    if (!touchesPort) continue;
+    w.waypoints = orthoWaypoints(pa.pos, pb.pos);
   }
 }
 

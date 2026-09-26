@@ -47,11 +47,12 @@ describe('buildZ80Cpu — x=01, z=0/z=1: IN r,(C) / OUT (C),r', () => {
     expect(h.readReg(h.cpu.pc)).toBe(3);
 
     // --- IN A,(C) ---
-    h.runPhases(4); // INCREMENT..EXEC3 → PHASE4
+    // 10-phase ring: mid-check at PHASE4, then 6 more back to FETCH.
+    h.runPhases(4);
     expect(h.readPin(h.cpu.ioRead)).toBe(1);
     expect(h.readPin(h.cpu.ioWrite)).toBe(0);
     expect(h.readReg(h.cpu.ioPortAddr)).toBe(0x42);
-    h.runPhases(4); // EXEC4..FETCH
+    h.runPhases(6);
     expect(h.readReg(h.cpu.a)).toBe(0x99);
     expect(h.readReg(h.cpu.f)).toBe(F_FROM_99);
     expect(h.readReg(h.cpu.pc)).toBe(5);
@@ -67,7 +68,7 @@ describe('buildZ80Cpu — x=01, z=0/z=1: IN r,(C) / OUT (C),r', () => {
     expect(h.readPin(h.cpu.ioRead)).toBe(0);
     expect(h.readReg(h.cpu.ioPortAddr)).toBe(0x42);
     expect(h.readReg(h.cpu.ioPortDataOut)).toBe(0xab);
-    h.runPhases(4);
+    h.runPhases(6);
     expect(h.readReg(h.cpu.rB.q)).toBe(0xab);
     expect(h.readReg(h.cpu.pc)).toBe(9);
 
@@ -76,7 +77,7 @@ describe('buildZ80Cpu — x=01, z=0/z=1: IN r,(C) / OUT (C),r', () => {
     expect(h.readPin(h.cpu.ioWrite)).toBe(1);
     expect(h.readReg(h.cpu.ioPortAddr)).toBe(0x42);
     expect(h.readReg(h.cpu.ioPortDataOut)).toBe(0);
-    h.runPhases(4);
+    h.runPhases(6);
     expect(h.readReg(h.cpu.pc)).toBe(11);
 
     // --- LD A,0x55 ---
@@ -88,7 +89,7 @@ describe('buildZ80Cpu — x=01, z=0/z=1: IN r,(C) / OUT (C),r', () => {
     h.runPhases(4);
     expect(h.readPin(h.cpu.ioRead)).toBe(1);
     expect(h.readReg(h.cpu.ioPortAddr)).toBe(0x42);
-    h.runPhases(4);
+    h.runPhases(6);
     expect(h.readReg(h.cpu.a)).toBe(0x55); // y=6 never writes a register
     expect(h.readReg(h.cpu.f)).toBe(F_FROM_99);
     expect(h.readReg(h.cpu.pc)).toBe(15);

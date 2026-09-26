@@ -36,7 +36,10 @@ import { isLabcellName } from './sim/labcells.js';
 import {
   armSoftLabToGatesPor,
   clearSoftExpandForced,
+  clearSoftLabPor,
   clearSoftLabState,
+  clearSoftLabStateDeep,
+  clearSoftModelForceExpands,
   isSoftLabEnabled,
   loadSoftLabPreference,
   persistSoftLabPreference,
@@ -571,13 +574,7 @@ function enterLevel(): void {
   const view = navStack[navStack.length - 1]!;
   // Soft Lab: auto force-expand ChipDefs on the dive path so internals are live;
   // release auto-expand when leaving (manual inspector force-expand is kept).
-  const pathDefNames = navStack
-    .filter((f) => f.defId)
-    .map((f) => library.get(f.defId!).name);
-  const newlyExpanded = syncSoftExpandForDivePath(pathDefNames, library);
-  if (newlyExpanded.length > 0) {
-    armSoftLabToGatesPor(topCircuit, library, new Set(newlyExpanded));
-  }
+  resyncSoftExpandForCurrentDive();
   editor.circuit = view.circuit;
   editor.clearSelection();
   editor.cancelWire();
@@ -594,6 +591,23 @@ function enterLevel(): void {
   renderBreadcrumb();
   refreshWatchStrip();
   uiDirty = true;
+}
+
+/** Soft Lab on while dived: keep path (+ Soft descendants) transistor-expanded. */
+function resyncSoftExpandForCurrentDive(): void {
+  const pathDefNames = navStack
+    .filter((f) => f.defId)
+    .map((f) => library.get(f.defId!).name);
+  const { newly, released } = syncSoftExpandForDivePath(pathDefNames, library);
+  if (released.length > 0 && isSoftLabEnabled()) {
+    // Soft guts → Soft opaque: stale lastClk/q from the dive would freeze
+    // sequential Soft chips until the next accidental edge.
+    clearSoftLabStateDeep(topCircuit, library);
+    simState = initialState();
+  }
+  if (newly.length > 0 && isSoftLabEnabled()) {
+    armSoftLabToGatesPor(topCircuit, library, new Set(newly));
+  }
 }
 
 const breadcrumbEl = document.getElementById('breadcrumb') as HTMLDivElement;
@@ -2882,11 +2896,20 @@ document.getElementById('sim-soft-lab')?.addEventListener('click', () => {
     // Soft → Gates: seed silicon Q nets so sequential chips leave Z without
     // requiring the user to pulse Clear (see armSoftLabToGatesPor).
     armSoftLabToGatesPor(topCircuit, library);
-    simState = initialState();
   } else if (!wasOn && isSoftLabEnabled()) {
-    // Off → on: clear soft sequential state so chips start clean.
-    clearSoftLabState(topCircuit);
+    // Gates → Soft: drop orphan Soft-model force-expands (Soft-off-while-dived
+    // left COUNTER/T_FF stuck expanded → floating Q, dead Soft chips), drop
+    // any in-flight Gates POR, and wipe soft sequential state deeply.
+    clearSoftModelForceExpands();
+    clearSoftLabPor();
+    clearSoftLabStateDeep(topCircuit, library);
   }
+  // Always reset sim levels — Soft↔Gates changes the flat netlist shape;
+  // carrying the previous levelOf Map leaves Soft/Gates half-converged.
+  simState = initialState();
+  // Toggle while dived must re-apply dive expand — otherwise Soft-opaque
+  // children (e.g. T_FF under COUNTER4) grey out the schematic (flat nets≈20).
+  resyncSoftExpandForCurrentDive();
   persistSoftLabPreference();
   updateSoftLabChrome();
   uiDirty = true;
