@@ -200,15 +200,35 @@ function layoutCmosPrimitivePorts(def: ChipDef): void {
   const midX = (minX + maxX) / 2;
 
   const nets = def.circuit.computeNets();
-  const isOutPort = (n: string) =>
-    n === 'out' ||
-    n.startsWith('out') ||
-    n === 'sum' ||
-    n === 'cout' ||
-    n === 'q' ||
-    n === 'qn';
-  const inputPorts = def.ports.filter((n) => !isOutPort(n));
-  const outputPorts = def.ports.filter(isOutPort);
+  // Prefer dir already set by foldExposing (isOutput). Name heuristics are a
+  // fallback for older defs — include q0/co/y0/… not just bare `q`/`out`.
+  const isOutPort = (name: string, dir?: string): boolean => {
+    if (dir === 'out') return true;
+    if (dir === 'in') return false;
+    return (
+      name === 'out' ||
+      name.startsWith('out') ||
+      name === 'sum' ||
+      name === 'cout' ||
+      name === 'co' ||
+      name === 'sout' ||
+      name === 'q' ||
+      name === 'qn' ||
+      /^q\d+$/.test(name) ||
+      /^qn\d+$/.test(name) ||
+      /^sum\d+$/.test(name) ||
+      /^y\d+$/.test(name) ||
+      /^s\d+$/.test(name)
+    );
+  };
+  const portDir = (name: string): string | undefined => {
+    for (const c of def.circuit.components.values()) {
+      if (c.kind === 'port' && c.name === name) return c.dir;
+    }
+    return undefined;
+  };
+  const inputPorts = def.ports.filter((n) => !isOutPort(n, portDir(n)));
+  const outputPorts = def.ports.filter((n) => isOutPort(n, portDir(n)));
 
   const pinOnNet = (netId: string | undefined): Point | undefined => {
     if (!netId) return undefined;
@@ -225,7 +245,7 @@ function layoutCmosPrimitivePorts(def: ChipDef): void {
     if (c.kind !== 'port') continue;
     const netId = nets.netOf.get(c.pins.io.id);
     const target = pinOnNet(netId);
-    const isOut = outputPorts.includes(c.name);
+    const isOut = isOutPort(c.name, c.dir);
     if (isOut) {
       const y = target?.y ?? (minY + maxY) / 2;
       c.pos = { x: maxX + 72, y };
@@ -1226,6 +1246,17 @@ function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string):
     }
     for (const w of child.wires) {
       outWires.push({ id: w.id, a: portAlias.get(w.a) ?? w.a, b: portAlias.get(w.b) ?? w.b });
+    }
+    // Keep ChipDef port pin ids on the same nets as the instance pins so dive
+    // resolve(pathPrefix + port.io) paints diamonds with live levels (ports
+    // themselves are stripped from the flat circuit above).
+    for (const [portPinId, externalPinId] of portAlias) {
+      if (portPinId === externalPinId) continue;
+      outWires.push({
+        id: `${nsPrefix}${c.id}/port-alias/${portPinId}`,
+        a: portPinId,
+        b: externalPinId,
+      });
     }
     outLiveValuePairs.push(...child.liveValuePairs);
   }

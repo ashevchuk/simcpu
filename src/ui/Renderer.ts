@@ -1700,6 +1700,9 @@ function drawComponent(
     case 'port': {
       const { x, y } = c.pos;
       const s = 8;
+      const { level, contended } = resolve(c.pins.io.id);
+      const live = levelColor(level, contended);
+      // Soft fill tinted by level; keep body dark enough for the label.
       ctx.fillStyle = COLOR.body;
       ctx.beginPath();
       ctx.moveTo(x, y - s);
@@ -1708,8 +1711,12 @@ function drawComponent(
       ctx.lineTo(x - s, y);
       ctx.closePath();
       ctx.fill();
-      ctx.strokeStyle = bodyStroke(COLOR.bodyStroke);
-      ctx.lineWidth = selected || hovered ? 2 : 1.3;
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = live;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = selected || hovered ? bodyStroke(COLOR.bodyStroke) : live;
+      ctx.lineWidth = selected || hovered ? 2 : 1.6;
       ctx.stroke();
       // Direction chevron: in ←, out →, inout both (diamond alone).
       const dir = c.dir ?? 'inout';
@@ -1724,7 +1731,7 @@ function drawComponent(
           ctx.lineTo(x - 8, y);
           ctx.lineTo(x - 14, y + 4);
         }
-        ctx.strokeStyle = selected || hovered ? COLOR.selected : COLOR.textDim;
+        ctx.strokeStyle = selected || hovered ? COLOR.selected : live;
         ctx.lineWidth = 1.5;
         ctx.stroke();
       }

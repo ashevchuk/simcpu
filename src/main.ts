@@ -1731,7 +1731,7 @@ async function openLabCounterTutorial(): Promise<void> {
     : 'lab-shift-counter';
   if (!(await loadExampleById(id, true))) return;
   setSoftLabEnabled(true);
-  document.getElementById('sim-soft-lab')?.classList.toggle('active', true);
+  updateSoftLabChrome();
   await showAlert(
     'Lab counter walkthrough:\n\n' +
       '1. Soft Lab is on — COUNTER4 / BCD_7SEG run as fast behavioral chips.\n' +
@@ -2760,35 +2760,29 @@ window.addEventListener('keyup', (ev) => {
 
 // --- Simulation + render loop -------------------------------------------
 const statusEl = document.getElementById('status') as HTMLDivElement;
-const simModeBadge = document.getElementById('sim-mode-badge');
 let lastContendedNets = new Set<string>();
 /** Contended set from the previous sim frame — used for "break on contend". */
 let prevBreakContended = new Set<string>();
 let simPaused = false;
 let simStepOnce = false;
 
+function updateSoftLabChrome(): void {
+  const btn = document.getElementById('sim-soft-lab');
+  if (!btn) return;
+  const on = isSoftLabEnabled();
+  btn.classList.toggle('active', on);
+  btn.dataset.mode = on ? 'soft' : 'gates';
+  btn.textContent = on ? 'Soft Lab' : 'Gates';
+  btn.title = on
+    ? 'Soft Lab ON — behavioral COUNTER/BCD/REG… (click for Gates)'
+    : 'Gates — full transistor expand (click for Soft Lab)';
+}
+
 function pauseSimForBreak(): void {
   if (simPaused) return;
   simPaused = true;
   if (machineRunner.attached) machineRunner.setRunning(false);
   updateSimChrome();
-}
-
-function updateSimModeBadge(softTop: boolean): void {
-  if (!simModeBadge) return;
-  if (simPaused || (machineRunner.attached && !machineRunner.running && !softTop)) {
-    simModeBadge.dataset.mode = 'paused';
-    simModeBadge.textContent = 'Paused';
-  } else if (softTop || (machineRunner.running && machineRunner.isSoft)) {
-    simModeBadge.dataset.mode = 'soft';
-    simModeBadge.textContent = 'Soft';
-  } else if (isSoftLabEnabled()) {
-    simModeBadge.dataset.mode = 'soft';
-    simModeBadge.textContent = 'Soft Lab';
-  } else {
-    simModeBadge.dataset.mode = 'gates';
-    simModeBadge.textContent = 'Gates';
-  }
 }
 
 /** Draw LA cursor channel levels next to the open analyzer's CH pins. */
@@ -2894,11 +2888,11 @@ document.getElementById('sim-soft-lab')?.addEventListener('click', () => {
     clearSoftLabState(topCircuit);
   }
   persistSoftLabPreference();
-  document.getElementById('sim-soft-lab')?.classList.toggle('active', isSoftLabEnabled());
+  updateSoftLabChrome();
   uiDirty = true;
   objectInspector.refresh();
 });
-document.getElementById('sim-soft-lab')?.classList.toggle('active', isSoftLabEnabled());
+updateSoftLabChrome();
 document.getElementById('sim-step')?.addEventListener('click', () => {
   if (machineRunner.attached) {
     machineRunner.setRunning(false);
@@ -3176,10 +3170,10 @@ function frame(): void {
         updateWatchLevels(resolve);
       }
     }
-    updateSimModeBadge(softTop);
+    updateSoftLabChrome();
     uiDirty = false;
   } else {
-    updateSimModeBadge(softRun && navStack.length === 1);
+    updateSoftLabChrome();
   }
   // Soft TTY samples ram.bytes independently of the transistor canvas.
   if (machinePanel.attached) machinePanel.draw();

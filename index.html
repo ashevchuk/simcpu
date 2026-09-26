@@ -333,43 +333,20 @@
       #watch-strip .watch-lvl[data-lvl="Z"] { color: var(--text-dim); }
       #watch-strip .watch-lvl[data-lvl="X"] { color: #e6c07b; }
 
-      #sim-mode-badge {
-        display: inline-flex;
-        align-items: center;
-        margin-left: 6px;
-        padding: 2px 8px;
-        border-radius: 999px;
-        font: 600 10px/1.2 ui-monospace, monospace;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        border: 1px solid transparent;
-        flex-shrink: 0;
-        user-select: none;
+      #sim-soft-lab {
+        min-width: 5.5rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
       }
-      #sim-mode-badge[data-mode="soft"] {
-        color: #1a1408;
+      #sim-soft-lab[data-mode="soft"] {
         background: #e6a23c;
+        color: #1a1408;
         border-color: #f0b84a;
       }
-      #sim-mode-badge[data-mode="gates"] {
-        color: #0e1a14;
+      #sim-soft-lab[data-mode="gates"] {
         background: #7dcea0;
+        color: #0e1a14;
         border-color: #9ad9b4;
-      }
-      #sim-mode-badge[data-mode="paused"] {
-        color: #e7e9ef;
-        background: #3a4154;
-        border-color: #555e74;
-      }
-      #sim-mode-badge[data-mode="idle"] {
-        color: var(--text-dim);
-        background: transparent;
-        border-color: var(--border);
-      }
-      #sim-soft-lab.active {
-        background: var(--accent, #f5c518);
-        color: #14161d;
-        border-color: #c9a312;
       }
       .la-trig {
         display: inline-flex;
@@ -1557,8 +1534,7 @@
           <button type="button" id="sim-run" title="Run simulation / soft machine">Run</button>
           <button type="button" id="sim-pause" title="Pause simulation">Pause</button>
           <button type="button" id="sim-step" title="Step one sim tick (or one soft instruction)">Step</button>
-          <button type="button" id="sim-soft-lab" class="active" title="Toggle Soft Lab (behavioral eval for COUNTER/BCD/REG…)">Soft Lab</button>
-          <span id="sim-mode-badge" data-mode="idle" title="Simulation mode">Idle</span>
+          <button type="button" id="sim-soft-lab" data-mode="soft" class="active" title="Soft Lab ON — click for Gates (full transistor expand)">Soft Lab</button>
           <div id="active-place-hint" hidden>
             <span class="tool-label" id="active-tool-name"></span>
           </div>
