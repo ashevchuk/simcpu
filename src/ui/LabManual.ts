@@ -410,8 +410,9 @@ const SECTIONS: Section[] = [
       '  2. Optional program bytes (comma hex). Default can seed the command ROM path.\n' +
       '  3. A Z80CPU chip + RAM appear; attach TTY / open machine panel.\n\n' +
       'Insert → LED blink… places Z80 + ROM that OUT bit0 to port 0x40 (PORT_LAB_LED).\n' +
-      'Soft Run mirrors that bit onto a host Input + LAB_LED net (not a Z80CPU pin —\n' +
-      'flatten is deferred, so chip ports stay quiet while the LED blinks).\n\n' +
+      'Soft Run mirrors that bit onto LAB_LED (forceOn) and pulses SOFT_IORQ /\n' +
+      'SOFT_IOWRITE probes; REG8/COUNTER4 q pins paint from softState.\n' +
+      'Gates MVP: ioWrite∧port 0x40∧D0 decode drives the LED (not FET IORQ+M1).\n\n' +
       'Dblclick machine RAM → Memory editor: write Z80 asm at @, Disasm from cursor\n' +
       '(Follow PC highlights the soft PC line), Assemble + Go (soft JP + reboot).\n' +
       'Console asm box still works the same way.\n\n' +

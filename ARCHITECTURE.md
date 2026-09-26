@@ -1046,9 +1046,11 @@ the solver clears `KEY_STATUS` (0xF00) — same contract as soft
 loop), places a canvas LED (+ optional REG8/COUNTER4), and
 `MachineRunner.bindLabLed` / `autoBindLabPeripherals` mirrors ports onto
 `LedComponent.forceOn` and Soft Lab `softState.q` (`0x41` REG, `0x42`
-COUNTER). Soft Run (pin levels drawn as Z) still shows the blink. Gates can
-also drive a wired Input. `IORQ` / `IORQ_INTACK` are probe labels on the
-gate CPU (INTACK window ∪ IN/OUT strobes) — not a FET IORQ+M1 bus.
+COUNTER). Soft Run paints host probes `SOFT_IORQ` / `SOFT_IOWRITE` /
+`SOFT_IOREAD` and REG/COUNTER `q*` nets via `makeSoftCanvasResolve` (no
+flatten). Gates MVP: combinational decode of gate `ioWrite` ∧ port `0x40` ∧
+`D0` onto the LED (`placeLabLedGateDecode`) — not a FET IORQ+M1 bus; ring
+stays at 10. `IORQ` / `IORQ_INTACK` remain probe labels inside the CPU.
 
 Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
 pos?)`, etc.); power is always `tiePowerRail` (reuses the circuit's Source
@@ -1061,8 +1063,8 @@ hooks so CALL/RET/RST match the gate's single-byte return stack.
 
 Diminishing place returns: `PC_COMMIT_BIT` folded the deep PC-commit MUX
 cascade (same recipe as `RAM_ADDR_BIT`). Per-register `LD_WE_OR_9` /
-`LD_WE_OR_10` now fold the B..L write-enable OR trees (data MUX cascade
-still unfolded).
+`LD_WE_OR_10` fold the B..L write-enable OR trees; `REG_DATA_BIT` folds the
+four-deep data MUX cascade (IN r,(C) → SET/RES → CB rot → LD/POP).
 
 
 ## Decode and execute: a tiny working CPU

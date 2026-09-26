@@ -827,6 +827,61 @@ function getPcCommitBitChip(library: ChipLibrary): ChipDef {
 }
 
 /**
+ * One bit of the B..L register data mux cascade (IN r,(C) → SET/RES →
+ * CB rotate → LD/POP/imm write). Same left-associated MUX2 order as the
+ * former inline four-stage tree in `ldExternal`.
+ *
+ * Ports: selInRc, selSetRes, selCbRot, selLdWe,
+ *         bus, ioIn, setResResult, cbRotResult, seed, out.
+ */
+function makeRegDataBitChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const muxDef = getMux2Chip(library);
+  const placeMux = (x: number, y: number) => {
+    const inst = makeChipInstance(scratch, muxDef, { x, y });
+    return {
+      sel: inst.pins[muxDef.ports[0]!]!,
+      in0: inst.pins[muxDef.ports[1]!]!,
+      in1: inst.pins[muxDef.ports[2]!]!,
+      out: inst.pins[muxDef.ports[3]!]!,
+    };
+  };
+
+  const inRcMux = placeMux(0, 0);
+  const setResMux = placeMux(200, 0);
+  wire(scratch, inRcMux.out, setResMux.in0);
+  const cbRotMux = placeMux(400, 0);
+  wire(scratch, setResMux.out, cbRotMux.in0);
+  const ldMux = placeMux(600, 0);
+  wire(scratch, cbRotMux.out, ldMux.in1);
+
+  return foldExposing(scratch, 'REG_DATA_BIT', library, [
+    { pin: inRcMux.sel, isOutput: false, portName: 'selInRc' },
+    { pin: setResMux.sel, isOutput: false, portName: 'selSetRes' },
+    { pin: cbRotMux.sel, isOutput: false, portName: 'selCbRot' },
+    { pin: ldMux.sel, isOutput: false, portName: 'selLdWe' },
+    { pin: inRcMux.in0, isOutput: false, portName: 'bus' },
+    { pin: inRcMux.in1, isOutput: false, portName: 'ioIn' },
+    { pin: setResMux.in1, isOutput: false, portName: 'setResResult' },
+    { pin: cbRotMux.in1, isOutput: false, portName: 'cbRotResult' },
+    { pin: ldMux.in0, isOutput: false, portName: 'seed' },
+    { pin: ldMux.out, isOutput: true, portName: 'out' },
+  ]);
+}
+
+const regDataBitDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getRegDataBitChip(library: ChipLibrary): ChipDef {
+  let def = regDataBitDefs.get(library);
+  if (!def) {
+    def = makeRegDataBitChip(library);
+    regDataBitDefs.set(library, def);
+  }
+  return def;
+}
+
+/**
  * Sequential left-associated OR of `n` inputs (n>=2). Ports: i0..i{n-1}, out.
  * Scratch uses nested OR stdcell instances (no gate placer on the scratch).
  */
@@ -9529,25 +9584,30 @@ function buildZ80CpuInner(
     if (ddFdHl8LdWeOut) wire(parent, ddFdHl8LdWeOut, ldWeIn(9));
     const ldWe: Pin = ldWeOr.pins[ldWeOrDef.ports[weN]!]!;
 
+    const regDataDef = getRegDataBitChip(library);
     const extD: Pin[] = [];
     for (let i = 0; i < 8; i++) {
-      const dataMux = makeChipInstance(parent, muxDef, { x: pos.x + 11250, y: pos.y - 500 + ri * 300 + i * 100 });
-      tieToLabel(inRcWeLabel, dataMux.pins[muxDef.ports[0]!]!, { x: pos.x + 11150, y: pos.y - 500 + ri * 300 + i * 100 });
-      tieToLabel(`BUS${i}`, dataMux.pins[muxDef.ports[1]!]!, { x: pos.x + 11150, y: pos.y - 480 + ri * 300 + i * 100 });
-      wire(parent, ioPortDataIn[i]!, dataMux.pins[muxDef.ports[2]!]!);
-      const setResMux = makeChipInstance(parent, muxDef, { x: pos.x + 11280, y: pos.y - 500 + ri * 300 + i * 100 });
-      tieToLabel(setResWeLabel, setResMux.pins[muxDef.ports[0]!]!, { x: pos.x + 11180, y: pos.y - 500 + ri * 300 + i * 100 });
-      wire(parent, dataMux.pins[muxDef.ports[3]!]!, setResMux.pins[muxDef.ports[1]!]!);
-      tieToLabel(`SETRESRESULT${i}`, setResMux.pins[muxDef.ports[2]!]!, { x: pos.x + 11180, y: pos.y - 480 + ri * 300 + i * 100 });
-      const cbRotMux = makeChipInstance(parent, muxDef, { x: pos.x + 11300, y: pos.y - 500 + ri * 300 + i * 100 });
-      tieToLabel(cbRotWeLabel, cbRotMux.pins[muxDef.ports[0]!]!, { x: pos.x + 11200, y: pos.y - 500 + ri * 300 + i * 100 });
-      wire(parent, setResMux.pins[muxDef.ports[3]!]!, cbRotMux.pins[muxDef.ports[1]!]!);
-      tieToLabel(`CBROTRESULT${i}`, cbRotMux.pins[muxDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y - 480 + ri * 300 + i * 100 });
-      const mux = makeChipInstance(parent, muxDef, { x: pos.x + 11340, y: pos.y - 500 + ri * 300 + i * 100 });
-      wire(parent, ldWe, mux.pins[muxDef.ports[0]!]!);
-      extD.push(mux.pins[muxDef.ports[1]!]!);
-      wire(parent, cbRotMux.pins[muxDef.ports[3]!]!, mux.pins[muxDef.ports[2]!]!);
-      wire(parent, mux.pins[muxDef.ports[3]!]!, reg.d[i]!);
+      const bit = makeChipInstance(parent, regDataDef, {
+        x: pos.x + 11250,
+        y: pos.y - 500 + ri * 300 + i * 100,
+      });
+      const p = (name: string) => bit.pins[name]!;
+      tieToLabel(inRcWeLabel, p('selInRc'), { x: pos.x + 11150, y: pos.y - 500 + ri * 300 + i * 100 });
+      tieToLabel(setResWeLabel, p('selSetRes'), { x: pos.x + 11180, y: pos.y - 500 + ri * 300 + i * 100 });
+      tieToLabel(cbRotWeLabel, p('selCbRot'), { x: pos.x + 11200, y: pos.y - 500 + ri * 300 + i * 100 });
+      wire(parent, ldWe, p('selLdWe'));
+      tieToLabel(`BUS${i}`, p('bus'), { x: pos.x + 11150, y: pos.y - 480 + ri * 300 + i * 100 });
+      wire(parent, ioPortDataIn[i]!, p('ioIn'));
+      tieToLabel(`SETRESRESULT${i}`, p('setResResult'), {
+        x: pos.x + 11180,
+        y: pos.y - 480 + ri * 300 + i * 100,
+      });
+      tieToLabel(`CBROTRESULT${i}`, p('cbRotResult'), {
+        x: pos.x + 11200,
+        y: pos.y - 480 + ri * 300 + i * 100,
+      });
+      extD.push(p('seed'));
+      wire(parent, p('out'), reg.d[i]!);
     }
     const weOr = buildOr(parent, { x: pos.x + 11000, y: pos.y - 400 + ri * 300 });
     wire(parent, ldWe, weOr.a);

@@ -168,15 +168,30 @@ export class MachineRunner {
   private labLed: LedComponent | null = null;
   /** Drive Input wired to labLed (Gates path); Soft uses forceOn. */
   private labLedDrive: InputComponent | null = null;
+  /** Soft Run host probes — paint IORQ / ioWrite / ioRead without flatten. */
+  private softIorqProbe: InputComponent | null = null;
+  private softIoWriteProbe: InputComponent | null = null;
+  private softIoReadProbe: InputComponent | null = null;
+  /** Latched Soft I/O strobes for the current soft instruction. */
+  private softIorqPulse = false;
+  private softIoWritePulse = false;
+  private softIoReadPulse = false;
   /** Soft Lab REG4/REG8 bound to PORT_LAB_REG. */
   private labReg: ChipInstanceComponent | null = null;
   /** Soft Lab COUNTER4 bound to PORT_LAB_COUNTER. */
   private labCounter: ChipInstanceComponent | null = null;
   private library: ChipLibrary | null = null;
 
-  /** True when a lab LED or Soft Lab chip is bound (Soft Run may need canvas redraw). */
+  /** True when a lab LED, Soft I/O probe, or Soft Lab chip is bound. */
   get hasLabLed(): boolean {
-    return this.labLed !== null || this.labReg !== null || this.labCounter !== null;
+    return (
+      this.labLed !== null ||
+      this.labReg !== null ||
+      this.labCounter !== null ||
+      this.softIorqProbe !== null ||
+      this.softIoWriteProbe !== null ||
+      this.softIoReadProbe !== null
+    );
   }
 
   /**
@@ -195,6 +210,33 @@ export class MachineRunner {
     if (this.labLed) this.labLed.forceOn = false;
     this.labLed = null;
     this.labLedDrive = null;
+  }
+
+  /**
+   * Bind top-level Inputs that Soft Run pulses on portIn/portOut (IORQ paint).
+   * Not electrically tied into the folded Z80CPU — host probes only.
+   */
+  bindSoftIoProbes(opts: {
+    iorq?: InputComponent | null;
+    ioWrite?: InputComponent | null;
+    ioRead?: InputComponent | null;
+  }): void {
+    this.softIorqProbe = opts.iorq ?? null;
+    this.softIoWriteProbe = opts.ioWrite ?? null;
+    this.softIoReadProbe = opts.ioRead ?? null;
+    this.syncSoftIoProbes();
+  }
+
+  unbindSoftIoProbes(): void {
+    for (const p of [this.softIorqProbe, this.softIoWriteProbe, this.softIoReadProbe]) {
+      if (p) p.value = 0;
+    }
+    this.softIorqProbe = null;
+    this.softIoWriteProbe = null;
+    this.softIoReadProbe = null;
+    this.softIorqPulse = false;
+    this.softIoWritePulse = false;
+    this.softIoReadPulse = false;
   }
 
   bindLabReg(chip: ChipInstanceComponent): void {
@@ -224,15 +266,17 @@ export class MachineRunner {
 
   unbindLabPeripherals(): void {
     this.unbindLabLed();
+    this.unbindSoftIoProbes();
     this.labReg = null;
     this.labCounter = null;
   }
 
-  /** Mirror SoftDevices → LED forceOn / Soft Lab softState.q. */
+  /** Mirror SoftDevices → LED forceOn / Soft Lab softState.q / Soft I/O probes. */
   syncLabPeripherals(): boolean {
     let changed = this.syncLabLed();
     if (this.syncSoftLabQ(this.labReg, this.devices.labReg, ['REG4', 'REG8'])) changed = true;
     if (this.syncSoftLabQ(this.labCounter, this.devices.labCounter & 0x0f, ['COUNTER4'])) changed = true;
+    if (this.syncSoftIoProbes()) changed = true;
     return changed;
   }
 
@@ -250,6 +294,29 @@ export class MachineRunner {
       changed = true;
     }
     return changed;
+  }
+
+  private syncSoftIoProbes(): boolean {
+    let changed = false;
+    const apply = (probe: InputComponent | null, on: boolean): void => {
+      if (!probe) return;
+      const v = on ? 1 : 0;
+      if (probe.value !== v) {
+        probe.value = v;
+        changed = true;
+      }
+    };
+    apply(this.softIorqProbe, this.softIorqPulse);
+    apply(this.softIoWriteProbe, this.softIoWritePulse);
+    apply(this.softIoReadProbe, this.softIoReadPulse);
+    return changed;
+  }
+
+  /** Clear Soft I/O strobes before the next soft instruction. */
+  private clearSoftIoPulses(): void {
+    this.softIorqPulse = false;
+    this.softIoWritePulse = false;
+    this.softIoReadPulse = false;
   }
 
   private syncSoftLabQ(
@@ -628,8 +695,16 @@ export class MachineRunner {
       addrBits: layout.addrBits,
       keyDataAddr: layout.keyData,
       keyStatusAddr: layout.keyStatus,
-      portIn: (port) => dev.portIn(ram.bytes, port),
-      portOut: (port, val) => dev.portOut(ram.bytes, port, val),
+      portIn: (port) => {
+        this.softIorqPulse = true;
+        this.softIoReadPulse = true;
+        return dev.portIn(ram.bytes, port);
+      },
+      portOut: (port, val) => {
+        this.softIorqPulse = true;
+        this.softIoWritePulse = true;
+        return dev.portOut(ram.bytes, port, val);
+      },
       portInBlock: (port) => ((port & 0xff) === 0x01 ? dev.coninWouldBlock() : false),
       hostTrap: (cpu, bytes) => {
         const cpm = dev.cpm;
@@ -937,6 +1012,7 @@ export class MachineRunner {
           return;
         }
         if (this.spectrum) this.spectrum.pulseFrameIrq();
+        this.clearSoftIoPulses();
         softStep(this.soft, this.ram.bytes, this.softHooks());
         this.softDesynced = true;
         this.syncLabPeripherals();
@@ -1002,6 +1078,7 @@ export class MachineRunner {
           this.spectrum.pulseFrameIrq();
           this.spectrum.beginBeeperFrame();
         }
+        this.clearSoftIoPulses();
         softRun(this.soft, this.ram.bytes, this.phasesPerFrame, this.softHooks(), this.breakpointPc);
         this.softDesynced = true;
         this.syncLabPeripherals();

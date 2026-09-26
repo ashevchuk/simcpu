@@ -6,12 +6,8 @@ export type SoftCanvasLevel = { level: Level; contended: boolean };
 /**
  * Lightweight pin levels for Soft Run at top level (flatten deferred).
  *
- * Soft mode skips transistor step(), so the old all-Z resolver made every
- * wire look floating while host overrides (lab LED forceOn / Input drivers)
- * still painted indicators — confusing when a LED blinks on a Z wire.
- *
- * Uses only the top circuit's nets + explicit drivers (Input, Source, LED
- * forceOn). No flatten, no Soft Lab chip expansion.
+ * Soft mode skips transistor step(), so host overrides (lab LED forceOn /
+ * Input drivers / Soft Lab softState.q) must paint nets without flatten.
  */
 export function makeSoftCanvasResolve(
   circuit: Circuit,
@@ -20,7 +16,8 @@ export function makeSoftCanvasResolve(
   /** Per net: forced 0/1, or both (contention). */
   const drive = new Map<string, { v: 0 | 1; conflict: boolean }>();
 
-  const push = (pinId: string, v: 0 | 1): void => {
+  const push = (pinId: string | undefined, v: 0 | 1): void => {
+    if (!pinId) return;
     const net = nets.netOf.get(pinId);
     if (!net) return;
     const cur = drive.get(net);
@@ -34,6 +31,17 @@ export function makeSoftCanvasResolve(
     } else if (c.kind === 'led' && typeof c.forceOn === 'boolean') {
       // Sense-only electrically; Soft host override still paints the net.
       push(c.pins.in.id, c.forceOn ? 1 : 0);
+    } else if (c.kind === 'chip' && c.softState?.q) {
+      const q = c.softState.q;
+      for (let i = 0; i < q.length; i++) {
+        const pin = c.pins[`q${i}`];
+        if (pin) push(pin.id, (q[i]! & 1) as 0 | 1);
+      }
+      // COUNTER4 terminal count — same formula as softLabDriveOutputs.
+      if (c.softState.model === 'COUNTER4' && c.pins.co) {
+        const v = (q[0]! | (q[1]! << 1) | (q[2]! << 2) | (q[3]! << 3)) & 0xf;
+        push(c.pins.co.id, v === 15 ? 1 : 0);
+      }
     }
   }
 

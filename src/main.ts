@@ -51,6 +51,7 @@ import { decodeShareHash, encodeShareHash } from './sim/shareLink.js';
 import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, SimState } from './sim/types.js';
 import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
+import { placeLabLedGateDecode } from './machine/labLedGateDecode.js';
 import { commandRomHexPrompt } from './machine/commandRom.js';
 import { LED_BLINK_ROM_BYTES } from './machine/ledBlinkRom.js';
 import { runSoftCommand } from './machine/softConsole.js';
@@ -252,7 +253,10 @@ interface NavFrame {
 const navStack: NavFrame[] = [{ circuit: topCircuit, pathPrefix: '', label: 'top' }];
 
 const editor = new Editor(topCircuit, library);
-editor.onComponentsRemoved = (ids) => watchList.removeComponents(ids);
+editor.onComponentsRemoved = (ids) => {
+  watchList.removeComponents(ids);
+  refreshWatchStrip();
+};
 /** Playwright Lab-manual capture hooks (scripts/capture-lab-help*.mts). */
 (window as unknown as { __simHelpCapture: { tidyAll: () => number } }).__simHelpCapture = {
   tidyAll: () => editor.tidyAllWires(false),
@@ -1504,22 +1508,48 @@ function placeLedBlinkMachine(): void {
     },
   });
 
-  // Fold/pack first so the lab LED Input is not sucked into the seed grid
-  // as another RUN_* toggle — Soft OUT never drives a Z80CPU pin on canvas.
+  // Gates MVP: OUT 0x40 ∧ D0 decode (outside fold so taps become chip ports).
+  const gateLed = placeLabLedGateDecode(editor.circuit, library, cpu, {
+    x: pos.x + CHIP_INSTANCE_WIDTH / 2 + 40,
+    y: pos.y + 200,
+  });
+
+  // Fold/pack first so the lab LED Input is not sucked into the seed grid.
   foldZ80CpuLeavingRam(editor.circuit, library, placedIds, pos);
   packFoldedMachine(editor.circuit, pos);
   replaceLongWiresWithLabels(editor.circuit, 24);
 
   const ledX = pos.x + CHIP_INSTANCE_WIDTH / 2 + 200;
   const ledY = pos.y - 40;
-  const ledDrive = makeInput(editor.circuit, 0, { x: ledX, y: ledY });
   const led = makeLed(editor.circuit, { x: ledX + 60, y: ledY }, 'LAB_LED');
-  wire(editor.circuit, ledDrive.pins.out, led.pins.in);
-  // Named net (not auto `_N0`) — SoftDevices → this Input → LED.
+  // Gates decode drives the LED electrically; Soft Run uses forceOn paint only
+  // (no Soft Input on this net — avoids fighting the gate decode).
+  wire(editor.circuit, gateLed, led.pins.in);
   const ledNet = makeLabel(editor.circuit, 'LAB_LED', { x: ledX + 30, y: ledY - 16 });
   wire(editor.circuit, led.pins.in, ledNet.pins.net);
 
-  machineRunner.bindLabLed(led, ledDrive);
+  // Soft Run host probes — paint IORQ / ioWrite when Soft OUT fires.
+  const iorqProbe = makeInput(editor.circuit, 0, { x: ledX, y: ledY - 50 });
+  const ioWriteProbe = makeInput(editor.circuit, 0, { x: ledX + 50, y: ledY - 50 });
+  const ioReadProbe = makeInput(editor.circuit, 0, { x: ledX + 100, y: ledY - 50 });
+  wire(
+    editor.circuit,
+    iorqProbe.pins.out,
+    makeLabel(editor.circuit, 'SOFT_IORQ', { x: ledX + 20, y: ledY - 66 }).pins.net,
+  );
+  wire(
+    editor.circuit,
+    ioWriteProbe.pins.out,
+    makeLabel(editor.circuit, 'SOFT_IOWRITE', { x: ledX + 70, y: ledY - 66 }).pins.net,
+  );
+  wire(
+    editor.circuit,
+    ioReadProbe.pins.out,
+    makeLabel(editor.circuit, 'SOFT_IOREAD', { x: ledX + 120, y: ledY - 66 }).pins.net,
+  );
+  machineRunner.bindSoftIoProbes({ iorq: iorqProbe, ioWrite: ioWriteProbe, ioRead: ioReadProbe });
+
+  machineRunner.bindLabLed(led, null);
   const regDef = library.list().find((d) => d.name === 'REG8');
   const ctrDef = library.list().find((d) => d.name === 'COUNTER4');
   if (regDef) makeChipInstance(editor.circuit, regDef, { x: ledX + 120, y: ledY + 20 });
@@ -1682,11 +1712,15 @@ function updateWatchLevels(
   resolve: (localPinId: string) => { level: Level; contended: boolean },
 ): void {
   if (!watchStripEl?.classList.contains('visible')) return;
+  let stale = false;
   for (const child of Array.from(watchStripEl.querySelectorAll('.watch-item'))) {
     const id = (child as HTMLElement).dataset.probeId;
     if (!id) continue;
     const c = editor.circuit.components.get(id);
-    if (!c || c.kind !== 'probe') continue;
+    if (!c || c.kind !== 'probe') {
+      stale = true;
+      continue;
+    }
     const { level } = resolve(c.pins.in.id);
     const lvlEl = child.querySelector('.watch-lvl') as HTMLElement | null;
     if (!lvlEl) continue;
@@ -1694,6 +1728,8 @@ function updateWatchLevels(
     lvlEl.dataset.lvl = text;
     lvlEl.textContent = text;
   }
+  // Probe deleted but strip not yet rebuilt (e.g. structure bump raced).
+  if (stale) refreshWatchStrip();
 }
 
 refreshWatchStrip();
