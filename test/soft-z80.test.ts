@@ -97,4 +97,54 @@ describe('softZ80', () => {
     expect(ram[KEY_STATUS]).toBe(0);
     expect(ram[KEY_DATA]).toBe(0x51);
   });
+
+  it('ADD HL,rr sets H from bit11 carry and X/Y from result high', () => {
+    const ram = new Uint8Array(256);
+    // LD HL,0x0FFF / LD BC,0x0001 / ADD HL,BC / HALT
+    ram.set([0x21, 0xff, 0x0f, 0x01, 0x01, 0x00, 0x09, 0x76]);
+    const cpu = createSoftZ80(0xff);
+    softRun(cpu, ram, 10);
+    expect((cpu.h << 8) | cpu.l).toBe(0x1000);
+    expect(cpu.f & 0x01).toBe(0); // C
+    expect(cpu.f & 0x10).toBe(0x10); // H
+    expect(cpu.f & 0x08).toBe(0); // X from hi=0x10
+    expect(cpu.f & 0x20).toBe(0); // Y
+  });
+
+  it('CCF copies old C into H; SCF/rot refresh X/Y from A', () => {
+    const ram = new Uint8Array(256);
+    // LD A,0x28 / SCF / CCF / HALT — A has X+Y bits
+    ram.set([0x3e, 0x28, 0x37, 0x3f, 0x76]);
+    const cpu = createSoftZ80(0xff);
+    softStep(cpu, ram); // LD A
+    softStep(cpu, ram); // SCF
+    expect(cpu.f & 0x01).toBe(0x01);
+    expect(cpu.f & 0x10).toBe(0); // H cleared
+    expect(cpu.f & 0x08).toBe(0x08); // X from A
+    expect(cpu.f & 0x20).toBe(0x20); // Y from A
+    softStep(cpu, ram); // CCF
+    expect(cpu.f & 0x01).toBe(0);
+    expect(cpu.f & 0x10).toBe(0x10); // H ← old C
+    expect(cpu.f & 0x08).toBe(0x08);
+    expect(cpu.f & 0x20).toBe(0x20);
+  });
+
+  it('softAcceptIrq bumps R once for IM1', () => {
+    const ram = new Uint8Array(0x10000);
+    const cpu = createSoftZ80(0xff00);
+    cpu.im = 1;
+    cpu.iff1 = true;
+    cpu.r = 0x07;
+    cpu.pc = 0x100;
+    let pending = true;
+    softStep(cpu, ram, {
+      irqPending: () => pending,
+      clearIrq: () => {
+        pending = false;
+      },
+    });
+    expect(cpu.pc).toBe(0x38);
+    expect(cpu.r & 0x7f).toBe(0x08); // one M1 bump
+    expect(pending).toBe(false);
+  });
 });

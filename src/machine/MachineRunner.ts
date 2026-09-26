@@ -471,12 +471,36 @@ export class MachineRunner {
     if (this.spectrumHost) this.soft = this.spectrumHost.engine.cpu;
   }
 
-  /** Soft NMI → $0066. */
+  /** Soft or gate NMI → $0066. */
   pulseSpectrumNmi(): void {
+    if (!this.isSoft && this.cpu) {
+      // Gate: rising edge sampled at PHASE0 — hold high across a couple of phases.
+      this.cpu.nmiDrive.value = 1;
+      this.stepPhase();
+      this.stepPhase();
+      this.cpu.nmiDrive.value = 0;
+      return;
+    }
     if (!this.spectrumHost) throw new Error('No soft CPU');
     this.spectrumHost.nmi();
     this.soft = this.spectrumHost.engine.cpu;
     this.softDesynced = true;
+  }
+
+  /** Drive gate int from Spectrum ULA irqPending; clear after accept. */
+  private syncSpectrumGateInt(): void {
+    if (!this.spectrum || !this.cpu || this.isSoft) return;
+    const pending = this.spectrum.irqPending;
+    this.cpu.intDrive.value = pending ? 1 : 0;
+  }
+
+  /** After a gate instruction, clear ULA IRQ once INT was accepted (IFF1 was on, now off). */
+  private clearSpectrumIrqIfAccepted(wasPending: boolean, iff1WasOn: boolean): void {
+    if (!wasPending || !iff1WasOn || !this.spectrum || !this.cpu || !this.readPin) return;
+    if (this.readPin(this.cpu.iff1[0]!) === 0) {
+      this.spectrum.clearIrq();
+      this.cpu.intDrive.value = 0;
+    }
   }
 
   get scrSize(): number {
@@ -788,7 +812,12 @@ export class MachineRunner {
       }
       return;
     }
+    const irqWasPending = !!(this.spectrum?.irqPending);
+    const iff1WasOn =
+      !!this.cpu && !!this.readPin && this.readPin(this.cpu.iff1[0]!) === 1;
+    this.syncSpectrumGateInt();
     for (let i = 0; i < 10; i++) this.stepPhase();
+    this.clearSpectrumIrqIfAccepted(irqWasPending, iff1WasOn);
     this.stopIfGateHalted();
   }
 
@@ -861,10 +890,22 @@ export class MachineRunner {
     const budgetMs = this.speed === 'free' ? FREE_BUDGET_MS : GATE_BUDGET_MS;
     const deadline = performance.now() + budgetMs;
     let n = 0;
+    if (this.spectrum) this.spectrum.pulseFrameIrq();
+    let instrIrqPending = false;
+    let instrIff1WasOn = false;
     while (n < maxPhases && performance.now() < deadline && this.running) {
+      if (n % 10 === 0) {
+        instrIrqPending = !!(this.spectrum?.irqPending);
+        instrIff1WasOn =
+          !!this.cpu && !!this.readPin && this.readPin(this.cpu.iff1[0]!) === 1;
+        this.syncSpectrumGateInt();
+      }
       this.stepPhase();
       n++;
-      if (n % 10 === 0) this.stopIfGateHalted();
+      if (n % 10 === 0) {
+        this.clearSpectrumIrqIfAccepted(instrIrqPending, instrIff1WasOn);
+        this.stopIfGateHalted();
+      }
     }
     this.stopIfGateHalted();
     return n > 0;

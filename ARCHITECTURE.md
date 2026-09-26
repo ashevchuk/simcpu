@@ -2766,11 +2766,10 @@ instead of the discarded result — is deliberately not modeled, the same
 "not chased to full silicon fidelity everywhere" stance the very next
 flag this project tackles (`P/V`, see "P/V is two flags, not one"
 further down) takes too, just on a different bit. `ADD HL,rr` and the six-op
-RLCA/RRCA/RLA/RRA/CPL/SCF/CCF group still leave `H`/`X`/`Y` exactly where
-`F`'s own base hold puts them — no new layer for those bits in either
-group, the identical "stale, not fresh" treatment this file already
-documents for that group's own `S`/`Z`/`P`. Not a new gap opened here —
-the same one, just visible on three more bits now.
+RLCA/RRCA/RLA/RRA/CPL/SCF/CCF group now refresh `H`/`X`/`Y` as well
+(ADD HL: H from bit11 carry, X/Y from result high; rotates/CPL/SCF/CCF:
+H and X/Y per real Z80, with CCF's H ← old C) — `S`/`Z`/`P/V` still hold
+for both groups, matching silicon.
 
 **Found live, chasing this pass's own test:** `z80cpu-inc-dec-r.test.ts`
 (written for the *previous* pass, when bits 3/5 were still `gnd`) failed
@@ -2903,9 +2902,9 @@ the shared `INC`/`DEC` adder instead of the main ALU's. `DAA` keeps
 *parity* — Zilog's own manual documents `DAA` setting `P/V` to parity of
 the corrected result, not overflow, so `daaPBit`'s existing computation
 needed no change at all. `ADD HL,rr` and the six-op RLCA/RRCA/RLA/RRA/
-CPL/SCF/CCF group still leave `P/V` exactly where the base hold puts it
-— unchanged, the same "stale" simplification those two groups' own
-`S`/`Z` (and now `H`/`X`/`Y`) already carry.
+CPL/SCF/CCF group still leave `P/V` (and `S`/`Z`) exactly where the base
+hold puts them — unchanged, matching real Z80 for those ops (their own
+`H`/`X`/`Y` are now fresh; see above).
 
 **Found live, chasing this pass's own new test:** two *already-passing*
 tests broke the instant this landed, neither one written to look for
@@ -4010,16 +4009,15 @@ software writes them only via `LD I,A` / `LD R,A`.
 into `I`/`R` via `wrapWithPairCommit` (no flags). `LD A,I`/`LD A,R`
 commit into `A` and refresh every flag bit but `C` — `S`/`Z`/`X`/`Y` off
 the transferred byte, `H`/`N` forced 0, **`P/V←IFF2`** (soft↔gate parity;
-verified in `z80cpu-ld-i-r.test.ts`). Soft also auto-increments `R` on each
-M1/`fetch`; the gate CPU still leaves `R` as plain software-visible storage
-until a refresh model exists (Known Simplifications).
+verified in `z80cpu-ld-i-r.test.ts`). Soft and gate both auto-increment `R`
+on each M1/`fetch` (bit7 sticky — `bumpR` / `RINC_NOW`).
 
 Verified with `z80cpu-ld-i-r.test.ts` — before the full suite.
 
 ### Thin IM1 IRQ / NMI / IM modes
 
-Maskable interrupt support plus NMI/`RETN`, with **IM 0** and **IM 1**
-accept on the gate (IM 2 mode latch only — vector fetch is TODO).
+Maskable interrupt support plus NMI/`RETN`, with **IM 0**, **IM 1**, and
+**IM 2** accept on both soft and gate.
 
 **State.** `IFF1`/`IFF2`, `IM0`/`IM1`/`IM2` latches (q-only, like `I`/`R` —
 no external seed; setting one mode clears the others on `PHASE4`). External
@@ -4056,8 +4054,9 @@ matches RETI encodings first — leave as-is.
 
 Verified with `z80cpu-irq-im1.test.ts`, `z80cpu-irq-im0.test.ts` (includes
 gate IM2), `z80cpu-nmi-retn.test.ts`. Soft↔gate EI delay and HALT latch
-parity: `soft-gate-ei-halt.test.ts`. Remaining deliberate gap: no full
-INTACK multi-cycle timing model.
+parity: `soft-gate-ei-halt.test.ts`. Thin INTACK = sample `irqBus` + one
+R bump on maskable accept (all IM); no multi-cycle IORQ / wait-state
+model. NMI does not bump R (soft `softNmi` parity).
 
 ### CB x=01: BIT y,r / BIT y,(HL)
 
@@ -4836,10 +4835,9 @@ section's own success story.
   "Closing the half-carry gap" above) — out of 256 possible opcodes.
   `x=00` is now fully covered too, `DAA` included, once a real `H` existed
   for it to read (see "Closing the half-carry gap" above for the full
-  derivation — the same section covers why `RLCA`/`RRCA`/`RLA`/`RRA`/`SCF`
-  leaving `H`/`X`/`Y` exactly where the base hold puts them is the
-  identical, already-standing "stale, not fresh" simplification this file
-  already documents for that same group's own `S`/`Z`/`P`, not a new gap).
+  derivation — the same section covers why `RLCA`/`RRCA`/`RLA`/`RRA`/`SCF`/
+  `CCF`/`CPL` leave `S`/`Z`/`P/V` stale while refreshing `H`/`X`/`Y`/`C`/`N`
+  (and why plain `ADD HL,rr` refreshes `C`/`H`/`N`/`X`/`Y` the same way)).
   `x=11` is fully covered for every opcode real Z80 defines that isn't a
   prefix byte or an interrupt primitive — `PUSH`/`POP`/`RET`/`RST n`/
   `JP nn`/`CALL nn`/`JP cc,nn`/`CALL cc,nn`/`RET cc`/`EXX`/`JP (HL)`/
@@ -4851,26 +4849,27 @@ section's own success story.
   flip-flops as part of the IRQ/NMI layer (see "Thin IM1 IRQ / NMI / IM modes" above) —
   no longer the permanent gap this paragraph once described. Soft↔gate now
   share one-instruction EI delay and a HALT latch (`soft-gate-ei-halt.test.ts`).
-  Remaining IRQ gaps are deliberate: no full INTACK multi-cycle timing.
+  Remaining IRQ gaps are deliberate: thin INTACK only (sample `irqBus` +
+  one R bump on maskable accept; no multi-cycle IORQ / wait-state model).
   Soft and gate both implement IM0/IM1/IM2 accept (gate IM2: push + word
   at `(I<<8)|bus` → PC). Soft and gate
-  both auto-increment `R` on M1 (bit7 sticky). `P/V←IFF2` on `LD A,I`/`LD A,R`
+  both auto-increment `R` on M1 (bit7 sticky), including once on maskable
+  INT accept (NMI leaves R alone, matching soft). `P/V←IFF2` on `LD A,I`/`LD A,R`
   is real on both soft and gate. Soft Run and gate both honour
   one-instruction EI delay; Soft Run stops on `HALT` (`0x76`), and the gate
   latches `halted` (MachineRunner can stop-clock). NMI/`RETN` and IM0 are
   wired on both (see "Thin IM1 IRQ / NMI / IM modes" above). `H` (half-carry) and the two undocumented flag bits are real
-  now for the `x=10`/`x=11` ALU group, `INC r`/`DEC r`, and `DAA` itself
-  (see "Closing the half-carry gap" above) — `ADD HL,rr` and the
-  `RLCA`/`RRCA`/`RLA`/`RRA`/`CPL`/`SCF`/`CCF` group still leave them
-  stale, the identical simplification that group's own `S`/`Z`/`P` has
-  always carried, not a fresh one. `P/V` now picks parity vs. signed
+  now for the `x=10`/`x=11` ALU group, `INC r`/`DEC r`, `DAA`, plain
+  `ADD HL,rr` / ADD IX/IY (H from bit11 carry; X/Y from result high), and
+  the `RLCA`/`RRCA`/`RLA`/`RRA`/`CPL`/`SCF`/`CCF` group (H/X/Y fresh;
+  CCF's H is old C) — see "Closing the half-carry gap" above. `P/V` now picks parity vs. signed
   overflow by which op actually ran — parity for `AND`/`OR`/`XOR`,
   overflow for `ADD`/`ADC`/`SUB`/`SBC`/`CP` and unconditionally for
   `INC r`/`DEC r` (which has no logic variant to be parity for); `DAA`
   keeps parity, matching Zilog's own documented behavior for it (see
   "P/V is two flags, not one" above). `ADD HL,rr` and the six-op
-  RLCA/RRCA/RLA/RRA/CPL/SCF/CCF group still leave `P/V` stale, the same
-  simplification their own `H`/`X`/`Y` inherited above, not a fresh one.
+  RLCA/RRCA/RLA/RRA/CPL/SCF/CCF group still leave `P/V` (and `S`/`Z`)
+  stale — real Z80 does too for those ops.
   `CB`/`ED`/`DD`/`FD` prefix handling — a fundamentally different
   undertaking from "one more opcode," each prefix byte opening an
   entirely separate decode table (bit-level `RLC`/`BIT`/`SET`/`RES` ops,
@@ -4902,8 +4901,8 @@ section's own success story.
   `0xED 0x4A`/`0x5A`/`0x6A`/`0x7A` and `0x42`/`0x52`/`0x62`/`0x72` — the
   identical shared 16-bit adder plain `ADD HL,rr` already built, widened
   for a real carry-in and operand invert (the same `x=10: ADC/SBC`
-  recipe, just 16 bits wide), every flag bit real here too, unlike
-  `ADD HL,rr`'s own C-only treatment. The block instructions' own decode
+  recipe, just 16 bits wide), every flag bit real here too (plain
+  `ADD HL,rr` refreshes C/H/N/X/Y and holds S/Z/P/V). The block instructions' own decode
   gates were found live, while designing `NEG`'s, to have never checked
   `dec.x` at all (see "A decode gap found across all sixteen
   block-instruction gates" above) — fixed before `NEG` landed, rather

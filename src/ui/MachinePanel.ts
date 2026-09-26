@@ -237,7 +237,7 @@ JR spin</textarea>
             <span class="spec-computer-model" data-spec-model>48K / 128K soft</span>
             <button type="button" class="spec-computer-png" data-act="save-png-tab" title="Export screen PNG">PNG</button>
             <button type="button" class="spec-computer-png" data-act="save-scr-tab" title="Export .SCR">SCR</button>
-            <button type="button" class="spec-computer-png" data-act="nmi" title="Soft NMI → $0066">NMI</button>
+            <button type="button" class="spec-computer-png" data-act="nmi" title="NMI → $0066 (soft or gate)">NMI</button>
             <button type="button" class="spec-computer-png" data-act="step-over" title="Step over CALL/RST">Over</button>
             <span class="spec-slots" title="Quick SNA slots (F6–F9 save with Shift, F6–F9 load)">
               <button type="button" data-act="slot-1" data-slot="1" title="Slot 1 — click load · Shift+click save · F6">S1</button>

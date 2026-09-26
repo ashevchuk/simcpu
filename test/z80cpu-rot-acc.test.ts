@@ -69,26 +69,29 @@ describe('buildZ80Cpu — x=00, z=7: RLCA/RRCA/RLA/RRA/CPL/SCF/CCF', () => {
     a: number;
     c: number;
     n: number;
+    hf: number;
+    x: number;
+    y: number;
     z: number;
     s: number;
     pc: number;
   }
   const EXPECTED: Snapshot[] = [
-    { a: 0x00, c: 0, n: 0, z: 1, s: 0, pc: 1 }, // XOR A,A
-    { a: 0x00, c: 1, n: 0, z: 1, s: 0, pc: 2 }, // SCF
-    { a: 0x00, c: 0, n: 0, z: 1, s: 0, pc: 3 }, // CCF
-    { a: 0x00, c: 1, n: 0, z: 1, s: 0, pc: 4 }, // CCF
-    { a: 0x55, c: 1, n: 0, z: 1, s: 0, pc: 6 }, // LD A,0x55
-    { a: 0xaa, c: 0, n: 0, z: 1, s: 0, pc: 7 }, // RLCA
-    { a: 0x55, c: 1, n: 0, z: 1, s: 0, pc: 8 }, // RLCA
-    { a: 0xaa, c: 1, n: 0, z: 1, s: 0, pc: 9 }, // RRCA
-    { a: 0x55, c: 0, n: 0, z: 1, s: 0, pc: 10 }, // RRCA
-    { a: 0xaa, c: 0, n: 0, z: 1, s: 0, pc: 11 }, // RLA
-    { a: 0x54, c: 1, n: 0, z: 1, s: 0, pc: 12 }, // RLA
-    { a: 0xaa, c: 0, n: 0, z: 1, s: 0, pc: 13 }, // RRA
-    { a: 0x55, c: 0, n: 0, z: 1, s: 0, pc: 14 }, // RRA
-    { a: 0xaa, c: 0, n: 1, z: 1, s: 0, pc: 15 }, // CPL
-    { a: 0x55, c: 0, n: 1, z: 1, s: 0, pc: 16 }, // CPL
+    { a: 0x00, c: 0, n: 0, hf: 0, x: 0, y: 0, z: 1, s: 0, pc: 1 }, // XOR A,A
+    { a: 0x00, c: 1, n: 0, hf: 0, x: 0, y: 0, z: 1, s: 0, pc: 2 }, // SCF
+    { a: 0x00, c: 0, n: 0, hf: 1, x: 0, y: 0, z: 1, s: 0, pc: 3 }, // CCF — H←old C
+    { a: 0x00, c: 1, n: 0, hf: 0, x: 0, y: 0, z: 1, s: 0, pc: 4 }, // CCF
+    { a: 0x55, c: 1, n: 0, hf: 0, x: 0, y: 0, z: 1, s: 0, pc: 6 }, // LD A,0x55
+    { a: 0xaa, c: 0, n: 0, hf: 0, x: 1, y: 1, z: 1, s: 0, pc: 7 }, // RLCA
+    { a: 0x55, c: 1, n: 0, hf: 0, x: 0, y: 0, z: 1, s: 0, pc: 8 }, // RLCA
+    { a: 0xaa, c: 1, n: 0, hf: 0, x: 1, y: 1, z: 1, s: 0, pc: 9 }, // RRCA
+    { a: 0x55, c: 0, n: 0, hf: 0, x: 0, y: 0, z: 1, s: 0, pc: 10 }, // RRCA
+    { a: 0xaa, c: 0, n: 0, hf: 0, x: 1, y: 1, z: 1, s: 0, pc: 11 }, // RLA
+    { a: 0x54, c: 1, n: 0, hf: 0, x: 0, y: 0, z: 1, s: 0, pc: 12 }, // RLA
+    { a: 0xaa, c: 0, n: 0, hf: 0, x: 1, y: 1, z: 1, s: 0, pc: 13 }, // RRA
+    { a: 0x55, c: 0, n: 0, hf: 0, x: 0, y: 0, z: 1, s: 0, pc: 14 }, // RRA
+    { a: 0xaa, c: 0, n: 1, hf: 1, x: 1, y: 1, z: 1, s: 0, pc: 15 }, // CPL
+    { a: 0x55, c: 0, n: 1, hf: 1, x: 0, y: 0, z: 1, s: 0, pc: 16 }, // CPL
   ];
 
   function fromBits(bits: Level[]): number {
@@ -98,7 +101,7 @@ describe('buildZ80Cpu — x=00, z=7: RLCA/RRCA/RLA/RRA/CPL/SCF/CCF', () => {
     return Array.from({ length: width }, (_, i) => ((n >> i) & 1) as 0 | 1);
   }
 
-  it('rotates and complements A, and sets/clears/inverts C, leaving S/Z/P stale the whole time', () => {
+  it('rotates and complements A; sets C/H/X/Y; leaves S/Z/P stale', () => {
     const library = new ChipLibrary();
     const parent = new Circuit();
     const cpu = buildZ80Cpu(parent, library, ADDR_BITS, PROGRAM);
@@ -171,6 +174,9 @@ describe('buildZ80Cpu — x=00, z=7: RLCA/RRCA/RLA/RRA/CPL/SCF/CCF', () => {
       a: readReg(cpu.a),
       c: readReg([cpu.f[0]!]),
       n: readReg([cpu.f[1]!]),
+      hf: readReg([cpu.f[4]!]),
+      x: readReg([cpu.f[3]!]),
+      y: readReg([cpu.f[5]!]),
       z: readReg([cpu.f[6]!]),
       s: readReg([cpu.f[7]!]),
       pc: readReg(cpu.pc),

@@ -6645,8 +6645,9 @@ function buildZ80CpuInner(
   }
   tieToLabel('ADDHL_C', addHlAdder.cout, { x: pos.x - 400, y: pos.y - 5300 }); // anchor — F's own C-bit mux (far) reads this
 
-  // `ADC HL,rr`/`SBC HL,rr`'s own flags — real Z80 documents every bit,
-  // unlike plain `ADD HL,rr`'s own C-only treatment above. `S`/`Z` read
+  // `ADC HL,rr`/`SBC HL,rr`'s own flags — real Z80 documents every bit.
+  // Plain `ADD HL,rr` refreshes C/H/N/X/Y and holds S/Z/P/V; this pair
+  // refreshes the whole byte. `S`/`Z` read
   // straight off this same adder's own 16-bit result; `H` is the
   // identical half-borrow/half-carry idiom this file's own 8-bit groups
   // already use, just at the 16-bit nibble boundary (`carries[11]`,
@@ -6678,6 +6679,8 @@ function buildZ80CpuInner(
   tieToLabel('ADCSBCHL_S', addHlSBit, { x: pos.x - 350, y: pos.y - 4700 });
   tieToLabel('ADCSBCHL_Z', addHlZBit.out, { x: pos.x - 350, y: pos.y - 4680 });
   tieToLabel('ADCSBCHL_H', addHlHBitRaw.out, { x: pos.x - 350, y: pos.y - 4660 });
+  // Plain ADD HL/IX/IY: H is carries[11] with no SBC invert (unlike ADCSBCHL_H).
+  tieToLabel('ADDHL_H', addHlAdder.carries[11]!, { x: pos.x - 350, y: pos.y - 4650 });
   tieToLabel('ADCSBCHL_PV', addHlPvBit.out, { x: pos.x - 350, y: pos.y - 4640 });
   tieToLabel('ADCSBCHL_C', addHlCBitFresh.out, { x: pos.x - 350, y: pos.y - 4620 }); // anchor — F's own per-bit layer (far) reads this, along with the four labels just above
 
@@ -9469,12 +9472,13 @@ function buildZ80CpuInner(
   const rIExt = wrapWithPairCommit(regI, 'LDIA_NOW', 'AOLD', { x: pos.x + 11850, y: pos.y - 700 });
   const rRExt = wrapWithPairCommit(regR, 'LDRA_NOW', 'AOLD', { x: pos.x + 11850, y: pos.y - 300 });
   // R M1 auto-increment (soft bumpR parity): (R & 0x80) | ((R+1) & 0x7f).
-  // Fires on PHASE0 FETCH when not accepting INT/NMI, and on PREFIX_READ_NOW.
-  const notIrqAcceptForR = buildNot(parent, { x: pos.x + 11700, y: pos.y - 200 });
-  tieToLabel('IRQ_ACCEPT_ANY', notIrqAcceptForR.in, { x: pos.x + 11600, y: pos.y - 200 });
+  // Fires on PHASE0 FETCH when not accepting NMI, on INT accept (thin INTACK
+  // R bump), and on PREFIX_READ_NOW. NMI leaves R alone (softNmi parity).
+  const notNmiAcceptForR = buildNot(parent, { x: pos.x + 11700, y: pos.y - 200 });
+  tieToLabel('NMI_ACCEPT_NOW', notNmiAcceptForR.in, { x: pos.x + 11600, y: pos.y - 200 });
   const rincFetch = buildAnd(parent, { x: pos.x + 11750, y: pos.y - 180 });
   tieToLabel('PHASE0', rincFetch.a, { x: pos.x + 11650, y: pos.y - 180 });
-  wire(parent, notIrqAcceptForR.out, rincFetch.b);
+  wire(parent, notNmiAcceptForR.out, rincFetch.b);
   const rincNow = buildOr(parent, { x: pos.x + 11800, y: pos.y - 160 });
   wire(parent, rincFetch.out, rincNow.a);
   tieToLabel('PREFIX_READ_NOW', rincNow.b, { x: pos.x + 11700, y: pos.y - 160 });
@@ -10138,6 +10142,7 @@ function buildZ80CpuInner(
   wire(parent, ccfRaw.out, ccfNow.a);
   tieToLabel('PHASE2', ccfNow.b, { x: pos.x + 13000, y: pos.y + 1850 });
   tieToLabel('CPL_NOW', cplNow.out, { x: pos.x + 13200, y: pos.y + 1750 }); // anchor — F's own N-bit layer (far) reads this; A's own write mux reads `ROTACC_A_NOW`/`ROTACCRESULT{i}` instead, CPL already folded into both of those below
+  tieToLabel('CCF_NOW', ccfNow.out, { x: pos.x + 13200, y: pos.y + 1850 }); // anchor — ROTACC_H (H←old C)
 
   // RLCA/RRCA/RLA/RRA/CPL are the only five of these seven that actually
   // touch `A` — SCF/CCF are flags-only, real Z80 never reads or writes `A`
@@ -10223,16 +10228,35 @@ function buildZ80CpuInner(
   wire(parent, cplNow.out, rotAccNNow.b); // CPL, N=1
   tieToLabel('ROTACC_N_NOW', rotAccNNow.out, { x: pos.x + 13300, y: pos.y + 2125 }); // anchor — F's own N-bit layer (far) reads this
 
+  // ROTACC_H: CPL → 1; CCF → old C; else (rotates/SCF) → 0.
+  const rotAccHCcf = buildAnd(parent, { x: pos.x + 13200, y: pos.y + 2145 });
+  tieToLabel('CCF_NOW', rotAccHCcf.a, { x: pos.x + 13100, y: pos.y + 2145 });
+  wire(parent, f.q[0]!, rotAccHCcf.b);
+  const rotAccH = buildOr(parent, { x: pos.x + 13250, y: pos.y + 2145 });
+  tieToLabel('CPL_NOW', rotAccH.a, { x: pos.x + 13150, y: pos.y + 2145 });
+  wire(parent, rotAccHCcf.out, rotAccH.b);
+  tieToLabel('ROTACC_H', rotAccH.out, { x: pos.x + 13300, y: pos.y + 2145 }); // anchor — F bit4 layer
+
+  // ROTACC X/Y: after-transform A for rotates/CPL (ROTACC_A_NOW), else live A
+  // for SCF/CCF. Published as muxed values; F layer gates on ROTACC_N_NOW.
+  for (const bit of [3, 5] as const) {
+    const xyMux = makeChipInstance(parent, muxDef, { x: pos.x + 13250, y: pos.y + 2160 + (bit === 3 ? 0 : 40) });
+    tieToLabel('ROTACC_A_NOW', xyMux.pins[muxDef.ports[0]!]!, { x: pos.x + 13150, y: pos.y + 2160 + (bit === 3 ? 0 : 40) });
+    wire(parent, a.q[bit]!, xyMux.pins[muxDef.ports[1]!]!); // in0: A unchanged (SCF/CCF)
+    tieToLabel(`ROTACCRESULT${bit}`, xyMux.pins[muxDef.ports[2]!]!, { x: pos.x + 13150, y: pos.y + 2180 + (bit === 3 ? 0 : 40) }); // in1: after rotate/CPL
+    tieToLabel(bit === 3 ? 'ROTACC_X' : 'ROTACC_Y', xyMux.pins[muxDef.ports[3]!]!, {
+      x: pos.x + 13300,
+      y: pos.y + 2160 + (bit === 3 ? 0 : 40),
+    });
+  }
+
   // Closing the half-carry gap: H, the two undocumented bits, and DAA.
   //
   // `H`/`X`/`Y` are now real for the x=10/x=11 ALU group (`hBit`/`xBit`/
   // `yBit`, built next to `cBit` above) and for INC r/DEC r (`R8_H`/`R8_X`/
-  // `R8_Y`, built next to `R8_N`/`R8_P`/`R8_Z`/`R8_S` above) — everywhere
-  // else that writes `F` (`ADD HL,rr`, this file's own RLCA/RRCA/RLA/RRA/
-  // CPL/SCF/CCF) still leaves bits 3/4/5 exactly where the base hold puts
-  // them, the identical "stale, not fresh" treatment this project already
-  // documents for `ADD HL,rr`'s own `H` and this group's own `S`/`Z`/`P` —
-  // not a new gap, the same one, just now visible on three more bits.
+  // `R8_Y`, built next to `R8_N`/`R8_P`/`R8_Z`/`R8_S` above) — and for
+  // plain `ADD HL,rr` / ADD IX/IY plus the RLCA/RRCA/RLA/RRA/CPL/SCF/CCF
+  // group (fresh H/X/Y; S/Z/P/V still hold). `DAA` still reads a real `H`.
   //
   // `DAA` reads `H`/`C`/`N` and `A`'s own nibbles to correct `A` back into
   // valid packed BCD after an 8-bit add or subtract. The logic below
@@ -10565,44 +10589,69 @@ function buildZ80CpuInner(
       tieToLabel(r8FlagLabel[i]!, r8Mux.pins[muxDef.ports[2]!]!, { x: pos.x + 8200, y: pos.y + 2070 + i * 100 });
     }
 
-    // ADD HL,rr (see "x=00: ADD HL,rr" above) only ever touches bit 0 (C)
-    // — a fourth layer, inserted ONLY for that bit, ahead of the POP-vs-
-    // everything-else mux below. Real Z80 leaves every other flag bit
-    // alone for this opcode, so bits 1/2/6/7 never see this layer at all.
+  // ADD HL,rr / ADD IX/IY,rr: C, N=0, H from bit11 carry, X/Y from result
+  // high bits 3/5. S/Z/P/V (2/6/7) hold. Same shared adder as ADC/SBC HL.
+  // Unlike ADC/SBC HL (every flag fresh), plain ADD holds S/Z/P/V.
     let cLayerIn = r8Mux.pins[muxDef.ports[3]!]!;
+    if (i === 0 || i === 1 || i === 3 || i === 4 || i === 5) {
+      const addHlFMux = makeChipInstance(parent, muxDef, { x: pos.x + 8350, y: pos.y + 2075 + i * 100 });
+      const addHlSel1 = buildOr(parent, { x: pos.x + 8280, y: pos.y + 2075 + i * 100 });
+      tieToLabel('ADDHL_NOW', addHlSel1.a, { x: pos.x + 8180, y: pos.y + 2075 + i * 100 });
+      tieToLabel('ADDIX_NOW', addHlSel1.b, { x: pos.x + 8180, y: pos.y + 2095 + i * 100 });
+      const addHlSel = buildOr(parent, { x: pos.x + 8300, y: pos.y + 2075 + i * 100 });
+      wire(parent, addHlSel1.out, addHlSel.a);
+      tieToLabel('ADDIY_NOW', addHlSel.b, { x: pos.x + 8200, y: pos.y + 2095 + i * 100 });
+      wire(parent, addHlSel.out, addHlFMux.pins[muxDef.ports[0]!]!);
+      wire(parent, r8Mux.pins[muxDef.ports[3]!]!, addHlFMux.pins[muxDef.ports[1]!]!); // in0: hold
+      if (i === 0) {
+        tieToLabel('ADDHL_C', addHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 + i * 100 });
+      } else if (i === 1) {
+        tiePowerRail(parent, 'GND', addHlFMux.pins[muxDef.ports[2]!]!); // N ← 0
+      } else if (i === 3) {
+        tieToLabel('ADDHLHI3', addHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 + i * 100 });
+      } else if (i === 4) {
+        tieToLabel('ADDHL_H', addHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 + i * 100 });
+      } else {
+        tieToLabel('ADDHLHI5', addHlFMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 + i * 100 });
+      }
+      cLayerIn = addHlFMux.pins[muxDef.ports[3]!]!;
+    }
+    // RLCA/RRCA/RLA/RRA/SCF/CCF/CPL — C (bit0), N (bit1), H (bit4), X/Y (3/5).
+    // S/Z/P/V hold. H: CPL→1, CCF→old C, else 0. X/Y from A after transform
+    // (rotates/CPL) or live A (SCF/CCF).
     if (i === 0) {
-      const addHlCMux = makeChipInstance(parent, muxDef, { x: pos.x + 8350, y: pos.y + 2075 });
-      const addHlCSel1 = buildOr(parent, { x: pos.x + 8280, y: pos.y + 2075 });
-      tieToLabel('ADDHL_NOW', addHlCSel1.a, { x: pos.x + 8180, y: pos.y + 2075 });
-      tieToLabel('ADDIX_NOW', addHlCSel1.b, { x: pos.x + 8180, y: pos.y + 2095 });
-      const addHlCSel = buildOr(parent, { x: pos.x + 8300, y: pos.y + 2075 });
-      wire(parent, addHlCSel1.out, addHlCSel.a);
-      tieToLabel('ADDIY_NOW', addHlCSel.b, { x: pos.x + 8200, y: pos.y + 2095 });
-      wire(parent, addHlCSel.out, addHlCMux.pins[muxDef.ports[0]!]!);
-      wire(parent, r8Mux.pins[muxDef.ports[3]!]!, addHlCMux.pins[muxDef.ports[1]!]!); // in0: hold-or-x10's-own-C, from above
-      tieToLabel('ADDHL_C', addHlCMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8250, y: pos.y + 2100 }); // in1: ADD HL/IX/IY,rr's own fresh carry
-      cLayerIn = addHlCMux.pins[muxDef.ports[3]!]!;
-
-      // RLCA/RRCA/RLA/RRA/SCF/CCF (x=00, z=7 — see the doc comment above)
-      // are a sixth layer, bit 0 only, same shape as ADD HL,rr's own layer
-      // just above.
       const rotAccCMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2085 });
       tieToLabel('ROTACC_C_NOW', rotAccCMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8260, y: pos.y + 2085 });
-      wire(parent, cLayerIn, rotAccCMux.pins[muxDef.ports[1]!]!); // in0: the layer above (hold, x=10's own C, or ADD HL,rr's own carry)
-      tieToLabel('ROTACC_C', rotAccCMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2105 }); // in1: RLCA/RRCA/RLA/RRA/SCF/CCF's own fresh carry
+      wire(parent, cLayerIn, rotAccCMux.pins[muxDef.ports[1]!]!);
+      tieToLabel('ROTACC_C', rotAccCMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2105 });
       cLayerIn = rotAccCMux.pins[muxDef.ports[3]!]!;
     }
     if (i === 1) {
-      // CPL (x=00, z=7 — see the doc comment above) is the only one of the
-      // seven that touches N — the other six leave bit 1 wherever the
-      // layer below already has it, same "hold via the layer below, don't
-      // build a whole separate hold path" shape bit 0's own `hold — INC/DEC
-      // r never touches C` case just above already establishes.
       const rotAccNMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2185 });
       tieToLabel('ROTACC_N_NOW', rotAccNMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8260, y: pos.y + 2185 });
-      wire(parent, cLayerIn, rotAccNMux.pins[muxDef.ports[1]!]!); // in0: the layer below (hold, or x=10's own N)
-      tieToLabel('CPL_NOW', rotAccNMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2205 }); // in1: 1 only for CPL, the only op in this group that sets N
+      wire(parent, cLayerIn, rotAccNMux.pins[muxDef.ports[1]!]!);
+      tieToLabel('CPL_NOW', rotAccNMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2205 });
       cLayerIn = rotAccNMux.pins[muxDef.ports[3]!]!;
+    }
+    if (i === 4) {
+      const rotAccHMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2485 });
+      tieToLabel('ROTACC_N_NOW', rotAccHMux.pins[muxDef.ports[0]!]!, { x: pos.x + 8260, y: pos.y + 2485 });
+      wire(parent, cLayerIn, rotAccHMux.pins[muxDef.ports[1]!]!);
+      tieToLabel('ROTACC_H', rotAccHMux.pins[muxDef.ports[2]!]!, { x: pos.x + 8260, y: pos.y + 2505 });
+      cLayerIn = rotAccHMux.pins[muxDef.ports[3]!]!;
+    }
+    if (i === 3 || i === 5) {
+      const rotAccXyMux = makeChipInstance(parent, muxDef, { x: pos.x + 8360, y: pos.y + 2385 + (i === 3 ? 0 : 100) });
+      tieToLabel('ROTACC_N_NOW', rotAccXyMux.pins[muxDef.ports[0]!]!, {
+        x: pos.x + 8260,
+        y: pos.y + 2385 + (i === 3 ? 0 : 100),
+      });
+      wire(parent, cLayerIn, rotAccXyMux.pins[muxDef.ports[1]!]!);
+      tieToLabel(i === 3 ? 'ROTACC_X' : 'ROTACC_Y', rotAccXyMux.pins[muxDef.ports[2]!]!, {
+        x: pos.x + 8260,
+        y: pos.y + 2405 + (i === 3 ? 0 : 100),
+      });
+      cLayerIn = rotAccXyMux.pins[muxDef.ports[3]!]!;
     }
     // DAA (x=00, z=7, y=4 — see "Closing the half-carry gap" above) is a
     // seventh layer, every bit but N (bit 1 — DAA never touches it, so it
@@ -10702,8 +10751,8 @@ function buildZ80CpuInner(
       cLayerIn = negFMux.pins[muxDef.ports[3]!]!;
     }
     // ADC HL,rr/SBC HL,rr (see "x=01, z=2: ADC HL,rr/SBC HL,rr" above)
-    // swaps the whole byte too, unlike plain `ADD HL,rr`'s own C-only
-    // treatment — real Z80 documents every flag bit for this pair. `X`/
+    // swaps the whole byte too — plain `ADD HL,rr` refreshes C/H/N/X/Y
+    // and holds S/Z/P/V; this pair documents every flag bit. `X`/
     // `Y` mirror the high byte's own bits 3/5 (bits 11/13 of the full
     // 16-bit result) — real, documented behavior, not unmodeled, the
     // same stance `NEG`'s own `X`/`Y` just above already take.

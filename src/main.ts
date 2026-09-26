@@ -44,6 +44,7 @@ import {
   loadSoftLabPreference,
   persistSoftLabPreference,
   setSoftLabEnabled,
+  softLabPorActive,
   syncSoftExpandForDivePath,
 } from './sim/softLab.js';
 import { decodeShareHash, encodeShareHash } from './sim/shareLink.js';
@@ -2928,6 +2929,14 @@ document.getElementById('sim-soft-lab')?.addEventListener('click', () => {
     // Soft → Gates: seed silicon Q nets so sequential chips leave Z without
     // requiring the user to pulse Clear (see armSoftLabToGatesPor).
     armSoftLabToGatesPor(topCircuit, library);
+    // Hold pulse gens quiet while POR forces Q — a free-running CLK during
+    // POR leaves T_FF guts oscillating (settled:false forever after POR).
+    for (const c of topCircuit.components.values()) {
+      if (c.kind !== 'clock') continue;
+      c.value = 0;
+      c.phase = 0;
+      c.holdFrames = 0;
+    }
     flashStatusNotice('Gates — POR seeds Q low for a few steps (counters restart at 0)');
   } else if (!wasOn && isSoftLabEnabled()) {
     // Gates → Soft: drop orphan Soft-model force-expands (Soft-off-while-dived
@@ -3091,6 +3100,7 @@ function frame(): void {
   // needs wall-clock frames; idle TRIG is sampled after step (fresh net levels).
   const labActive = circuitNeedsLabTick(topCircuit, logicAnalyzer.anyArmed(topCircuit));
   const hasPulseGen = circuitHasPulseGen(topCircuit);
+  const porActive = softLabPorActive();
 
   const softRun = machineRunner.running && machineRunner.isSoft;
 
@@ -3100,13 +3110,14 @@ function frame(): void {
   let labChanged = false;
   const needSimDraw =
     softRun
-      ? uiDirty || labActive || labChanged || simStepOnce || statusNoticeActive()
+      ? uiDirty || labActive || labChanged || simStepOnce || statusNoticeActive() || porActive
       : uiDirty ||
         labChanged ||
         (!simPaused && !simState.settled) ||
         simStepOnce ||
         (machineRunner.running && machineWorked) ||
         labActive ||
+        porActive ||
         statusNoticeActive() ||
         // Keep the canvas alive so contended-wire heat animation plays while settled.
         simState.contended.size > 0;
@@ -3122,8 +3133,9 @@ function frame(): void {
     if (!softRun || uiDirty || labActive || labChanged || simStepOnce) {
       const view = navStack[navStack.length - 1]!;
       if (softTop && !simStepOnce) {
-        // Soft machine HUD — no transistor step; still advance free-running instruments.
-        if (labActive) {
+        // Soft machine HUD — no transistor step; still advance free-running instruments
+        // (except during Soft→Gates POR — see tick below).
+        if (labActive && !porActive) {
           labChanged = tickLabInstruments(
             topCircuit,
             lastFlatNetMap ?? undefined,
@@ -3158,7 +3170,9 @@ function frame(): void {
         simStepOnce = false;
         // One tick per frame, AFTER step so TRIG sees the button level. When the
         // pulse gen changes its OUT driver, re-flatten — flat clones are stale.
-        if (labActive || hasPulseGen) {
+        // Skip while Soft→Gates POR is forcing Q: CLK edges during POR leave
+        // expanded COUNTER/T_FF guts unable to settle (iterations stuck at 64).
+        if (!porActive && (labActive || hasPulseGen)) {
           if (tickLabInstruments(topCircuit, flatNetMap, simState.levelOf)) {
             labChanged = true;
             flat = flatten(topCircuit, library);

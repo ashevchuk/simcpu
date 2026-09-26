@@ -57,20 +57,23 @@ describe('buildZ80Cpu — x=00, z=1, y odd: ADD HL,rr', () => {
     h: number;
     l: number;
     c: number;
+    hf: number; // flag H
+    x: number;
+    y: number;
     pc: number;
   }
   const EXPECTED: Snapshot[] = [
-    { h: 0x00, l: 0x00, c: 0, pc: 1 }, // XOR A,A
-    { h: 0x00, l: 0x00, c: 0, pc: 4 }, // LD BC,0x0203
-    { h: 0x00, l: 0x00, c: 0, pc: 7 }, // LD DE,0x0405
-    { h: 0x00, l: 0x01, c: 0, pc: 10 }, // LD HL,0x0001
-    { h: 0x02, l: 0x04, c: 0, pc: 11 }, // ADD HL,BC
-    { h: 0x06, l: 0x09, c: 0, pc: 12 }, // ADD HL,DE
-    { h: 0x0c, l: 0x12, c: 0, pc: 13 }, // ADD HL,HL
-    { h: 0x0c, l: 0x12, c: 0, pc: 16 }, // LD SP,0x00FF
-    { h: 0x0d, l: 0x11, c: 0, pc: 17 }, // ADD HL,SP
-    { h: 0xff, l: 0xff, c: 0, pc: 20 }, // LD HL,0xFFFF
-    { h: 0x02, l: 0x02, c: 1, pc: 21 }, // ADD HL,BC — overflows, C set
+    { h: 0x00, l: 0x00, c: 0, hf: 0, x: 0, y: 0, pc: 1 }, // XOR A,A
+    { h: 0x00, l: 0x00, c: 0, hf: 0, x: 0, y: 0, pc: 4 }, // LD BC,0x0203
+    { h: 0x00, l: 0x00, c: 0, hf: 0, x: 0, y: 0, pc: 7 }, // LD DE,0x0405
+    { h: 0x00, l: 0x01, c: 0, hf: 0, x: 0, y: 0, pc: 10 }, // LD HL,0x0001
+    { h: 0x02, l: 0x04, c: 0, hf: 0, x: 0, y: 0, pc: 11 }, // ADD HL,BC — hi=0x02
+    { h: 0x06, l: 0x09, c: 0, hf: 0, x: 0, y: 0, pc: 12 }, // ADD HL,DE — hi=0x06
+    { h: 0x0c, l: 0x12, c: 0, hf: 0, x: 1, y: 0, pc: 13 }, // ADD HL,HL — hi=0x0C has X
+    { h: 0x0c, l: 0x12, c: 0, hf: 0, x: 1, y: 0, pc: 16 }, // LD SP,0x00FF
+    { h: 0x0d, l: 0x11, c: 0, hf: 0, x: 1, y: 0, pc: 17 }, // ADD HL,SP — hi=0x0D has X
+    { h: 0xff, l: 0xff, c: 0, hf: 0, x: 1, y: 0, pc: 20 }, // LD HL,0xFFFF (flags hold)
+    { h: 0x02, l: 0x02, c: 1, hf: 1, x: 0, y: 0, pc: 21 }, // ADD HL,BC — C+H, hi=0x02
   ];
 
   function fromBits(bits: Level[]): number {
@@ -80,7 +83,7 @@ describe('buildZ80Cpu — x=00, z=1, y odd: ADD HL,rr', () => {
     return Array.from({ length: width }, (_, i) => ((n >> i) & 1) as 0 | 1);
   }
 
-  it('adds BC/DE/HL/SP into HL, a genuine 16-bit carry, touching only the C flag', () => {
+  it('adds BC/DE/HL/SP into HL with C/H/X/Y; S/Z/P hold', () => {
     const library = new ChipLibrary();
     const parent = new Circuit();
     const cpu = buildZ80Cpu(parent, library, ADDR_BITS, PROGRAM);
@@ -160,6 +163,9 @@ describe('buildZ80Cpu — x=00, z=1, y odd: ADD HL,rr', () => {
       h: readReg(cpu.rH.q),
       l: readReg(cpu.rL.q),
       c: readReg([cpu.f[0]!]),
+      hf: readReg([cpu.f[4]!]),
+      x: readReg([cpu.f[3]!]),
+      y: readReg([cpu.f[5]!]),
       pc: readReg(cpu.pc),
     });
 

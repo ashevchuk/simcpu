@@ -96,9 +96,16 @@ export interface SoftMemHooks {
 const FLAG_C = 0x01;
 const FLAG_N = 0x02;
 const FLAG_P = 0x04;
+const FLAG_X = 0x08;
 const FLAG_H = 0x10;
+const FLAG_Y = 0x20;
 const FLAG_Z = 0x40;
 const FLAG_S = 0x80;
+
+/** Undocumented X/Y (bits 3/5) mirrored from a result byte. */
+function xyFrom(f: number, b: number): number {
+  return (f & ~(FLAG_X | FLAG_Y)) | (b & FLAG_X) | (b & FLAG_Y);
+}
 
 type IndexReg = 'ix' | 'iy' | null;
 
@@ -779,11 +786,15 @@ function execOpcode(
   }
   if (idx && (op & 0xcf) === 0x09) {
     const p = (op >> 4) & 3;
+    const a = indexAddr(cpu, idx);
     const addend =
-      p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? indexAddr(cpu, idx) : cpu.sp;
-    const r = indexAddr(cpu, idx) + addend;
-    cpu.f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (r > 0xffff ? FLAG_C : 0);
-    setIndex(cpu, idx, r);
+      p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? a : cpu.sp;
+    const r = a + addend;
+    const res = u16(r);
+    let f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (r > 0xffff ? FLAG_C : 0);
+    f = (f & ~FLAG_H) | (((a & 0xfff) + (addend & 0xfff)) > 0xfff ? FLAG_H : 0);
+    cpu.f = xyFrom(f, res >> 8);
+    setIndex(cpu, idx, res);
     return true;
   }
   if (idx && op === 0xf9) {
@@ -910,10 +921,14 @@ function execOpcode(
   // ADD HL,rr (or ADD IX/IY,rr handled above for idx)
   if ((op & 0xcf) === 0x09) {
     const p = (op >> 4) & 3;
-    const addend = p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? hl(cpu) : cpu.sp;
-    const r = hl(cpu) + addend;
-    cpu.f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (r > 0xffff ? FLAG_C : 0);
-    setHl(cpu, r);
+    const a = hl(cpu);
+    const addend = p === 0 ? bc(cpu) : p === 1 ? de(cpu) : p === 2 ? a : cpu.sp;
+    const r = a + addend;
+    const res = u16(r);
+    let f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (r > 0xffff ? FLAG_C : 0);
+    f = (f & ~FLAG_H) | (((a & 0xfff) + (addend & 0xfff)) > 0xfff ? FLAG_H : 0);
+    cpu.f = xyFrom(f, res >> 8);
+    setHl(cpu, res);
     return true;
   }
 
@@ -1090,46 +1105,48 @@ function execOpcode(
     return true;
   }
 
-  // RRCA / RLCA / RRA / RLA
+  // RRCA / RLCA / RRA / RLA — H/N cleared; X/Y from A after rotate; S/Z/P hold
   if (op === 0x0f) {
     const c = cpu.a & 1;
     cpu.a = u8((cpu.a >> 1) | (c << 7));
-    cpu.f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (c ? FLAG_C : 0);
+    cpu.f = xyFrom((cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (c ? FLAG_C : 0), cpu.a);
     return true;
   }
   if (op === 0x07) {
     const c = (cpu.a >> 7) & 1;
     cpu.a = u8((cpu.a << 1) | c);
-    cpu.f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (c ? FLAG_C : 0);
+    cpu.f = xyFrom((cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (c ? FLAG_C : 0), cpu.a);
     return true;
   }
   if (op === 0x1f) {
     const c = cpu.a & 1;
     const oldC = cpu.f & FLAG_C ? 1 : 0;
     cpu.a = u8((cpu.a >> 1) | (oldC << 7));
-    cpu.f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (c ? FLAG_C : 0);
+    cpu.f = xyFrom((cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (c ? FLAG_C : 0), cpu.a);
     return true;
   }
   if (op === 0x17) {
     const c = (cpu.a >> 7) & 1;
     const oldC = cpu.f & FLAG_C ? 1 : 0;
     cpu.a = u8((cpu.a << 1) | oldC);
-    cpu.f = (cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (c ? FLAG_C : 0);
+    cpu.f = xyFrom((cpu.f & ~(FLAG_C | FLAG_N | FLAG_H)) | (c ? FLAG_C : 0), cpu.a);
     return true;
   }
 
-  // SCF / CCF / CPL / DAA
+  // SCF / CCF / CPL / DAA — X/Y from A (after ~ for CPL; unchanged for SCF/CCF)
   if (op === 0x37) {
-    cpu.f = (cpu.f & ~(FLAG_N | FLAG_H)) | FLAG_C;
+    cpu.f = xyFrom((cpu.f & ~(FLAG_N | FLAG_H)) | FLAG_C, cpu.a);
     return true;
   }
   if (op === 0x3f) {
-    cpu.f = (cpu.f & ~(FLAG_N | FLAG_H)) ^ FLAG_C;
+    // H ← old C before toggle; N ← 0; C ← ~C
+    const oldC = cpu.f & FLAG_C;
+    cpu.f = xyFrom((cpu.f & ~(FLAG_N | FLAG_H | FLAG_C)) | (oldC ? FLAG_H : 0) | (oldC ? 0 : FLAG_C), cpu.a);
     return true;
   }
   if (op === 0x2f) {
     cpu.a = u8(~cpu.a);
-    cpu.f = cpu.f | FLAG_N | FLAG_H;
+    cpu.f = xyFrom(cpu.f | FLAG_N | FLAG_H, cpu.a);
     return true;
   }
   if (op === 0x27) return true;
@@ -1229,6 +1246,8 @@ export function softAcceptIrq(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMe
   cpu.halted = false;
   cpu.iff1 = false;
   cpu.iff2 = false;
+  // Thin INTACK: one R bump for all IM modes (silicon M1 acknowledge), before push.
+  bumpR(cpu);
   pushReturn(cpu, ram, cpu.pc, hooks);
   if (cpu.im === 1) {
     cpu.pc = uAddr(0x0038, hooks);
@@ -1239,9 +1258,8 @@ export function softAcceptIrq(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMe
     const hi = memRead(ram, (vec + 1) & 0xffff, hooks);
     cpu.pc = uAddr(lo | (hi << 8), hooks);
   } else {
-    // IM 0: sample data bus as an inserted opcode (bumpR once, then dispatch).
+    // IM 0: sample data bus as an inserted opcode (R already bumped above).
     const op = (hooks.irqBusByte?.() ?? 0xff) & 0xff;
-    bumpR(cpu);
     softExecOp(cpu, ram, op, hooks);
   }
   hooks.clearIrq?.();
