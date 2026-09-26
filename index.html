@@ -691,7 +691,14 @@
       .la-channels { display: flex; flex-direction: column; gap: 2px; font: 11px ui-monospace, monospace; }
       .la-channel-row { display: flex; justify-content: space-between; align-items: center; }
       .la-channel-row button { background: transparent; border: none; color: var(--text-dim); cursor: pointer; }
-      .la-canvas { width: 100%; background: #0e1016; border: 1px solid var(--border); border-radius: 4px; }
+      .la-canvas {
+        width: 100%;
+        flex: 1 1 auto;
+        min-height: 120px;
+        background: #0e1016;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+      }
       .machine-panel-header {
         display: flex;
         align-items: baseline;

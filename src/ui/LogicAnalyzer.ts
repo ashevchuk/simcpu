@@ -13,8 +13,10 @@ export type Sample = 0 | 1 | 'Z';
 const MAX_SAMPLES = 4096;
 const ROW_H = 28;
 const LABEL_W = 72;
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 32;
+/** Horizontal scale: CSS pixels per sample (not "fit all"). */
+const MIN_PX_PER_SAMPLE = 0.35;
+const MAX_PX_PER_SAMPLE = 32;
+const DEFAULT_PX_PER_SAMPLE = 3;
 
 interface Capture {
   samples: Sample[][];
@@ -55,13 +57,16 @@ export class LogicAnalyzer {
   /** Second cursor (shift-click); Δt vs cursor A. */
   private cursorBSample: number | null = null;
   onCursorChange: (() => void) | null = null;
-  /** Horizontal zoom: 1 = fit all samples, higher = fewer samples across plot. */
-  private hZoom = 1;
-  /** Leftmost visible sample index when zoomed. */
+  /** CSS pixels per sample — history keeps a fixed density; pan/scroll to browse. */
+  private pxPerSample = DEFAULT_PX_PER_SAMPLE;
+  /** Leftmost visible sample index. */
   private hScroll = 0;
+  /** When true, keep the view pinned to the newest samples while armed. */
+  private followLive = true;
   /** Optional clock period (frames) for rough time readout. */
   private timebaseFrames: number | null = null;
   private panDrag: { startX: number; startScroll: number } | null = null;
+  private resizeObserver: ResizeObserver | null = null;
 
   constructor() {
     this.win = new FloatingWindow('Logic Analyzer', 'logic-analyzer');
@@ -85,7 +90,7 @@ export class LogicAnalyzer {
           </select>
         </label>
       </div>
-      <div class="la-note">Wire nets into CH pins. Wheel zoom · drag pan when zoomed. Click cursor A · Shift-click cursor B.</div>
+      <div class="la-note">Wire nets into CH pins. Wheel zoom density · drag / Shift+wheel pan · follows live unless you scroll back. Click cursor A · Shift-click B.</div>
       <canvas class="la-canvas" width="420" height="120"></canvas>
       <div class="lab-panel-status">Place Analyzer · wire channels · Arm</div>
     `;
@@ -95,6 +100,7 @@ export class LogicAnalyzer {
     this.triggerChSel = this.root.querySelector('[data-act="trig-ch"]')!;
     this.triggerEdgeSel = this.root.querySelector('[data-act="trig-edge"]')!;
     this.canvas.style.width = '100%';
+    this.canvas.style.flex = '1 1 auto';
     this.canvas.style.minHeight = '120px';
     this.canvas.style.cursor = 'crosshair';
     const ctx = this.canvas.getContext('2d');
@@ -119,8 +125,13 @@ export class LogicAnalyzer {
       { passive: false },
     );
     this.canvas.addEventListener('mousedown', (ev) => {
-      if (ev.button !== 0 || this.hZoom <= 1) return;
+      if (ev.button !== 0) return;
+      const cap = this.device ? this.ensureCapture(this.device) : null;
+      if (!cap || cap.count === 0) return;
+      const { visible } = this.visibleWindow(cap.count);
+      if (cap.count <= visible) return;
       this.panDrag = { startX: ev.offsetX, startScroll: this.hScroll };
+      this.followLive = false;
       this.canvas.style.cursor = 'grabbing';
       ev.preventDefault();
     });
@@ -131,7 +142,7 @@ export class LogicAnalyzer {
       const plotW = Math.max(1, (this.canvas.clientWidth || 420) - LABEL_W - 8);
       const cap = this.device ? this.ensureCapture(this.device) : null;
       if (!cap || cap.count === 0) return;
-      const visible = Math.max(2, Math.ceil(cap.count / this.hZoom));
+      const { visible } = this.visibleWindow(cap.count, plotW);
       const dx = x - this.panDrag.startX;
       const dSamples = Math.round((-dx / plotW) * visible);
       this.hScroll = this.clampScroll(this.panDrag.startScroll + dSamples, cap.count, visible);
@@ -140,8 +151,34 @@ export class LogicAnalyzer {
     window.addEventListener('mouseup', () => {
       if (!this.panDrag) return;
       this.panDrag = null;
-      this.canvas.style.cursor = this.hZoom > 1 ? 'grab' : 'crosshair';
+      this.syncFollowFromScroll();
+      this.updateCanvasCursor();
     });
+    this.resizeObserver = new ResizeObserver(() => {
+      if (this.win.visible && this.device) this.draw();
+    });
+    this.resizeObserver.observe(this.win.root);
+  }
+
+  private plotWidth(): number {
+    return Math.max(1, (this.canvas.clientWidth || 420) - LABEL_W - 8);
+  }
+
+  private updateCanvasCursor(): void {
+    if (!this.device) {
+      this.canvas.style.cursor = 'crosshair';
+      return;
+    }
+    const cap = this.ensureCapture(this.device);
+    const { visible } = this.visibleWindow(cap.count);
+    this.canvas.style.cursor = cap.count > visible ? 'grab' : 'crosshair';
+  }
+
+  private syncFollowFromScroll(): void {
+    if (!this.device) return;
+    const cap = this.ensureCapture(this.device);
+    const { start, visible } = this.visibleWindow(cap.count);
+    this.followLive = start + visible >= cap.count;
   }
 
   get attachedDevice(): AnalyzerComponent | null {
@@ -184,8 +221,11 @@ export class LogicAnalyzer {
     this.updateStatus();
   }
 
-  private visibleWindow(count: number): { start: number; visible: number } {
-    const visible = Math.max(2, Math.min(count, Math.ceil(count / this.hZoom)));
+  private visibleWindow(count: number, plotW = this.plotWidth()): { start: number; visible: number } {
+    const visible = Math.max(2, Math.min(count, Math.max(2, Math.floor(plotW / this.pxPerSample))));
+    if (this.followLive) {
+      this.hScroll = Math.max(0, count - visible);
+    }
     const start = this.clampScroll(this.hScroll, count, visible);
     return { start, visible };
   }
@@ -199,9 +239,8 @@ export class LogicAnalyzer {
     if (!this.device) return;
     const cap = this.ensureCapture(this.device);
     if (cap.count === 0) return;
-    const cssW = this.canvas.clientWidth || 420;
-    const plotW = cssW - LABEL_W - 8;
-    const { start, visible } = this.visibleWindow(cap.count);
+    const plotW = this.plotWidth();
+    const { start, visible } = this.visibleWindow(cap.count, plotW);
     const frac =
       plotW > 0 && ev.offsetX >= LABEL_W
         ? Math.max(0, Math.min(1, (ev.offsetX - LABEL_W) / plotW))
@@ -210,14 +249,25 @@ export class LogicAnalyzer {
 
     if (ev.shiftKey) {
       const step = Math.max(1, Math.round(visible * 0.1));
+      this.followLive = false;
       this.hScroll = this.clampScroll(this.hScroll + (ev.deltaY > 0 ? step : -step), cap.count, visible);
+      this.syncFollowFromScroll();
     } else {
       const factor = ev.deltaY > 0 ? 1 / 1.25 : 1.25;
-      this.hZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.hZoom * factor));
-      const next = this.visibleWindow(cap.count);
-      this.hScroll = this.clampScroll(Math.round(focus - frac * (next.visible - 1)), cap.count, next.visible);
+      this.pxPerSample = Math.max(
+        MIN_PX_PER_SAMPLE,
+        Math.min(MAX_PX_PER_SAMPLE, this.pxPerSample * factor),
+      );
+      const next = this.visibleWindow(cap.count, plotW);
+      this.followLive = false;
+      this.hScroll = this.clampScroll(
+        Math.round(focus - frac * (next.visible - 1)),
+        cap.count,
+        next.visible,
+      );
+      this.syncFollowFromScroll();
     }
-    this.canvas.style.cursor = this.hZoom > 1 ? 'grab' : 'crosshair';
+    this.updateCanvasCursor();
     this.draw();
   }
 
@@ -229,14 +279,13 @@ export class LogicAnalyzer {
   private onCanvasClick(ev: MouseEvent): void {
     if (!this.device || this.panDrag) return;
     const cap = this.ensureCapture(this.device);
-    const cssW = this.canvas.clientWidth || 420;
-    const plotW = cssW - LABEL_W - 8;
+    const plotW = this.plotWidth();
     const x = ev.offsetX;
     if (cap.count === 0 || x < LABEL_W || plotW <= 0) {
       this.cursorSample = null;
       this.cursorBSample = null;
     } else {
-      const { start, visible } = this.visibleWindow(cap.count);
+      const { start, visible } = this.visibleWindow(cap.count, plotW);
       const t = Math.max(0, Math.min(1, (x - LABEL_W) / plotW));
       const sample = Math.round(start + t * Math.max(0, visible - 1));
       if (ev.shiftKey) this.cursorBSample = sample;
@@ -289,11 +338,13 @@ export class LogicAnalyzer {
     }
     this.syncTriggerUi();
     this.ensureCapture(device);
-    this.metaNote.textContent = `${device.channelCount} channels · wheel zoom · optional edge trigger`;
+    this.metaNote.textContent = `${device.channelCount} channels · fixed density · scroll history · optional edge trigger`;
     this.win.setTitle('Logic Analyzer', `${device.channelCount} ch`);
     this.root.querySelector('[data-act="run"]')!.classList.toggle('active', device.armed);
+    this.followLive = true;
     this.updateStatus();
     this.win.setVisible(true);
+    this.updateCanvasCursor();
     this.draw();
   }
 
@@ -354,8 +405,9 @@ export class LogicAnalyzer {
     cap.count = 0;
     this.cursorSample = null;
     this.cursorBSample = null;
-    this.hZoom = 1;
+    this.pxPerSample = DEFAULT_PX_PER_SAMPLE;
     this.hScroll = 0;
+    this.followLive = true;
     for (const buf of cap.samples) buf.fill('Z');
     this.device.lastSample = undefined;
     this.draw();
@@ -378,7 +430,11 @@ export class LogicAnalyzer {
     parts.push(this.device.armed ? 'armed — sampling' : 'paused');
     if (cap.count > 0) {
       parts.push(`${cap.count} samples`);
-      if (this.hZoom > 1.01) parts.push(`zoom ×${this.hZoom.toFixed(1)}`);
+      const { start, visible } = this.visibleWindow(cap.count);
+      parts.push(`${this.pxPerSample.toFixed(1)} px/samp`);
+      if (cap.count > visible) {
+        parts.push(this.followLive ? 'follow' : `view ${start}–${start + visible - 1}`);
+      }
       if (this.cursorSample != null) parts.push(`A ${this.formatTime(this.cursorSample)}`);
       if (this.cursorBSample != null) parts.push(`B ${this.formatTime(this.cursorBSample)}`);
       if (this.cursorSample != null && this.cursorBSample != null) {
@@ -452,10 +508,10 @@ export class LogicAnalyzer {
     const dpr = window.devicePixelRatio || 1;
     const nCh = this.device.channelCount;
     const cssW = this.canvas.clientWidth || 420;
-    const cssH = Math.max(80, nCh * ROW_H + 16);
+    const minH = Math.max(80, nCh * ROW_H + 16);
+    const cssH = Math.max(minH, this.canvas.clientHeight || minH);
     this.canvas.width = Math.round(cssW * dpr);
     this.canvas.height = Math.round(cssH * dpr);
-    this.canvas.style.height = `${cssH}px`;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const ctx = this.ctx;
@@ -503,14 +559,14 @@ export class LogicAnalyzer {
       this.drawCursorLine(this.cursorBSample, start, end, visible, plotW, cssH, '#7ee787', 'B');
     }
 
-    // Scroll position hint when zoomed
-    if (this.hZoom > 1.01 && n > visible) {
+    // Scroll thumb whenever history overflows the view (not only when "zoomed").
+    if (n > visible) {
       const barW = plotW;
       const thumbW = Math.max(8, (visible / n) * barW);
       const thumbX = LABEL_W + (start / Math.max(1, n - visible)) * (barW - thumbW);
       ctx.fillStyle = 'rgba(154, 161, 179, 0.35)';
       ctx.fillRect(LABEL_W, cssH - 4, barW, 3);
-      ctx.fillStyle = '#4da3ff';
+      ctx.fillStyle = this.followLive ? '#7ee787' : '#4da3ff';
       ctx.fillRect(thumbX, cssH - 4, thumbW, 3);
     }
 

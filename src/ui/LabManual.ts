@@ -358,7 +358,9 @@ const SECTIONS: Section[] = [
       '  • Arm — start sampling while the sim runs (toolbar Run; clocks/buttons tick).\n' +
       '  • Pause / Clear — stop or wipe the buffer.\n' +
       '  • Trig + Edge — optional rise/fall/either on one channel (none = free-run).\n' +
-      '  • Wheel zoom · drag pan when zoomed · click cursor A · Shift-click cursor B.\n' +
+      '  • Wheel — zoom sample density (history keeps width; does not crush into the window).\n' +
+      '  • Drag / Shift+wheel — pan through the buffer; view follows live until you scroll back.\n' +
+      '  • Resize the floating window (corner handle) · click cursor A · Shift-click cursor B.\n' +
       '  • Export CSV / VCD / PNG from the toolbar.\n\n' +
       'Tips:\n' +
       '  • Clock-lock Hz appears when a channel shares a net with a free-running pulse gen.\n' +

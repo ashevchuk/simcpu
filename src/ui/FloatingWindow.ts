@@ -34,6 +34,15 @@ function ensureStyles(): void {
       max-height: min(94vh, 960px);
       resize: both;
     }
+    .float-win.logic-analyzer {
+      width: min(96vw, 640px);
+      height: min(70vh, 480px);
+      min-width: 360px;
+      min-height: 240px;
+      max-width: min(98vw, 1100px);
+      max-height: min(94vh, 900px);
+      resize: both;
+    }
     .float-win.machine-panel {
       width: min(96vw, 860px);
       height: min(92vh, 820px);
@@ -64,7 +73,8 @@ function ensureStyles(): void {
       box-shadow: 4px 0 24px rgba(0, 0, 0, 0.45);
     }
     .float-win.memory-editor .float-win-body,
-    .float-win.machine-panel .float-win-body {
+    .float-win.machine-panel .float-win-body,
+    .float-win.logic-analyzer .float-win-body {
       display: flex;
       flex-direction: column;
       gap: 8px;
