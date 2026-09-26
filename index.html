@@ -196,8 +196,10 @@
         position: absolute;
         left: calc(100% - 2px);
         top: -6px;
-        min-width: 260px;
-        max-width: 340px;
+        min-width: 280px;
+        max-width: 360px;
+        max-height: min(70vh, 560px);
+        overflow-y: auto;
         padding: 6px 0;
         background: #171a22;
         border: 1px solid #303646;
@@ -1391,16 +1393,16 @@
             <button type="button" class="menu-item" id="import-project" title="Replace everything with a project JSON file">
               Import project…
             </button>
-            <button type="button" class="menu-item" id="open-examples" title="Load a built-in demo schematic (project JSON)">
-              Open examples…
-            </button>
             <div class="menu-sep"></div>
             <div class="menu-sub" data-submenu="demo">
-              <button type="button" class="menu-item menu-sub-trigger" title="Ready-to-run machines and lab demos">
+              <button type="button" class="menu-item menu-sub-trigger" title="Digital schematics, Soft Lab I/O machines, and Spectrum">
                 Demo<span class="kbd">▸</span>
               </button>
               <div class="menu-sub-panel">
-                <div class="menu-section">Lab I/O</div>
+                <div class="menu-section">Digital</div>
+                <div id="demo-digital-list"></div>
+                <div class="menu-sep"></div>
+                <div class="menu-section">Lab I/O (Z80 Soft)</div>
                 <button type="button" class="menu-item" id="add-led-blink" title="Z80 + LED blink demo ROM (OUT port 0x40 → canvas LED)">
                   LED blink…<span class="item-desc">OUT 0x40 → lab LED</span>
                 </button>

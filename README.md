@@ -228,7 +228,7 @@ Serve locally: `npx --yes serve dist-file -l 4173`.
 ### Sessions
 
 - Autosave into browser session slots (**File → Switch / New / Rename session**).
-- **File → Open examples…** or URL `#e=id`. **File → Copy share link** → `#p=…`.
+- **File → Demo ▸** (Digital / Lab I/O / Spectrum) or URL `#e=id`. **File → Copy share link** → `#p=…`.
 - Export/import project or chip JSON; **Export PNG… / SVG…**.
 
 Full shortcut list: press **`?`** or Help → Keyboard shortcuts….

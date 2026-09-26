@@ -105,7 +105,8 @@ const SECTIONS: Section[] = [
       '  • Export project… — download top circuit + all chip defs as one JSON.\n' +
       '  • Copy share link — clipboard URL with #p=… (open to load; confirms if canvas not empty).\n' +
       '  • Import project… — replace the whole session from JSON.\n' +
-      '  • Open examples… — built-in demos (#e=id). Empty canvas skips confirm for #e=/#p=.\n\n' +
+      '  • Demo ▸ — Digital schematics (gates / Soft Lab / ROM, also `#e=id`), Lab I/O Soft machines, Spectrum.\n' +
+      '    Empty canvas skips confirm for #e=/#p=.\n\n' +
       'Chips:\n' +
       '  • Export chip… — select one chip instance → download its def + dependencies.\n' +
       '  • Export selection as chip… (Ctrl+Shift+E) — fold selection and download JSON.\n' +
@@ -396,7 +397,7 @@ const SECTIONS: Section[] = [
       '  Real R/W array. Read: OE=1. Write: present data, WE=1 on rising CLK (check Inspector).\n' +
       '  Memory editor: Assemble → @ / Assemble + Go / live Disasm from cursor.\n\n' +
       'Soft Lab also has SOFT_RAM16 (Library → Lab) — Soft Lab ON only; see Buses / Soft RAM.\n\n' +
-      'Example: File → Open examples… → ROM viewer, or #e=rom-viewer.',
+      'Example: File → Demo → Digital → ROM viewer, or #e=rom-viewer.',
     figures: [
       { src: img38, caption: 'rom-viewer — ROM on the schematic with drivers/probes.' },
       { src: img32, caption: 'Insert → ROM… / Stub ROM… / RAM…' },
@@ -569,7 +570,7 @@ const SECTIONS: Section[] = [
     id: 'examples',
     title: 'Examples catalog',
     body:
-      'File → Open examples… / #e=<id>\n\n' +
+      'File → Demo → Digital / #e=<id>\n\n' +
       'Foundations: cmos-inverter, nand-gate, and-gate, half-adder, d-latch, xor-pulse, rom-viewer\n' +
       'Soft Lab: lab-counter-7seg, lab-counter-cascade, lab-adder4, lab-alu4, lab-alu8, lab-soft-ram,\n' +
       '  lab-contend-bus, lab-mini-cpu, lab-sipo, lab-piso, lab-decoder, lab-encoder, lab-comp,\n' +

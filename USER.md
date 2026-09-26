@@ -35,7 +35,7 @@ A transistor-level schematic editor with live simulation, foldable chips, Soft L
 ## Sessions & examples
 
 - Work autosaves into browser session slots (File → Switch / New / Rename session). If another tab saved the same slot, the status shows **Changed elsewhere** — click it for Restore local / Load other / Export.
-- **File → Open examples…** loads built-in demos (`#e=id`). Empty canvas skips confirm for `#e=` / `#p=`.
+- **File → Demo ▸ Digital** loads built-in schematics (`#e=id`). Empty canvas skips confirm for `#e=` / `#p=`.
 - **Help → Lab course…** opens a checklist panel (checkboxes + Next/Prev, saved in the session). Opening a curriculum example from elsewhere syncs the panel step if it is visible.
 - Soft Lab chips: Inspector **Diff soft vs silicon** snapshots Soft `q`, expands transistors, settles, and reports matching / diff bits.
 - Select a **bus switch** + chip → context **Ribbon bus switch → chip** (wires `bN` → `aN`/`dN`/…).

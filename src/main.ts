@@ -6,7 +6,7 @@ import { replaceLongWiresWithLabels } from './sim/labelWires.js';
 import { circuitHasPulseGen, circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
 import { flatten, fold, foldPortWarnings, forkChipInstance, unfold } from './sim/hierarchy.js';
 import { buildNot, makeButton, makeBusProbe, makeInput, makeLabel, makeLed, makeChipInstance, makePort, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
-import { EXAMPLE_PROJECTS } from './examples/catalog.js';
+import { EXAMPLE_PROJECTS, type ExampleGroup } from './examples/catalog.js';
 import {
   deserializeProject,
   importChipDef,
@@ -1971,28 +1971,39 @@ async function openLabCourse(startIndex = 0): Promise<void> {
   labCoursePanel.showStep(startIndex);
 }
 
-async function openExampleProject(): Promise<void> {
-  const pick = await showChoice(
-    'Open example',
-    EXAMPLE_PROJECTS.map((ex) => ({
-      value: ex.id,
-      label: ex.title,
-      detail: `${ex.detail} · #e=${ex.id}`,
-    })),
-  );
-  if (!pick || pick.action === 'delete') return;
-  const ok = await loadExampleById(pick.value, true);
-  if (ok && pick.value === 'd-latch') {
-    await showAlert(
-      'Latch walkthrough:\n\n' +
-        '1. Toggle D (data) with the select tool.\n' +
-        '2. Pulse or hold Enable so Q follows D.\n' +
-        '3. Release Enable — Q holds the last value.\n' +
-        '4. Double-click the chip to dive into its gates.\n\n' +
-        'Press ? for keyboard shortcuts.',
-    );
+/** File → Demo → Digital: every EXAMPLE_PROJECTS entry (gates / Soft Lab, no Z80). */
+function populateDigitalDemoMenu(): void {
+  const host = document.getElementById('demo-digital-list');
+  if (!host) return;
+  host.replaceChildren();
+  const groups: ExampleGroup[] = ['Basics', 'Soft Lab', 'Memory'];
+  for (const group of groups) {
+    const items = EXAMPLE_PROJECTS.filter((ex) => ex.group === group);
+    if (items.length === 0) continue;
+    const head = document.createElement('div');
+    head.className = 'menu-section';
+    head.textContent = group;
+    host.appendChild(head);
+    for (const ex of items) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'menu-item';
+      btn.dataset.exampleId = ex.id;
+      btn.title = `${ex.detail} (#e=${ex.id})`;
+      btn.appendChild(document.createTextNode(ex.title));
+      const desc = document.createElement('span');
+      desc.className = 'item-desc';
+      desc.textContent = ex.detail;
+      btn.appendChild(desc);
+      btn.addEventListener('click', () => {
+        void loadExampleById(ex.id);
+      });
+      host.appendChild(btn);
+    }
   }
 }
+
+populateDigitalDemoMenu();
 
 async function openLatchTutorial(): Promise<void> {
   if (!(await loadExampleById('d-latch', true))) return;
@@ -2047,7 +2058,6 @@ async function startButtonLedTutorial(): Promise<void> {
   uiDirty = true;
 }
 
-document.getElementById('open-examples')?.addEventListener('click', () => void openExampleProject());
 document.getElementById('help-cheatsheet')?.addEventListener('click', () => toggleCheatSheet());
 document.getElementById('help-lab-manual')?.addEventListener('click', () => labManual.open());
 document.getElementById('help-tutorial')?.addEventListener('click', () => {
