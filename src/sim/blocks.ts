@@ -1196,7 +1196,7 @@ export interface Z80Cpu {
   aP: Register; // A' — real Z80's own shadow accumulator, same *seed*-path contract as rB..rL: external d/we seed its first value, EX AF,AF' drives it internally from then on (see "x=00: EX AF,AF'")
   fP: Register; // F' — A''s own shadow flags, identical contract
   rI: Pin[]; // I — interrupt vector base (q only); LD I,A / LD A,I (see "x=01, z=7, y=0..3"). No external seed — program `LD I,A` is the write path (avoids a floating we on every pre-existing test).
-  rR: Pin[]; // R — refresh counter (q only); LD R,A / LD A,R. Same contract; not auto-incremented on M1 (Known Simplifications).
+  rR: Pin[]; // R — refresh counter (q only); LD R,A / LD A,R. Soft bumps R on M1; gate does not yet (Known Simplifications).
   rIXH: Register; // IX high — seed-path contract like rB; DD LD IX,nn / POP IX write internally (see "DD: IX")
   rIXL: Register; // IX low — same contract
   rIYH: Register; // IY high — seed-path contract like rIXH; FD LD IY,nn / POP IY write internally (see "FD: IY")
@@ -2350,7 +2350,7 @@ function buildZ80CpuInner(
   // I/R — real Z80's interrupt-vector and refresh registers. Built here
   // alongside the other CPU state; `LD I,A`/`LD R,A`/`LD A,I`/`LD A,R`
   // (see "x=01, z=7, y=0..3" below) are the only ops that touch them.
-  // No auto-increment of R on FETCH. P/V on LD A,I/R copies IFF2 (soft parity).
+  // No auto-increment of R on FETCH yet (soft bumps R on each M1). P/V on LD A,I/R copies IFF2 (soft parity).
   // NMI / IM0 / IM2 remain Known Simplifications.
   const regI = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 3800 });
   const regR = buildRegister(parent, library, 8, { x: pos.x + 2600, y: pos.y + 4600 });
@@ -5626,11 +5626,9 @@ function buildZ80CpuInner(
   const hlMemTemp = buildRegister(parent, library, 8, { x: pos.x - 700, y: pos.y - 6200 });
   // INC/DEC (HL) read OR CB BIT (HL) read — mutually exclusive by
   // NOT_PREFIX_ACTIVE vs isCbActive; share one holding register.
-  const hlMemTempWe = buildOr(parent, { x: pos.x - 750, y: pos.y - 6220 });
-  wire(parent, hlMemReadNow.out, hlMemTempWe.a);
-  tiePowerRail(parent, 'GND', hlMemTempWe.b); // never leave OR inputs floating (found live)
+  // (Former OR(hlMemReadNow, GND) identity stub removed — wire straight in.)
   const hlMemTempWe2 = buildOr(parent, { x: pos.x - 720, y: pos.y - 6220 });
-  wire(parent, hlMemTempWe.out, hlMemTempWe2.a);
+  wire(parent, hlMemReadNow.out, hlMemTempWe2.a);
   tieToLabel('BIT_HL_READ_NOW', hlMemTempWe2.b, { x: pos.x - 850, y: pos.y - 6220 });
   const hlMemTempWe3 = buildOr(parent, { x: pos.x - 690, y: pos.y - 6220 });
   wire(parent, hlMemTempWe2.out, hlMemTempWe3.a);
@@ -9335,10 +9333,8 @@ function buildZ80CpuInner(
   const iff1We3 = buildOr(parent, { x: pos.x + 12300, y: pos.y - 820 });
   wire(parent, iff1We2.out, iff1We3.a);
   tieToLabel('RETI_NOW', iff1We3.b, { x: pos.x + 12200, y: pos.y - 800 });
-  const iff1WeFinal = buildOr(parent, { x: pos.x + 12400, y: pos.y - 820 });
-  wire(parent, iff1We3.out, iff1WeFinal.a);
-  tiePowerRail(parent, 'GND', iff1WeFinal.b); // no external seed — EI/DI/accept/RETI only (same as I/R)
-  wire(parent, iff1WeFinal.out, iff1.we);
+  // No OR(..., GND) identity — EI/DI/accept/RETI only (same as I/R).
+  wire(parent, iff1We3.out, iff1.we);
   tiePowerRail(parent, 'GND', iff1SeedD);
 
   const iff2Clear = buildOr(parent, { x: pos.x + 12100, y: pos.y - 700 });
@@ -9359,10 +9355,7 @@ function buildZ80CpuInner(
   const iff2We2 = buildOr(parent, { x: pos.x + 12200, y: pos.y - 620 });
   wire(parent, iff2We1.out, iff2We2.a);
   tieToLabel('INT_ACCEPT_NOW', iff2We2.b, { x: pos.x + 12100, y: pos.y - 600 });
-  const iff2WeFinal = buildOr(parent, { x: pos.x + 12300, y: pos.y - 620 });
-  wire(parent, iff2We2.out, iff2WeFinal.a);
-  tiePowerRail(parent, 'GND', iff2WeFinal.b);
-  wire(parent, iff2WeFinal.out, iff2.we);
+  wire(parent, iff2We2.out, iff2.we);
   tiePowerRail(parent, 'GND', iff2SeedD);
 
   const im1Mux = makeChipInstance(parent, muxDef, { x: pos.x + 12200, y: pos.y - 500 });
@@ -9370,10 +9363,7 @@ function buildZ80CpuInner(
   const im1SeedD = im1Mux.pins[muxDef.ports[1]!]!;
   tiePowerRail(parent, 'VCC', im1Mux.pins[muxDef.ports[2]!]!);
   wire(parent, im1Mux.pins[muxDef.ports[3]!]!, im1.d[0]!);
-  const im1WeFinal = buildOr(parent, { x: pos.x + 12300, y: pos.y - 500 });
-  tieToLabel('IM1_NOW', im1WeFinal.a, { x: pos.x + 12200, y: pos.y - 500 });
-  tiePowerRail(parent, 'GND', im1WeFinal.b);
-  wire(parent, im1WeFinal.out, im1.we);
+  tieToLabel('IM1_NOW', im1.we, { x: pos.x + 12200, y: pos.y - 500 });
   tiePowerRail(parent, 'GND', im1SeedD);
 
   // INC r/DEC r (x=00, z=4/z=5 — see the doc comment above) needs a

@@ -3130,8 +3130,9 @@ excluded signal everything downstream keeps using unchanged).
 **Deliberately not modeled**: a prefix immediately following another
 (real hardware treats that as a restart) — this project's one-shot
 "prefix, then real opcode" shape does not restart. Nested `DD CB d op` /
-`FD CB d op` *are* partially modeled (BIT only — see "DD CB / FD CB"
-below). `isEdActive` was the first of the four prefix bits to get a
+`FD CB d op` are modeled for BIT / SET/RES / rot on `(IX+d)`/`(IY+d)`
+(see "DD CB / FD CB" below; undocumented `z≠6` stays out of scope).
+`isEdActive` was the first of the four prefix bits to get a
 label (LDI); `isCbActive` followed for `BIT`; `isDdActive` is labeled
 for the IX slice below. `isFdActive` is labeled for the IY slice below.
 
@@ -4008,14 +4009,12 @@ software writes them only via `LD I,A` / `LD R,A`.
 **Single `PHASE4` after the ED prefix:** `LD I,A`/`LD R,A` commit `A`
 into `I`/`R` via `wrapWithPairCommit` (no flags). `LD A,I`/`LD A,R`
 commit into `A` and refresh every flag bit but `C` — `S`/`Z`/`X`/`Y` off
-the transferred byte, `H`/`N` forced 0, **`P/V` forced 0**. Real Z80
-copies `IFF2` into `P/V` here; this project still leaves that bit forced
-0 (Known Simplifications) even though `IFF2` now exists for thin IM1 IRQ.
-`R` is also not auto-incremented on FETCH/`M1` — plain software-visible
-storage until a refresh model exists.
+the transferred byte, `H`/`N` forced 0, **`P/V←IFF2`** (soft↔gate parity;
+verified in `z80cpu-ld-i-r.test.ts`). Soft also auto-increments `R` on each
+M1/`fetch`; the gate CPU still leaves `R` as plain software-visible storage
+until a refresh model exists (Known Simplifications).
 
-Verified with one dedicated round-trip test (`z80cpu-ld-i-r.test.ts`) —
-before the full suite.
+Verified with `z80cpu-ld-i-r.test.ts` — before the full suite.
 
 ### Thin IM1 IRQ
 
@@ -4026,8 +4025,10 @@ bus cycle, no IM0/IM2, no NMI/`RETN`.
 external seed; `CPU_RESET` clears them to 0). External INT is an internal
 `Input` defaulting to 0 (`cpu.intDrive.value` raises it).
 
-**`EI`/`DI`** (`0xFB`/`0xF3`, `x=11 z=3 y=7/6`): `PHASE2` sets/clears both
-IFFs. No one-instruction EI delay (Known Simplifications).
+**`EI`/`DI`** (`0xFB`/`0xF3`, `x=11 z=3 y=7/6`): `DI` clears both IFFs on
+`PHASE2`. Soft-parity **EI delay**: `EI` arms a pending latch; IFF1/IFF2
+set on `PHASE2` of the *following* instruction (`EI_COMMIT`), so INT cannot
+interrupt that following instruction.
 
 **`IM 1`** (`ED 0x56`): `PHASE4` sets the mode latch. Other `IM` encodings
 stay inert.
@@ -4041,7 +4042,10 @@ PC and jumps to `0x38`.
 **`RETI`** (`ED 0x4D`): same stack-pop/PC-capture as `RET` (widened
 `readNow` / `retMux`), plus `IFF1←IFF2` on `PHASE4`.
 
-Verified with `z80cpu-irq-im1.test.ts`. `DD`/`FD` remain next.
+Verified with `z80cpu-irq-im1.test.ts`. Soft↔gate EI delay and HALT latch
+parity: `soft-gate-ei-halt.test.ts`. Remaining IRQ gaps (no INTACK, no
+IM0/IM2, no NMI/`RETN`, no `R` auto-increment on M1) stay Known
+Simplifications.
 
 ### CB x=01: BIT y,r / BIT y,(HL)
 
@@ -4833,13 +4837,13 @@ section's own success story.
   machinery unchanged (`dec.y` alone selects the operation, never
   `dec.x`). `DI`/`EI` (`x=11, z=3, y=6/7`) now drive real `IFF1`/`IFF2`
   flip-flops as part of the thin IM1 IRQ layer (see "Thin IM1 IRQ" above) —
-  no longer the permanent gap this paragraph once described. Remaining IRQ
-  gaps are deliberate on the *gate* CPU: no INTACK cycle, no IM0/IM2, no
-  NMI/`RETN`, no one-instruction EI delay, no `R` auto-increment on `M1`,
-  and no `P/V←IFF2` on `LD A,I`/`LD A,R`. Soft Run now *does* honour the
-  one-instruction EI delay (`SoftZ80State.eiDelay`). `HALT` (`0x76`) stops
-  Soft Run; the gate CPU still leaves it inert (no "stop clocking" concept
-  — see "x=01: LD r,r'" above). `H` (half-carry) and the two undocumented flag bits are real
+  no longer the permanent gap this paragraph once described. Soft↔gate now
+  share one-instruction EI delay and a HALT latch (`soft-gate-ei-halt.test.ts`).
+  Remaining IRQ gaps are deliberate: no INTACK cycle, no IM0/IM2, no
+  NMI/`RETN`, no `R` auto-increment on `M1`. `P/V←IFF2` on `LD A,I`/`LD A,R`
+  is real on both soft and gate. Soft Run and gate both honour
+  one-instruction EI delay; Soft Run stops on `HALT` (`0x76`), and the gate
+  latches `halted` (MachineRunner can stop-clock). `H` (half-carry) and the two undocumented flag bits are real
   now for the `x=10`/`x=11` ALU group, `INC r`/`DEC r`, and `DAA` itself
   (see "Closing the half-carry gap" above) — `ADD HL,rr` and the
   `RLCA`/`RRCA`/`RLA`/`RRA`/`CPL`/`SCF`/`CCF` group still leave them
