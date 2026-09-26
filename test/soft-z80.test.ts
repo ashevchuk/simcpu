@@ -137,14 +137,19 @@ describe('softZ80', () => {
     cpu.r = 0x07;
     cpu.pc = 0x100;
     let pending = true;
+    let intAckWaits = 0;
     softStep(cpu, ram, {
       irqPending: () => pending,
       clearIrq: () => {
         pending = false;
       },
+      intAckWaits: (n) => {
+        intAckWaits += n;
+      },
     });
     expect(cpu.pc).toBe(0x38);
     expect(cpu.r & 0x7f).toBe(0x08); // one M1 bump
+    expect(intAckWaits).toBe(2); // Spectrum-style INTACK waits before push
     expect(pending).toBe(false);
   });
 });

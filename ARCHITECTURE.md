@@ -1032,10 +1032,10 @@ component clone + ChipDef expand cache (`hierarchy.ts`); previously ~4s via
 
 **Place/fold latency (addrBits=12, `scripts/bench-flatten.mts` /
 `scripts/bench-build.mts`):** build ~40–100ms after stdcell gates, label
-cache, and folded control macros (`RAM_ADDR_BIT`, `PC_HOLD_OR`, `RAM_OE_OR`,
-`RAM_WE_OR`, `F_WE_OR`, `A_WE_OR` — RRD kept as the final OE/WE term). Fold
-~80ms on the smaller place graph. Flatten still ~1.2s for the expanded
-~128k-transistor netlist.
+cache, and folded control macros (`RAM_ADDR_BIT`, `PC_COMMIT_BIT`,
+`PC_HOLD_OR`, `RAM_OE_OR`, `RAM_WE_OR`, `F_WE_OR`, `A_WE_OR` — RRD kept as
+the final OE/WE term). Fold ~80ms on the smaller place graph. Flatten still
+~1.2s for the expanded ~128k-transistor netlist.
 
 Gate-path keyboard clear-on-read: when RAM OE samples `KEY_DATA` (0xF01),
 the solver clears `KEY_STATUS` (0xF00) — same contract as soft
@@ -1050,9 +1050,10 @@ hooks so CALL/RET/RST match the gate's single-byte return stack.
 
 ### Explicitly later
 
-Diminishing place returns: remaining hotspots are deep PC-commit MUX
-cascades and per-register LD-WE trees — higher risk, lower impact than the
-OR macros already folded.
+Diminishing place returns: `PC_COMMIT_BIT` folded the deep PC-commit MUX
+cascade (same recipe as `RAM_ADDR_BIT`). Remaining hotspot is per-register
+LD-WE trees — higher risk, lower impact than the OR/MUX macros already
+folded.
 
 
 ## Decode and execute: a tiny working CPU
@@ -4054,9 +4055,20 @@ matches RETI encodings first — leave as-is.
 
 Verified with `z80cpu-irq-im1.test.ts`, `z80cpu-irq-im0.test.ts` (includes
 gate IM2), `z80cpu-nmi-retn.test.ts`. Soft↔gate EI delay and HALT latch
-parity: `soft-gate-ei-halt.test.ts`. Thin INTACK = sample `irqBus` + one
-R bump on maskable accept (all IM); no multi-cycle IORQ / wait-state
-model. NMI does not bump R (soft `softNmi` parity).
+parity: `soft-gate-ei-halt.test.ts`. INTACK = PHASE0 acknowledge sample
+(`INTACK_NOW` / irqBus + one R bump) + PHASE1 wait hold (`INTACK_WAIT` /
+`intAckServing`; soft burns ~2 wait units via `hooks.intAckWaits`). No
+IORQ FET pins and no ring widen beyond 10. NMI does not bump R (soft
+`softNmi` parity).
+
+### Spectrum Gates (mirrored RAM)
+
+Spectrum in Gates mode is **gate CPU + mirrored flat RAM + soft ULA** for
+video and IRQ — not FET Spectrum video. On entering Gates / gate boot /
+each gate Spectrum step budget, `SpectrumMmu.mirrorToFlatRam` copies ROM
+`$0000–$3FFF` and `syncVisibleRam` for `$4000–$FFFF` into `cpu.ram.bytes`.
+After gate steps, display-file bytes (`$4000–$5AFF`) write back into the
+MMU so soft ULA can refresh. Full FET Spectrum video remains out of scope.
 
 ### CB x=01: BIT y,r / BIT y,(HL)
 
@@ -4230,15 +4242,10 @@ reproducing. `it.fails` did its actual job here: the next full-suite run
 failed *it*, with `Error: Expect test to fail`, exactly the signal
 built in for "the underlying bug is gone, flip this back." Confirmed
 stable across two independent isolated re-runs (not a one-off settle),
-so the test is a plain `it` again. This isn't a fix in any real sense —
-nothing about the actual race was diagnosed further or addressed on
-purpose, the same ordering-sensitivity that broke it unpredictably
-happened to un-break it just as unpredictably — which is exactly why the
-diagnosis above (a genuine, timing-sensitive circuit race, not a
-solver defect) is left in place rather than declared solved: the same
-race is presumably still there, just not currently landing on a net this
-test happens to read, and another unrelated future change could just as
-easily flip it back.
+so the test is a plain `it` again. Address-bus race mitigated by mutual
+exclusion of EXSPHL LOW/HIGH selects plus held SP+1 for the opcode window
+(`oldLTemp`/`oldHTemp` unchanged). Still monitor — do not declare solved
+forever if a future wiring change reopens a transient double-drive.
 
 ### Net labels, not wire spaghetti
 
@@ -4849,9 +4856,9 @@ section's own success story.
   flip-flops as part of the IRQ/NMI layer (see "Thin IM1 IRQ / NMI / IM modes" above) —
   no longer the permanent gap this paragraph once described. Soft↔gate now
   share one-instruction EI delay and a HALT latch (`soft-gate-ei-halt.test.ts`).
-  Remaining IRQ gaps are deliberate: thin INTACK only (sample `irqBus` +
-  one R bump on maskable accept; no multi-cycle IORQ / wait-state model).
-  Soft and gate both implement IM0/IM1/IM2 accept (gate IM2: push + word
+  Remaining IRQ gaps are deliberate: INTACK is PHASE0 ack + PHASE1 wait
+  (labels `INTACK_NOW` / `INTACK_WAIT`; soft `intAckWaits(2)`); no IORQ FET
+  pins and no ring widen beyond 10. Soft and gate both implement IM0/IM1/IM2 accept (gate IM2: push + word
   at `(I<<8)|bus` → PC). Soft and gate
   both auto-increment `R` on M1 (bit7 sticky), including once on maskable
   INT accept (NMI leaves R alone, matching soft). `P/V←IFF2` on `LD A,I`/`LD A,R`
@@ -4920,10 +4927,11 @@ section's own success story.
   file's own component/net ordering — and un-broke itself, without being
   directly addressed, the moment `LDI`'s own wiring shifted that ordering
   again. See "A real solver bug this retrofit exposed — and the test that
-  un-broke itself" above for the full story, including why this is
-  recorded here rather than treated as solved: the same ordering-
-  sensitive race is presumably still latent somewhere in this file, it
-  just isn't currently landing on a net any existing test reads.
+  un-broke itself" above for the full story. Mitigated: LOW/HIGH address
+  selects are mutually exclusive (both drop rather than double-drive), and
+  SP+1 is held for the opcode window after the first read-low. Still
+  monitor — ordering-sensitive races can return; do not treat as solved
+  forever. `oldLTemp`/`oldHTemp` remain for the write-side bus race.
 - `buildZ80Cpu`'s `x=11` work is the deepest circuit this project has built
   (`spAdder` — a second full ripple-carry `buildAlu` instance — plus the
   push/pop byte-select banks, the flag-computation chain, and a 4-phase FSM

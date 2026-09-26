@@ -264,6 +264,10 @@ export class SpectrumEngine {
       },
       irqPending: () => ula.irqPending,
       clearIrq: () => ula.clearIrq(),
+      // Soft INTACK wait ≈ gate PHASE0 ack + PHASE1 wait (~2 T-states).
+      intAckWaits: (n) => {
+        contended.waitUnits += n;
+      },
       hostTrap: tape
         ? (cpu, bytes) => {
             if (this.tapePaused) return true; // busy-wait at LD-BYTES

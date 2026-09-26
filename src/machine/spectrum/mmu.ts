@@ -130,4 +130,26 @@ export class SpectrumMmu {
     if (ram.length < 0x10000) return;
     for (let a = 0x4000; a < 0x10000; a++) ram[a] = this.read(a);
   }
+
+  /**
+   * Full MMU → flat gate RAM mirror: ROM/TR-DOS at $0000–$3FFF plus
+   * `syncVisibleRam` for $4000–$FFFF. Used when Spectrum runs in Gates mode
+   * so the transistor Z80 fetches from `cpu.ram.bytes`.
+   */
+  mirrorToFlatRam(ram: Uint8Array): void {
+    if (ram.length < 0x10000) return;
+    for (let a = 0; a < 0x4000; a++) ram[a] = this.read(a);
+    this.syncVisibleRam(ram);
+  }
+
+  /**
+   * Write flat gate RAM back into the MMU (skip ROM). Default range is the
+   * display file ($4000–$5AFF) so soft ULA video can refresh after gate steps.
+   */
+  writeBackFromFlatRam(ram: Uint8Array, from = 0x4000, to = 0x5b00): void {
+    if (ram.length < 0x10000) return;
+    const lo = Math.max(0x4000, from & 0xffff);
+    const hi = Math.min(0x10000, to & 0xffff);
+    for (let a = lo; a < hi; a++) this.write(a, ram[a]!);
+  }
 }

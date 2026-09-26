@@ -586,6 +586,119 @@ function getRamAddrBitChip(library: ChipLibrary): ChipDef {
 }
 
 /**
+ * One bit of the PC write-data mux cascade (former inline forEach ~18 MUX2
+ * layers): hold → RET → RST → JP → CALL → JP cc → CALL cc → RET cc → JR →
+ * JP (HL) → JP (IX) → JP (IY) → LDIR/LDDR → CPIR/CPDR → INIR/INDR →
+ * OTIR/OTDR → NMI → IM2 lo → IM2 hi → out.
+ *
+ * Ports: 18 sels, then hold + 14 override data bits, then out.
+ */
+function makePcCommitBitChip(library: ChipLibrary): ChipDef {
+  const scratch = new Circuit();
+  makeSource(scratch, 1);
+  makeSource(scratch, 0);
+  const muxDef = getMux2Chip(library);
+  const placeMux = (x: number, y: number) => {
+    const inst = makeChipInstance(scratch, muxDef, { x, y });
+    return {
+      sel: inst.pins[muxDef.ports[0]!]!,
+      in0: inst.pins[muxDef.ports[1]!]!,
+      in1: inst.pins[muxDef.ports[2]!]!,
+      out: inst.pins[muxDef.ports[3]!]!,
+    };
+  };
+
+  const retMux = placeMux(0, 0);
+  const rstMux = placeMux(200, 0);
+  wire(scratch, retMux.out, rstMux.in0);
+  const jpMux = placeMux(400, 0);
+  wire(scratch, rstMux.out, jpMux.in0);
+  const callMux = placeMux(600, 0);
+  wire(scratch, jpMux.out, callMux.in0);
+  const jpCcMux = placeMux(800, 0);
+  wire(scratch, callMux.out, jpCcMux.in0);
+  const callCcMux = placeMux(1000, 0);
+  wire(scratch, jpCcMux.out, callCcMux.in0);
+  const retCcMux = placeMux(1200, 0);
+  wire(scratch, callCcMux.out, retCcMux.in0);
+  const jrMux = placeMux(1400, 0);
+  wire(scratch, retCcMux.out, jrMux.in0);
+  const jpHlMux = placeMux(1600, 0);
+  wire(scratch, jrMux.out, jpHlMux.in0);
+  const jpIxMux = placeMux(1800, 0);
+  wire(scratch, jpHlMux.out, jpIxMux.in0);
+  const jpIyMux = placeMux(2000, 0);
+  wire(scratch, jpIxMux.out, jpIyMux.in0);
+  const ldRepMux = placeMux(2200, 0);
+  wire(scratch, jpIyMux.out, ldRepMux.in0);
+  const cpRepMux = placeMux(2400, 0);
+  wire(scratch, ldRepMux.out, cpRepMux.in0);
+  const inRepMux = placeMux(2600, 0);
+  wire(scratch, cpRepMux.out, inRepMux.in0);
+  const outRepMux = placeMux(2800, 0);
+  wire(scratch, inRepMux.out, outRepMux.in0);
+  const nmiMux = placeMux(3000, 0);
+  wire(scratch, outRepMux.out, nmiMux.in0);
+  const im2LoMux = placeMux(3200, 0);
+  wire(scratch, nmiMux.out, im2LoMux.in0);
+  const im2HiMux = placeMux(3400, 0);
+  wire(scratch, im2LoMux.out, im2HiMux.in0);
+
+  // Shared bus / pcMinus2 fan-in (same nets as the former multi-wire taps).
+  wire(scratch, retMux.in1, retCcMux.in1);
+  wire(scratch, ldRepMux.in1, cpRepMux.in1);
+  wire(scratch, ldRepMux.in1, inRepMux.in1);
+  wire(scratch, ldRepMux.in1, outRepMux.in1);
+
+  return foldExposing(scratch, 'PC_COMMIT_BIT', library, [
+    { pin: retMux.sel, isOutput: false }, // selRet
+    { pin: rstMux.sel, isOutput: false }, // selRst
+    { pin: jpMux.sel, isOutput: false }, // selJp
+    { pin: callMux.sel, isOutput: false }, // selCall
+    { pin: jpCcMux.sel, isOutput: false }, // selJpCc
+    { pin: callCcMux.sel, isOutput: false }, // selCallCc
+    { pin: retCcMux.sel, isOutput: false }, // selRetCc
+    { pin: jrMux.sel, isOutput: false }, // selJr
+    { pin: jpHlMux.sel, isOutput: false }, // selJpHl
+    { pin: jpIxMux.sel, isOutput: false }, // selJpIx
+    { pin: jpIyMux.sel, isOutput: false }, // selJpIy
+    { pin: ldRepMux.sel, isOutput: false }, // selLdRep
+    { pin: cpRepMux.sel, isOutput: false }, // selCpRep
+    { pin: inRepMux.sel, isOutput: false }, // selInRep
+    { pin: outRepMux.sel, isOutput: false }, // selOutRep
+    { pin: nmiMux.sel, isOutput: false }, // selNmi
+    { pin: im2LoMux.sel, isOutput: false }, // selIm2Lo
+    { pin: im2HiMux.sel, isOutput: false }, // selIm2Hi
+    { pin: retMux.in0, isOutput: false }, // hold (pc.q)
+    { pin: retMux.in1, isOutput: false }, // bus (RET / RET cc)
+    { pin: rstMux.in1, isOutput: false }, // rstBit
+    { pin: jpMux.in1, isOutput: false }, // jpTarget
+    { pin: callMux.in1, isOutput: false }, // callTarget
+    { pin: jpCcMux.in1, isOutput: false }, // jpCcTarget
+    { pin: callCcMux.in1, isOutput: false }, // callCcTarget
+    { pin: jrMux.in1, isOutput: false }, // jrOffset
+    { pin: jpHlMux.in1, isOutput: false }, // jpHl
+    { pin: jpIxMux.in1, isOutput: false }, // jpIx
+    { pin: jpIyMux.in1, isOutput: false }, // jpIy
+    { pin: ldRepMux.in1, isOutput: false }, // pcMinus2 (shared with block repeats)
+    { pin: nmiMux.in1, isOutput: false }, // nmiBit
+    { pin: im2LoMux.in1, isOutput: false }, // im2Lo
+    { pin: im2HiMux.in1, isOutput: false }, // im2Hi
+    { pin: im2HiMux.out, isOutput: true }, // out
+  ]);
+}
+
+const pcCommitBitDefs = new WeakMap<ChipLibrary, ChipDef>();
+function getPcCommitBitChip(library: ChipLibrary): ChipDef {
+  let def = pcCommitBitDefs.get(library);
+  if (!def) {
+    def = makePcCommitBitChip(library);
+    pcCommitBitDefs.set(library, def);
+  }
+  return def;
+}
+
+/**
  * Sequential left-associated OR of `n` inputs (n>=2). Ports: i0..i{n-1}, out.
  * Scratch uses nested OR stdcell instances (no gate placer on the scratch).
  */
@@ -2392,6 +2505,10 @@ function buildZ80CpuInner(
   const intServing = buildRegister(parent, library, 1, { x: pos.x + 2000, y: pos.y + 4400 });
   const nmiServing = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 4400 });
   const im2Serving = buildRegister(parent, library, 1, { x: pos.x + 2400, y: pos.y + 4400 });
+  // INTACK window: latched on any maskable accept; PHASE0 = ack sample,
+  // PHASE1 = wait hold (PC already suppressed via irqServing). Soft burns
+  // ~2 wait units for the same window. No IORQ FET pins; ring stays at 10.
+  const intAckServing = buildRegister(parent, library, 1, { x: pos.x + 2100, y: pos.y + 4360 });
   // Rising-edge NMI: `nmiPrev` samples the pin every PHASE0; accept when
   // pin high and prev low (soft is an explicit pulse — same one-shot feel).
   const nmiPrev = buildRegister(parent, library, 1, { x: pos.x + 2200, y: pos.y + 4600 });
@@ -2571,18 +2688,31 @@ function buildZ80CpuInner(
   wire(parent, nmiAcceptNow.out, nmiServing.d[0]!);
   tieToLabel('PHASE0', im2Serving.we, { x: pos.x + 2450, y: pos.y + 4480 });
   wire(parent, im2AcceptNow.out, im2Serving.d[0]!);
+  // INTACK serving: any maskable accept (IM0/1/2), not NMI.
+  tieToLabel('PHASE0', intAckServing.we, { x: pos.x + 2150, y: pos.y + 4460 });
+  wire(parent, intAcceptNow.out, intAckServing.d[0]!);
+  tieToLabel('INTACK_NOW', intAcceptNow.out, { x: pos.x + 2400, y: pos.y + 4580 }); // PHASE0 acknowledge sample
+  const intAckWait = buildAnd(parent, { x: pos.x + 2500, y: pos.y + 4460 });
+  wire(parent, intAckServing.q[0]!, intAckWait.a);
+  tieToLabel('PHASE1', intAckWait.b, { x: pos.x + 2400, y: pos.y + 4460 });
+  tieToLabel('INTACK_WAIT', intAckWait.out, { x: pos.x + 2600, y: pos.y + 4460 }); // PHASE1 wait hold
   const irqServingIntNmi = buildOr(parent, { x: pos.x + 2300, y: pos.y + 4440 });
   wire(parent, intServing.q[0]!, irqServingIntNmi.a);
   wire(parent, nmiServing.q[0]!, irqServingIntNmi.b);
   const irqServingAny = buildOr(parent, { x: pos.x + 2350, y: pos.y + 4440 });
   wire(parent, irqServingIntNmi.out, irqServingAny.a);
   wire(parent, im2Serving.q[0]!, irqServingAny.b);
+  // Widen PC-suppress with INTACK wait so PHASE1 stays held while irqBus is stable.
+  const irqOrIntAck = buildOr(parent, { x: pos.x + 2400, y: pos.y + 4420 });
+  wire(parent, irqServingAny.out, irqOrIntAck.a);
+  wire(parent, intAckServing.q[0]!, irqOrIntAck.b);
   const notIntServing = buildNot(parent, { x: pos.x + 2450, y: pos.y + 4440 });
-  wire(parent, irqServingAny.out, notIntServing.in);
+  wire(parent, irqOrIntAck.out, notIntServing.in);
   tieToLabel('NOT_INT_SERVING', notIntServing.out, { x: pos.x + 2550, y: pos.y + 4440 }); // PC PHASE1 suppress
   tieToLabel('INT_SERVING', intServing.q[0]!, { x: pos.x + 2550, y: pos.y + 4420 });
   tieToLabel('NMI_SERVING', nmiServing.q[0]!, { x: pos.x + 2550, y: pos.y + 4400 });
   tieToLabel('IM2_SERVING', im2Serving.q[0]!, { x: pos.x + 2550, y: pos.y + 4380 });
+  tieToLabel('INTACK_SERVING', intAckServing.q[0]!, { x: pos.x + 2550, y: pos.y + 4360 });
   // NMI micro-ops: PHASE2 push PC (reuse stack write + PC bus bank), PHASE3 → $0066.
   const nmiPushNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4400 });
   wire(parent, nmiServing.q[0]!, nmiPushNow.a);
@@ -8201,10 +8331,16 @@ function buildZ80CpuInner(
     wire(parent, hlBit, port(22));
     wire(parent, bcBit, port(23));
     wire(parent, deBit, port(24));
+    // Live SP for EX low (stable); held SP+1 for EX high after read-low capture.
+    // Held SP on PHASE2 would feed a stale latch before the capture edge.
     tieToLabel(`SP_Q${i}`, port(25), { x: pos.x + 800, y: pos.y - 280 - i * 100 });
     wire(parent, nnAddr.q[i]!, port(26));
     wire(parent, nnAddrPlusOne.out[i]!, port(27));
-    tieToLabel(`SPPLUS1_${i}`, port(28), { x: pos.x + 2200, y: pos.y - 280 - i * 100 });
+    const exSpSp1Mux = makeChipInstance(parent, muxDef, { x: pos.x + 650, y: pos.y - 200 - i * 100 });
+    tieToLabel('EXSPHL_HIGH_ADDR_NOW', exSpSp1Mux.pins[muxDef.ports[0]!]!, { x: pos.x + 550, y: pos.y - 200 - i * 100 });
+    tieToLabel(`SPPLUS1_${i}`, exSpSp1Mux.pins[muxDef.ports[1]!]!, { x: pos.x + 550, y: pos.y - 180 - i * 100 });
+    tieToLabel(`EXSP_HELD_SP1_${i}`, exSpSp1Mux.pins[muxDef.ports[2]!]!, { x: pos.x + 550, y: pos.y - 160 - i * 100 });
+    wire(parent, exSpSp1Mux.pins[muxDef.ports[3]!]!, port(28));
     tieToLabel(`PCPLUS1_${i}`, port(29), { x: pos.x + 3600, y: pos.y - 280 - i * 100 });
     tieToLabel(`IXDISPADD${i}`, port(30), { x: pos.x + 3800, y: pos.y - 280 - i * 100 });
     tieToLabel(`IYDISPADD${i}`, port(31), { x: pos.x + 4000, y: pos.y - 280 - i * 100 });
@@ -8406,184 +8542,62 @@ function buildZ80CpuInner(
     wire(parent, freshMux.pins[muxDef.ports[3]!]!, callCcTarget.d[i]!);
   });
 
+  // One PC_COMMIT_BIT chip per PC bit — same MUX cascade as the former
+  // inline forEach (RET→…→IM2 hi); labels stay on the parent.
+  const pcCommitBitDef = getPcCommitBitChip(library);
   pc.q.forEach((q, i) => {
-    const retMux = makeChipInstance(parent, muxDef, { x: pos.x - 400, y: pos.y - 300 - i * 100 });
-    tieToLabel('RET_OR_RETI_NOW', retMux.pins[muxDef.ports[0]!]!, { x: pos.x - 500, y: pos.y - 280 - i * 100 }); // RET or RETI — see retOrRetiNow above
-    wire(parent, q, retMux.pins[muxDef.ports[1]!]!); // in0: hold (default — self-loop)
-    tieToLabel(`BUS${i}`, retMux.pins[muxDef.ports[2]!]!, { x: pos.x - 500, y: pos.y - 300 - i * 100 }); // in1: RET/RETI's popped byte (the bus)
-
-    const rstMux = makeChipInstance(parent, muxDef, { x: pos.x - 200, y: pos.y - 300 - i * 100 });
-    wire(parent, rstJumpNow.out, rstMux.pins[muxDef.ports[0]!]!); // EXEC2, not EXEC1 — see rstNow/rstJumpNow above
-    wire(parent, retMux.pins[muxDef.ports[3]!]!, rstMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET, from above
-    // in1: RST's fixed target = y*8 — bits 0-2 are always 0, bits 3-5 are y's
-    // own 3 bits, anything past that is 0 too. `dec.y` is the WRONG source
-    // here despite the name — those are 8 one-hot "y==k" DECODE lines, not
-    // y's own binary bits; the real bits are the opcode byte's own bits
-    // 3-5 (`ir.q[3..5]`, y's field per the xxyyyzzz layout), read straight
-    // off IR. Found live: using dec.y[i-3] made RST silently target address
-    // 0 for every single RST n (since no bit of a one-hot "y==k" line ever
-    // reconstructs y's own value), overwriting PC with the wrong thing on
-    // every attempt and no other symptom until IR itself was traced next.
-    if (i < 3 || i >= 6) tiePowerRail(parent, 'GND', rstMux.pins[muxDef.ports[2]!]!);
-    else tieToLabel(`IRQ${i}`, rstMux.pins[muxDef.ports[2]!]!, { x: pos.x - 300, y: pos.y - 300 - i * 100 });
-
-    // JP nn's own jump: a third mux layer, taking the hold-or-RET-or-RST
-    // chain above as its own default — see "x=11: JP nn" above for why
-    // this fires on PHASE5 specifically, and why `pcHold` deliberately
-    // excludes that phase for this one instruction.
-    const jpMux = makeChipInstance(parent, muxDef, { x: pos.x - 100, y: pos.y - 300 - i * 100 });
-    tieToLabel('JP_JUMP_NOW', jpMux.pins[muxDef.ports[0]!]!, { x: pos.x - 150, y: pos.y - 300 - i * 100 });
-    wire(parent, rstMux.pins[muxDef.ports[3]!]!, jpMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST, from above
-    wire(parent, jpTarget.q[i]!, jpMux.pins[muxDef.ports[2]!]!); // in1: JP nn's own freshly-read target
-
-    // CALL nn's own jump: a fourth mux layer, taking hold-or-RET-or-RST-
-    // or-JP above as its own default — see "x=11: CALL nn" above for why
-    // this fires on PHASE7, after the return address has already been
-    // pushed on PHASE6.
-    const callMux = makeChipInstance(parent, muxDef, { x: pos.x + 0, y: pos.y - 300 - i * 100 });
-    tieToLabel('CALL_JUMP_NOW', callMux.pins[muxDef.ports[0]!]!, { x: pos.x - 50, y: pos.y - 300 - i * 100 });
-    wire(parent, jpMux.pins[muxDef.ports[3]!]!, callMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP, from above
-    wire(parent, callTarget.q[i]!, callMux.pins[muxDef.ports[2]!]!); // in1: CALL nn's own freshly-read target
-
-    // JP cc,nn's own jump: a fifth mux layer, taking everything above as
-    // its own default — see "x=11: JP cc,nn" above for why this only
-    // fires on PHASE5 when the tested condition actually holds.
-    const jpCcMux = makeChipInstance(parent, muxDef, { x: pos.x + 100, y: pos.y - 300 - i * 100 });
-    tieToLabel('JPCC_JUMP_NOW', jpCcMux.pins[muxDef.ports[0]!]!, { x: pos.x + 50, y: pos.y - 300 - i * 100 });
-    wire(parent, callMux.pins[muxDef.ports[3]!]!, jpCcMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP-or-CALL, from above
-    wire(parent, jpCcTarget.q[i]!, jpCcMux.pins[muxDef.ports[2]!]!); // in1: JP cc,nn's own freshly-read target
-
-    // CALL cc,nn's own jump: a sixth mux layer, taking everything above as
-    // its own default — see "x=11: CALL cc,nn" above for why this only
-    // fires on PHASE7 when the tested condition actually holds, mirroring
-    // JP cc,nn's own jpCcMux exactly.
-    const callCcMux = makeChipInstance(parent, muxDef, { x: pos.x + 200, y: pos.y - 300 - i * 100 });
-    tieToLabel('CALLCC_JUMP_NOW', callCcMux.pins[muxDef.ports[0]!]!, { x: pos.x + 150, y: pos.y - 300 - i * 100 });
-    wire(parent, jpCcMux.pins[muxDef.ports[3]!]!, callCcMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP-or-CALL-or-JPCC, from above
-    wire(parent, callCcTarget.q[i]!, callCcMux.pins[muxDef.ports[2]!]!); // in1: CALL cc,nn's own freshly-read target
-
-    // RET cc's own jump: a seventh mux layer, taking everything above as
-    // its own default — see "x=11: RET cc" above for why this fires on
-    // PHASE2 when the tested condition holds, and why its in1 is the raw
-    // BUS (the popped byte) rather than a dedicated target register, the
-    // same shape `retMux` itself already established above.
-    const retCcMux = makeChipInstance(parent, muxDef, { x: pos.x + 300, y: pos.y - 300 - i * 100 });
-    tieToLabel('RETCC_TAKEN_NOW', retCcMux.pins[muxDef.ports[0]!]!, { x: pos.x + 250, y: pos.y - 300 - i * 100 });
-    wire(parent, callCcMux.pins[muxDef.ports[3]!]!, retCcMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP-or-CALL-or-JPCC-or-CALLCC, from above
-    tieToLabel(`BUS${i}`, retCcMux.pins[muxDef.ports[2]!]!, { x: pos.x + 250, y: pos.y - 280 - i * 100 }); // in1: RET cc's own popped byte (the bus)
-
-    // Any JR-family opcode's own jump: an eighth mux layer, taking
-    // everything above as its own default — see "x=00: JR cc,e" above for
-    // why this fires on PHASE4 (not PHASE5, since this opcode has one
-    // fewer operand byte than JP cc,nn) and why its in1 is a live adder
-    // output, not a target register's own q. `JR_JUMP_NOW` covers `JR
-    // cc,e`, plain `JR`, and `DJNZ` alike (mutually exclusive by `dec.y`),
-    // so one mux layer serves all three.
-    const jrMux = makeChipInstance(parent, muxDef, { x: pos.x + 400, y: pos.y - 300 - i * 100 });
-    tieToLabel('JR_JUMP_NOW', jrMux.pins[muxDef.ports[0]!]!, { x: pos.x + 350, y: pos.y - 300 - i * 100 });
-    wire(parent, retCcMux.pins[muxDef.ports[3]!]!, jrMux.pins[muxDef.ports[1]!]!); // in0: hold-or-RET-or-RST-or-JP-or-CALL-or-JPCC-or-CALLCC-or-RETCC, from above
-    wire(parent, jrOffsetAdder.out[i]!, jrMux.pins[muxDef.ports[2]!]!); // in1: PC + sign-extended displacement, live off pc.q
-
-    // JP (HL) (x=11, z=1, y=5 — see "x=11: JP (HL)" above): a ninth mux
-    // layer, `in1` wired straight to `HL`'s own current bits — no RAM
-    // read, no dedicated target register, since the target is already
-    // sitting in a register this file already has. `addrBits` may be
-    // narrower than 16 (every test in this file uses 7): bits 0..7 come
-    // from `L`, any bit at 8 or above (real 16-bit hardware only) comes
-    // from `H`.
-    const jpHlMux = makeChipInstance(parent, muxDef, { x: pos.x + 450, y: pos.y - 300 - i * 100 });
-    tieToLabel('JPHL_NOW', jpHlMux.pins[muxDef.ports[0]!]!, { x: pos.x + 400, y: pos.y - 300 - i * 100 });
-    wire(parent, jrMux.pins[muxDef.ports[3]!]!, jpHlMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
-    if (i < 8) wire(parent, rL.q[i]!, jpHlMux.pins[muxDef.ports[2]!]!);
-    else if (rH.q[i - 8]) wire(parent, rH.q[i - 8]!, jpHlMux.pins[muxDef.ports[2]!]!);
-    else tiePowerRail(parent, 'GND', jpHlMux.pins[muxDef.ports[2]!]!); // in1: HL's own current value
-
-    // JP (IX) / JP (IY) — stacked after JP (HL); PHASE4 under DD/FD.
-    const jpIxMux = makeChipInstance(parent, muxDef, { x: pos.x + 470, y: pos.y - 300 - i * 100 });
-    tieToLabel('JPIX_NOW', jpIxMux.pins[muxDef.ports[0]!]!, { x: pos.x + 420, y: pos.y - 300 - i * 100 });
-    wire(parent, jpHlMux.pins[muxDef.ports[3]!]!, jpIxMux.pins[muxDef.ports[1]!]!);
-    if (i < 8) wire(parent, rIXL.q[i]!, jpIxMux.pins[muxDef.ports[2]!]!);
-    else if (rIXH.q[i - 8]) wire(parent, rIXH.q[i - 8]!, jpIxMux.pins[muxDef.ports[2]!]!);
-    else tiePowerRail(parent, 'GND', jpIxMux.pins[muxDef.ports[2]!]!);
-    const jpIyMux = makeChipInstance(parent, muxDef, { x: pos.x + 490, y: pos.y - 300 - i * 100 });
-    tieToLabel('JPIY_NOW', jpIyMux.pins[muxDef.ports[0]!]!, { x: pos.x + 440, y: pos.y - 300 - i * 100 });
-    wire(parent, jpIxMux.pins[muxDef.ports[3]!]!, jpIyMux.pins[muxDef.ports[1]!]!);
-    if (i < 8) wire(parent, rIYL.q[i]!, jpIyMux.pins[muxDef.ports[2]!]!);
-    else if (rIYH.q[i - 8]) wire(parent, rIYH.q[i - 8]!, jpIyMux.pins[muxDef.ports[2]!]!);
-    else tiePowerRail(parent, 'GND', jpIyMux.pins[muxDef.ports[2]!]!);
-
-    // LDIR/LDDR's own repeat (see "x=10, z=0: LDI/LDD/LDIR/LDDR" above): a
-    // tenth and final mux layer, `in1` wired to `pcMinus2Adder`'s own
-    // live output — the same "a live adder output, not a target
-    // register's own q" shape `JR_JUMP_NOW`'s own layer above already
-    // established, since landing back on this instruction's own opcode
-    // byte is exactly a PC-relative computation, just a fixed one.
-    const ldBlockRepeatMux = makeChipInstance(parent, muxDef, { x: pos.x + 500, y: pos.y - 300 - i * 100 });
-    tieToLabel('LDBLOCK_REPEAT_NOW', ldBlockRepeatMux.pins[muxDef.ports[0]!]!, { x: pos.x + 450, y: pos.y - 300 - i * 100 });
-    wire(parent, jpIyMux.pins[muxDef.ports[3]!]!, ldBlockRepeatMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
-    wire(parent, pcMinus2Adder.out[i]!, ldBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
-
-    // CPIR/CPDR's own repeat (see "x=10, z=1: CPI/CPD/CPIR/CPDR" above): an
-    // eleventh and final layer, the identical shape LDIR/LDDR's own layer
-    // just above establishes — the same live `pcMinus2Adder` output, this
-    // family's own repeat condition (`CPBLOCK_REPEAT_NOW`, built alongside
-    // the dedicated adder below) gating it instead.
-    const cpBlockRepeatMux = makeChipInstance(parent, muxDef, { x: pos.x + 550, y: pos.y - 300 - i * 100 });
-    tieToLabel('CPBLOCK_REPEAT_NOW', cpBlockRepeatMux.pins[muxDef.ports[0]!]!, { x: pos.x + 500, y: pos.y - 320 - i * 100 });
-    wire(parent, ldBlockRepeatMux.pins[muxDef.ports[3]!]!, cpBlockRepeatMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
-    wire(parent, pcMinus2Adder.out[i]!, cpBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
-
-    // INIR/INDR's own repeat (see "x=10, z=2: INI/IND/INIR/INDR" above):
-    // a twelfth layer, the identical shape LDIR/LDDR's and CPIR/CPDR's
-    // own layers just above establish — the same live `pcMinus2Adder`
-    // output, this family's own repeat condition (`INBLOCK_REPEAT_NOW`)
-    // gating it instead.
-    const inBlockRepeatMux = makeChipInstance(parent, muxDef, { x: pos.x + 600, y: pos.y - 300 - i * 100 });
-    tieToLabel('INBLOCK_REPEAT_NOW', inBlockRepeatMux.pins[muxDef.ports[0]!]!, { x: pos.x + 550, y: pos.y - 320 - i * 100 });
-    wire(parent, cpBlockRepeatMux.pins[muxDef.ports[3]!]!, inBlockRepeatMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
-    wire(parent, pcMinus2Adder.out[i]!, inBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
-
-    // OTIR/OTDR's own repeat (see "x=10, z=3: OUTI/OUTD/OTIR/OTDR"
-    // above): a thirteenth and final layer, the identical shape every
-    // earlier repeat gate in this chain establishes — the same live
-    // `pcMinus2Adder` output, this family's own repeat condition
-    // (`OUTBLOCK_REPEAT_NOW`) gating it instead.
-    const outBlockRepeatMux = makeChipInstance(parent, muxDef, { x: pos.x + 650, y: pos.y - 300 - i * 100 });
-    tieToLabel('OUTBLOCK_REPEAT_NOW', outBlockRepeatMux.pins[muxDef.ports[0]!]!, { x: pos.x + 600, y: pos.y - 320 - i * 100 });
-    wire(parent, inBlockRepeatMux.pins[muxDef.ports[3]!]!, outBlockRepeatMux.pins[muxDef.ports[1]!]!); // in0: hold-or-everything-above
-    wire(parent, pcMinus2Adder.out[i]!, outBlockRepeatMux.pins[muxDef.ports[2]!]!); // in1: PC - 2, live off pc.q
-
-    // NMI jump to $0066 (bits 1,2,5,6 set). Final layer after block repeats.
-    const nmiJumpMux = makeChipInstance(parent, muxDef, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
-    tieToLabel('NMI_JUMP_NOW', nmiJumpMux.pins[muxDef.ports[0]!]!, { x: pos.x + 650, y: pos.y - 320 - i * 100 });
-    wire(parent, outBlockRepeatMux.pins[muxDef.ports[3]!]!, nmiJumpMux.pins[muxDef.ports[1]!]!);
-    // 0x66 = 0b1100110
-    if (i === 1 || i === 2 || i === 5 || i === 6) {
-      tiePowerRail(parent, 'VCC', nmiJumpMux.pins[muxDef.ports[2]!]!);
-    } else {
-      tiePowerRail(parent, 'GND', nmiJumpMux.pins[muxDef.ports[2]!]!);
-    }
-
-    // IM2 vector → PC: PHASE3 loads lo from bus (RET shape); PHASE4 loads
-    // hi bits when addrBits>8 (hold the other half).
-    const im2LoMux = makeChipInstance(parent, muxDef, { x: pos.x + 750, y: pos.y - 300 - i * 100 });
-    tieToLabel('IM2_READ_LO_NOW', im2LoMux.pins[muxDef.ports[0]!]!, { x: pos.x + 700, y: pos.y - 320 - i * 100 });
-    wire(parent, nmiJumpMux.pins[muxDef.ports[3]!]!, im2LoMux.pins[muxDef.ports[1]!]!);
+    const bit = makeChipInstance(parent, pcCommitBitDef, { x: pos.x - 400, y: pos.y - 300 - i * 100 });
+    const port = (idx: number) => bit.pins[pcCommitBitDef.ports[idx]!]!;
+    // sels
+    tieToLabel('RET_OR_RETI_NOW', port(0), { x: pos.x - 500, y: pos.y - 280 - i * 100 });
+    wire(parent, rstJumpNow.out, port(1));
+    tieToLabel('JP_JUMP_NOW', port(2), { x: pos.x - 150, y: pos.y - 300 - i * 100 });
+    tieToLabel('CALL_JUMP_NOW', port(3), { x: pos.x - 50, y: pos.y - 300 - i * 100 });
+    tieToLabel('JPCC_JUMP_NOW', port(4), { x: pos.x + 50, y: pos.y - 300 - i * 100 });
+    tieToLabel('CALLCC_JUMP_NOW', port(5), { x: pos.x + 150, y: pos.y - 300 - i * 100 });
+    tieToLabel('RETCC_TAKEN_NOW', port(6), { x: pos.x + 250, y: pos.y - 300 - i * 100 });
+    tieToLabel('JR_JUMP_NOW', port(7), { x: pos.x + 350, y: pos.y - 300 - i * 100 });
+    tieToLabel('JPHL_NOW', port(8), { x: pos.x + 400, y: pos.y - 300 - i * 100 });
+    tieToLabel('JPIX_NOW', port(9), { x: pos.x + 420, y: pos.y - 300 - i * 100 });
+    tieToLabel('JPIY_NOW', port(10), { x: pos.x + 440, y: pos.y - 300 - i * 100 });
+    tieToLabel('LDBLOCK_REPEAT_NOW', port(11), { x: pos.x + 450, y: pos.y - 300 - i * 100 });
+    tieToLabel('CPBLOCK_REPEAT_NOW', port(12), { x: pos.x + 500, y: pos.y - 320 - i * 100 });
+    tieToLabel('INBLOCK_REPEAT_NOW', port(13), { x: pos.x + 550, y: pos.y - 320 - i * 100 });
+    tieToLabel('OUTBLOCK_REPEAT_NOW', port(14), { x: pos.x + 600, y: pos.y - 320 - i * 100 });
+    tieToLabel('NMI_JUMP_NOW', port(15), { x: pos.x + 650, y: pos.y - 320 - i * 100 });
+    tieToLabel('IM2_READ_LO_NOW', port(16), { x: pos.x + 700, y: pos.y - 320 - i * 100 });
+    tieToLabel('IM2_READ_HI_NOW', port(17), { x: pos.x + 750, y: pos.y - 320 - i * 100 });
+    // data
+    wire(parent, q, port(18)); // hold
+    tieToLabel(`BUS${i}`, port(19), { x: pos.x - 500, y: pos.y - 300 - i * 100 }); // bus (RET / RET cc)
+    // RST target = y*8 — ir.q[3..5] for bits 3-5, else GND
+    if (i < 3 || i >= 6) tiePowerRail(parent, 'GND', port(20));
+    else tieToLabel(`IRQ${i}`, port(20), { x: pos.x - 300, y: pos.y - 300 - i * 100 });
+    wire(parent, jpTarget.q[i]!, port(21));
+    wire(parent, callTarget.q[i]!, port(22));
+    wire(parent, jpCcTarget.q[i]!, port(23));
+    wire(parent, callCcTarget.q[i]!, port(24));
+    wire(parent, jrOffsetAdder.out[i]!, port(25));
+    if (i < 8) wire(parent, rL.q[i]!, port(26));
+    else if (rH.q[i - 8]) wire(parent, rH.q[i - 8]!, port(26));
+    else tiePowerRail(parent, 'GND', port(26));
+    if (i < 8) wire(parent, rIXL.q[i]!, port(27));
+    else if (rIXH.q[i - 8]) wire(parent, rIXH.q[i - 8]!, port(27));
+    else tiePowerRail(parent, 'GND', port(27));
+    if (i < 8) wire(parent, rIYL.q[i]!, port(28));
+    else if (rIYH.q[i - 8]) wire(parent, rIYH.q[i - 8]!, port(28));
+    else tiePowerRail(parent, 'GND', port(28));
+    wire(parent, pcMinus2Adder.out[i]!, port(29));
+    if (i === 1 || i === 2 || i === 5 || i === 6) tiePowerRail(parent, 'VCC', port(30));
+    else tiePowerRail(parent, 'GND', port(30));
     if (i < 8) {
-      tieToLabel(`BUS${i}`, im2LoMux.pins[muxDef.ports[2]!]!, { x: pos.x + 700, y: pos.y - 300 - i * 100 });
+      tieToLabel(`BUS${i}`, port(31), { x: pos.x + 700, y: pos.y - 300 - i * 100 });
+      wire(parent, pc.q[i]!, port(32)); // hold lo while hi loads
     } else {
-      wire(parent, pc.q[i]!, im2LoMux.pins[muxDef.ports[2]!]!); // hold high while lo loads
+      wire(parent, pc.q[i]!, port(31)); // hold high while lo loads
+      tieToLabel(`BUS${i - 8}`, port(32), { x: pos.x + 750, y: pos.y - 300 - i * 100 });
     }
-    const im2HiMux = makeChipInstance(parent, muxDef, { x: pos.x + 800, y: pos.y - 300 - i * 100 });
-    tieToLabel('IM2_READ_HI_NOW', im2HiMux.pins[muxDef.ports[0]!]!, { x: pos.x + 750, y: pos.y - 320 - i * 100 });
-    wire(parent, im2LoMux.pins[muxDef.ports[3]!]!, im2HiMux.pins[muxDef.ports[1]!]!);
-    if (i < 8) {
-      wire(parent, pc.q[i]!, im2HiMux.pins[muxDef.ports[2]!]!); // hold lo while hi loads
-    } else {
-      tieToLabel(`BUS${i - 8}`, im2HiMux.pins[muxDef.ports[2]!]!, { x: pos.x + 750, y: pos.y - 300 - i * 100 });
-    }
-
-    wire(parent, im2HiMux.pins[muxDef.ports[3]!]!, pc.d[i]!);
+    wire(parent, port(33), pc.d[i]!);
   });
 
   // Operand bus: shares ir.d/ram.data with FETCH (mutually exclusive by
@@ -9934,7 +9948,6 @@ function buildZ80CpuInner(
   const exSpLowAddrFinal = buildOr(parent, { x: pos.x + 11820, y: pos.y - 1670 });
   wire(parent, exSpHlLowAddrNow.out, exSpLowAddrFinal.a);
   wire(parent, exSpIxIyLowAddr.out, exSpLowAddrFinal.b);
-  tieToLabel('EXSPHL_LOW_ADDR_NOW', exSpLowAddrFinal.out, { x: pos.x + 11850, y: pos.y - 1670 }); // anchor — RAM's own address mux (far) reads this
   const exSpHlHighAddrNow = buildOr(parent, { x: pos.x + 11750, y: pos.y - 1580 });
   wire(parent, exSpHlReadHighNow.out, exSpHlHighAddrNow.a);
   wire(parent, exSpHlWriteHighNow.out, exSpHlHighAddrNow.b);
@@ -9950,7 +9963,21 @@ function buildZ80CpuInner(
   const exSpHighAddrFinal = buildOr(parent, { x: pos.x + 11820, y: pos.y - 1580 });
   wire(parent, exSpHlHighAddrNow.out, exSpHighAddrFinal.a);
   wire(parent, exSpIxIyHighAddr.out, exSpHighAddrFinal.b);
-  tieToLabel('EXSPHL_HIGH_ADDR_NOW', exSpHighAddrFinal.out, { x: pos.x + 11850, y: pos.y - 1580 }); // anchor — RAM's own address mux (far) reads this
+  // Harden: LOW and HIGH cannot both assert (ring-counter transient). If both
+  // raws glitch high, both finals drop → address falls to PC briefly instead
+  // of double-driving the RAM address bus (the EX(SP),HL race class).
+  const notExSpHighRaw = buildNot(parent, { x: pos.x + 11840, y: pos.y - 1600 });
+  wire(parent, exSpHighAddrFinal.out, notExSpHighRaw.in);
+  const notExSpLowRaw = buildNot(parent, { x: pos.x + 11840, y: pos.y - 1640 });
+  wire(parent, exSpLowAddrFinal.out, notExSpLowRaw.in);
+  const exSpLowAddrSafe = buildAnd(parent, { x: pos.x + 11860, y: pos.y - 1670 });
+  wire(parent, exSpLowAddrFinal.out, exSpLowAddrSafe.a);
+  wire(parent, notExSpHighRaw.out, exSpLowAddrSafe.b);
+  const exSpHighAddrSafe = buildAnd(parent, { x: pos.x + 11860, y: pos.y - 1580 });
+  wire(parent, exSpHighAddrFinal.out, exSpHighAddrSafe.a);
+  wire(parent, notExSpLowRaw.out, exSpHighAddrSafe.b);
+  tieToLabel('EXSPHL_LOW_ADDR_NOW', exSpLowAddrSafe.out, { x: pos.x + 11890, y: pos.y - 1670 }); // anchor — RAM's own address mux (far) reads this
+  tieToLabel('EXSPHL_HIGH_ADDR_NOW', exSpHighAddrSafe.out, { x: pos.x + 11890, y: pos.y - 1580 }); // anchor — RAM's own address mux (far) reads this
 
   // `exSpHlPlusOne`: a dedicated `buildAlu` (`addrBits` wide, `spAdder`'s
   // own "b=all-0s, cin=vcc" +1 encoding, `nnAddrPlusOne`'s exact shape) —
@@ -9965,6 +9992,29 @@ function buildZ80CpuInner(
     wire(parent, q, exSpHlPlusOne.a[i]!);
     tiePowerRail(parent, 'GND', exSpHlPlusOne.b[i]!);
   });
+  // Hold SP / SP+1 for the EX opcode window (captured on first read-low) so
+  // the address data stays stable even if the live ALU tap settles late.
+  const exSpHeldSp = buildRegister(parent, library, addrBits, { x: pos.x + 11950, y: pos.y - 2100 });
+  const exSpHeldSp1 = buildRegister(parent, library, addrBits, { x: pos.x + 11950, y: pos.y - 2300 });
+  const exSpHeldWe = buildOr(parent, { x: pos.x + 11900, y: pos.y - 2120 });
+  wire(parent, exSpHlReadLowNow.out, exSpHeldWe.a);
+  const exSpHeldWe2 = buildOr(parent, { x: pos.x + 11920, y: pos.y - 2120 });
+  tieToLabel('EXSPIX_READ_LOW_NOW', exSpHeldWe2.a, { x: pos.x + 11820, y: pos.y - 2120 });
+  tieToLabel('EXSPIY_READ_LOW_NOW', exSpHeldWe2.b, { x: pos.x + 11820, y: pos.y - 2100 });
+  wire(parent, exSpHeldWe2.out, exSpHeldWe.b);
+  wire(parent, exSpHeldWe.out, exSpHeldSp.we);
+  wire(parent, exSpHeldWe.out, exSpHeldSp1.we);
+  sp.q.forEach((q, i) => wire(parent, q, exSpHeldSp.d[i]!));
+  exSpHlPlusOne.out.forEach((o, i) => wire(parent, o, exSpHeldSp1.d[i]!));
+  tieToLabel('CLK', exSpHeldSp.clk, { x: pos.x + 11950, y: pos.y - 2140 });
+  tieToLabel('CLK', exSpHeldSp1.clk, { x: pos.x + 11950, y: pos.y - 2340 });
+  exSpHeldSp.q.forEach((q, i) =>
+    tieToLabel(`EXSP_HELD_SP${i}`, q, { x: pos.x + 12050, y: pos.y - 2100 + i * 20 }),
+  );
+  exSpHeldSp1.q.forEach((q, i) =>
+    tieToLabel(`EXSP_HELD_SP1_${i}`, q, { x: pos.x + 12050, y: pos.y - 2300 + i * 20 }),
+  );
+  // Live SP+1 still published for any non-held consumers; RAM addr mux prefers held via EXSP_HELD_*.
   exSpHlPlusOne.out.forEach((o, i) => tieToLabel(`SPPLUS1_${i}`, o, { x: pos.x + 11900, y: pos.y - 1900 + i * 20 })); // anchor — RAM's own address mux (far) reads this
 
   // Two holding registers — `hlMemTemp`'s own reasoning: each byte read
@@ -11122,6 +11172,7 @@ function buildZ80CpuInner(
   tieToLabel('CLK', im1.clk, { x: pos.x + 2000, y: pos.y + 4140 });
   tieToLabel('CLK', im2.clk, { x: pos.x + 2200, y: pos.y + 4140 });
   tieToLabel('CLK', intServing.clk, { x: pos.x + 2000, y: pos.y + 4340 });
+  tieToLabel('CLK', intAckServing.clk, { x: pos.x + 2100, y: pos.y + 4300 });
   tieToLabel('CLK', nmiServing.clk, { x: pos.x + 2200, y: pos.y + 4340 });
   tieToLabel('CLK', im2Serving.clk, { x: pos.x + 2400, y: pos.y + 4340 });
   tieToLabel('CLK', nmiPrev.clk, { x: pos.x + 2200, y: pos.y + 4540 });

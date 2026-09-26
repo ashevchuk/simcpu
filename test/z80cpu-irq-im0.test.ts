@@ -118,6 +118,26 @@ describe('buildZ80Cpu — IM 0 + irqBus', () => {
     expect(h.readReg(h.cpu.a)).toBe(0x55);
   });
 
+  it('INTACK_WAIT holds PC on PHASE1 after maskable accept', () => {
+    const PROGRAM = (() => {
+      const bytes = new Uint8Array(128);
+      bytes.set([0xed, 0x56], 0); // IM 1
+      bytes.set([0xfb], 2); // EI
+      bytes.set([0x00], 3); // NOP — EI delay then accept
+      bytes.set([0x3e, 0xaa], 4);
+      bytes.set([0xc9], 0x38); // ISR RET
+      return bytes;
+    })();
+    const h = makeZ80Harness(PROGRAM);
+    h.runInstruction(); // IM 1
+    h.intInput.value = 1;
+    h.runInstruction(); // EI
+    h.runInstruction(); // accept INT — PHASE0 INTACK_NOW, PHASE1 INTACK_WAIT
+    expect(h.readReg(h.cpu.iff1)).toBe(0);
+    expect(h.readReg(h.cpu.pc)).toBe(4); // PC held through INTACK wait
+    expect(h.readReg(h.cpu.ir)).toBe(0xff); // RST 38h inject
+  });
+
   it('IM mode latches are exclusive', () => {
     const PROGRAM = (() => {
       const bytes = new Uint8Array(128);

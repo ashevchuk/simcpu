@@ -558,6 +558,28 @@ export class MachineRunner {
       this.booted = false;
       this.boot();
     }
+    // Spectrum Gates: mirror MMU → flat RAM before the transistor CPU fetches.
+    if (prev === 'soft' && speed !== 'soft' && this.isSpectrum) {
+      this.mirrorSpectrumToGateRam();
+    }
+  }
+
+  /**
+   * Spectrum Gates MVP: copy MMU ROM + visible RAM into `cpu.ram.bytes` so the
+   * gate Z80 fetches Spectrum memory. Soft ULA still owns video + IRQ.
+   */
+  mirrorSpectrumToGateRam(): void {
+    if (!this.spectrumMmu || !this.ram || this.ram.bytes.length < 0x10000) return;
+    this.spectrumMmu.mirrorToFlatRam(this.ram.bytes);
+  }
+
+  /**
+   * After gate steps, push dirty display-file bytes back into the MMU so soft
+   * ULA video can update (full FET Spectrum video is out of scope).
+   */
+  private writeBackSpectrumDisplayFromGateRam(): void {
+    if (!this.spectrumMmu || !this.ram || this.ram.bytes.length < 0x10000) return;
+    this.spectrumMmu.writeBackFromFlatRam(this.ram.bytes, 0x4000, 0x5b00);
   }
 
   /**
@@ -731,6 +753,7 @@ export class MachineRunner {
     this.softDesynced = false;
     this.softError = null;
     this.gateBootPending = false;
+    if (this.isSpectrum) this.mirrorSpectrumToGateRam();
   }
 
   /**
@@ -815,9 +838,11 @@ export class MachineRunner {
     const irqWasPending = !!(this.spectrum?.irqPending);
     const iff1WasOn =
       !!this.cpu && !!this.readPin && this.readPin(this.cpu.iff1[0]!) === 1;
+    if (this.isSpectrum) this.mirrorSpectrumToGateRam();
     this.syncSpectrumGateInt();
     for (let i = 0; i < 10; i++) this.stepPhase();
     this.clearSpectrumIrqIfAccepted(irqWasPending, iff1WasOn);
+    if (this.isSpectrum) this.writeBackSpectrumDisplayFromGateRam();
     this.stopIfGateHalted();
   }
 
@@ -891,6 +916,7 @@ export class MachineRunner {
     const deadline = performance.now() + budgetMs;
     let n = 0;
     if (this.spectrum) this.spectrum.pulseFrameIrq();
+    if (this.isSpectrum) this.mirrorSpectrumToGateRam();
     let instrIrqPending = false;
     let instrIff1WasOn = false;
     while (n < maxPhases && performance.now() < deadline && this.running) {
@@ -907,6 +933,7 @@ export class MachineRunner {
         this.stopIfGateHalted();
       }
     }
+    if (this.isSpectrum && n > 0) this.writeBackSpectrumDisplayFromGateRam();
     this.stopIfGateHalted();
     return n > 0;
   }

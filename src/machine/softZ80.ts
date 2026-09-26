@@ -91,6 +91,11 @@ export interface SoftMemHooks {
    * Spectrum ULA floats 0xFF — default when unset.
    */
   irqBusByte?: () => number;
+  /**
+   * Soft INTACK wait burn — Spectrum-style ~2 wait states before the push.
+   * Gate models the same window as PHASE0 ack + PHASE1 wait (no IORQ pins).
+   */
+  intAckWaits?: (n: number) => void;
 }
 
 const FLAG_C = 0x01;
@@ -1246,8 +1251,9 @@ export function softAcceptIrq(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMe
   cpu.halted = false;
   cpu.iff1 = false;
   cpu.iff2 = false;
-  // Thin INTACK: one R bump for all IM modes (silicon M1 acknowledge), before push.
+  // INTACK: one R bump (M1 acknowledge) + Spectrum-style ~2 wait states, then push.
   bumpR(cpu);
+  hooks?.intAckWaits?.(2);
   pushReturn(cpu, ram, cpu.pc, hooks);
   if (cpu.im === 1) {
     cpu.pc = uAddr(0x0038, hooks);
