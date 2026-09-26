@@ -416,6 +416,14 @@ export function hasSoftLabModel(chipName: string): boolean {
   return softLabModelKey(chipName) != null;
 }
 
+/**
+ * True when Soft Lab is on and this ChipDef is currently Soft-opaque (not
+ * dive/inspector force-expanded). Used for the canvas SOFT badge.
+ */
+export function softLabShowsBadge(defName: string): boolean {
+  return isSoftLabEnabled() && hasSoftLabModel(defName) && !isSoftExpandForced(defName);
+}
+
 /** True for Soft Lab models that hold sequential bits (eligible for Gates POR). */
 export function softLabNeedsGatesPor(chipName: string): boolean {
   const key = softLabModelKey(chipName);

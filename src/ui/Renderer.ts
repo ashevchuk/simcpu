@@ -3,7 +3,7 @@ import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import { decodeBusProbe } from '../sim/busProbe.js';
 import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, BUS_PASS_BODY_W, ramPortCount, romPortCount } from '../sim/library.js';
-import { hasSoftLabModel, isSoftLabEnabled } from '../sim/softLab.js';
+import { softLabShowsBadge } from '../sim/softLab.js';
 import type { Component, Level, Pin, Point, Wire } from '../sim/types.js';
 import type { Camera } from './Camera.js';
 import type { Editor } from './Editor.js';
@@ -1775,7 +1775,12 @@ function drawComponent(
       const name =
         c.marking?.trim() || (library.has(c.defId) ? library.get(c.defId).name : '?');
       drawChipMarking(ctx, x, y, w, h, name);
-      if (isSoftLabEnabled() && library.has(c.defId) && hasSoftLabModel(library.get(c.defId).name)) {
+      // Badge only while Soft Lab actually evaluates this def (opaque). Dive
+      // force-expand and inspector "Expand to compare silicon" hide it so the
+      // schematic matches live transistor guts.
+      const softOpaque =
+        library.has(c.defId) && softLabShowsBadge(library.get(c.defId).name);
+      if (softOpaque) {
         ctx.save();
         ctx.font = 'bold 8px ui-monospace, monospace';
         ctx.textAlign = 'left';

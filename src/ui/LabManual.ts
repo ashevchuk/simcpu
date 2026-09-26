@@ -227,8 +227,13 @@ const SECTIONS: Section[] = [
     title: 'Soft Lab toggle',
     body:
       'Toolbar Soft Lab (default ON; localStorage simcpu.softLab.v1).\n\n' +
-      'ON — matching chips stay opaque; solver uses behavioral models (fast). SOFT badge + optional q hex.\n' +
+      'ON — matching chips stay opaque; solver uses behavioral models (fast). SOFT badge + optional q hex\n' +
+      '    only while Soft-opaque (hidden when dive/inspector force-expands that ChipDef to silicon).\n' +
       'OFF — expand to gates/transistors (slow; teaching CMOS).\n\n' +
+      'Soft ↔ Gates resets soft sequential state and sim levels. Soft → Gates also runs a short POR that\n' +
+      'forces sequential Q low (and QN high) for a few solver steps so silicon leaves Z without pulsing\n' +
+      'Clear — counters/regs restart at 0. Leaving a Soft Lab dive likewise resets soft state so lastClk/q\n' +
+      'do not freeze the Soft exterior.\n\n' +
       'Inspector on a Soft chip:\n' +
       '  Force transistor expand / Use Soft Lab again · Diff soft vs silicon · edit q hex · Reset soft state.\n' +
       'SOFT_RAM16 requires Soft Lab ON (no silicon body).',

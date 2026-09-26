@@ -604,6 +604,7 @@ function resyncSoftExpandForCurrentDive(): void {
     // sequential Soft chips until the next accidental edge.
     clearSoftLabStateDeep(topCircuit, library);
     simState = initialState();
+    flashStatusNotice('Soft Lab — soft state reset after leaving dive');
   }
   if (newly.length > 0 && isSoftLabEnabled()) {
     armSoftLabToGatesPor(topCircuit, library, new Set(newly));
@@ -2780,6 +2781,37 @@ let prevBreakContended = new Set<string>();
 let simPaused = false;
 let simStepOnce = false;
 
+/** Brief status-line notice (Soft Lab toggle / dive leave); cleared by deadline. */
+let statusNotice: string | null = null;
+let statusNoticeUntil = 0;
+
+function flashStatusNotice(msg: string, ms = 4500): void {
+  statusNotice = msg;
+  statusNoticeUntil = performance.now() + ms;
+  uiDirty = true;
+  // Status text is only rewritten on sim draw frames — schedule a clear so an
+  // idle settled circuit does not leave the notice stuck forever.
+  window.setTimeout(() => {
+    if (statusNotice != null && performance.now() >= statusNoticeUntil) {
+      statusNotice = null;
+      uiDirty = true;
+    }
+  }, ms + 50);
+}
+
+function statusNoticeActive(): boolean {
+  if (!statusNotice) return false;
+  if (performance.now() >= statusNoticeUntil) {
+    statusNotice = null;
+    return false;
+  }
+  return true;
+}
+
+function statusNoticeSuffix(): string {
+  return statusNoticeActive() ? ` | ${statusNotice}` : '';
+}
+
 function updateSoftLabChrome(): void {
   const btn = document.getElementById('sim-soft-lab');
   if (!btn) return;
@@ -2896,6 +2928,7 @@ document.getElementById('sim-soft-lab')?.addEventListener('click', () => {
     // Soft → Gates: seed silicon Q nets so sequential chips leave Z without
     // requiring the user to pulse Clear (see armSoftLabToGatesPor).
     armSoftLabToGatesPor(topCircuit, library);
+    flashStatusNotice('Gates — POR seeds Q low for a few steps (counters restart at 0)');
   } else if (!wasOn && isSoftLabEnabled()) {
     // Gates → Soft: drop orphan Soft-model force-expands (Soft-off-while-dived
     // left COUNTER/T_FF stuck expanded → floating Q, dead Soft chips), drop
@@ -2903,6 +2936,7 @@ document.getElementById('sim-soft-lab')?.addEventListener('click', () => {
     clearSoftModelForceExpands();
     clearSoftLabPor();
     clearSoftLabStateDeep(topCircuit, library);
+    flashStatusNotice('Soft Lab — soft state reset');
   }
   // Always reset sim levels — Soft↔Gates changes the flat netlist shape;
   // carrying the previous levelOf Map leaves Soft/Gates half-converged.
@@ -3073,13 +3107,14 @@ function frame(): void {
   // the user pans/zooms (uiDirty) or lab instruments are active/changing.
   const needSimDraw =
     softRun
-      ? uiDirty || labActive || labChanged || simStepOnce
+      ? uiDirty || labActive || labChanged || simStepOnce || statusNoticeActive()
       : uiDirty ||
         labChanged ||
         (!simPaused && !simState.settled) ||
         simStepOnce ||
         (machineRunner.running && machineWorked) ||
         labActive ||
+        statusNoticeActive() ||
         // Keep the canvas alive so contended-wire heat animation plays while settled.
         simState.contended.size > 0;
 
@@ -3106,7 +3141,9 @@ function frame(): void {
         zoomPctEl.textContent = `${Math.round(camera.scale * 100)}%`;
         lastContendedNets = new Set();
         statusEl.classList.remove('clickable');
-        statusEl.textContent = `${navStack.map((f) => f.label).join('/')} | soft (flatten deferred) | machine: soft${simPaused ? ' | sim paused' : ''}`;
+        statusEl.textContent =
+          `${navStack.map((f) => f.label).join('/')} | soft (flatten deferred) | machine: soft${simPaused ? ' | sim paused' : ''}` +
+          statusNoticeSuffix();
         updateWatchLevels(resolve);
         applyBreakChecks(resolve, lastContendedNets);
       } else {
@@ -3189,7 +3226,8 @@ function frame(): void {
           `iterations: ${simState.iterations} | settled: ${simState.settled} | contended: ${simState.contended.size}${contendedHint}` +
           (mode ? ` | ${mode}` : '') +
           lab +
-          paused;
+          paused +
+          statusNoticeSuffix();
         updateWatchLevels(resolve);
       }
     }

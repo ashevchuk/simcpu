@@ -15,6 +15,7 @@ import {
   setSoftExpandForced,
   setSoftLabEnabled,
   softLabModelKey,
+  softLabShowsBadge,
   syncSoftExpandForDivePath,
 } from '../src/sim/softLab.js';
 import { deserializeProject, resolveStdcellInstances } from '../src/sim/serialize.js';
@@ -114,7 +115,26 @@ describe('syncSoftExpandForDivePath', () => {
     }
   });
 
-  it('Soft OFF while dived does not leave Soft-model orphans after Soft ON at top', () => {
+  it('softLabShowsBadge only while Soft-opaque (hidden when force-expanded)', () => {
+    const prev = isSoftLabEnabled();
+    clearSoftExpandForced();
+    try {
+      setSoftLabEnabled(true);
+      expect(softLabShowsBadge('T_FF')).toBe(true);
+      expect(softLabShowsBadge('NOT')).toBe(false);
+      setSoftExpandForced('T_FF', true);
+      expect(softLabShowsBadge('T_FF')).toBe(false);
+      setSoftExpandForced('T_FF', false);
+      expect(softLabShowsBadge('T_FF')).toBe(true);
+      setSoftLabEnabled(false);
+      expect(softLabShowsBadge('T_FF')).toBe(false);
+    } finally {
+      clearSoftExpandForced();
+      setSoftLabEnabled(prev);
+    }
+  });
+
+  it('Soft OFF while dived then Soft ON at top: Soft COUNTER drives Q (not Z)', () => {
     const prev = isSoftLabEnabled();
     clearSoftExpandForced();
     clearSoftLabPor();
@@ -137,6 +157,8 @@ describe('syncSoftExpandForDivePath', () => {
       clearSoftLabState(circuit);
       syncSoftExpandForDivePath([], library);
       expect(isSoftExpandForced('COUNTER4')).toBe(false);
+      expect(softLabShowsBadge('COUNTER4')).toBe(true);
+      expect(softLabShowsBadge('T_FF')).toBe(true);
       expect(flatten(circuit, library).computeNets().pinsOf.size).toBeLessThan(50);
 
       let state = initialState();
@@ -148,8 +170,9 @@ describe('syncSoftExpandForDivePath', () => {
         (c): c is Extract<Component, { kind: 'chip' }> =>
           c.kind === 'chip' && library.get(c.defId)?.name === 'COUNTER4',
       )!;
-      // Soft opaque COUNTER drives q0=0, not Z.
+      // Soft opaque COUNTER drives q0=0, not Z (the Soft↔Gates freeze symptom).
       expect(pinLevel(nets, state, counter.pins.q0!.id)).toBe(0);
+      expect(pinLevel(nets, state, counter.pins.q1!.id)).toBe(0);
     } finally {
       clearSoftLabPor();
       clearSoftExpandForced();

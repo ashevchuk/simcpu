@@ -734,7 +734,9 @@ export class ObjectInspector {
           );
           const softNote = document.createElement('div');
           softNote.style.cssText = 'font:11px ui-monospace,monospace;color:#9aa1b3;margin:2px 0 6px';
-          softNote.textContent = 'Soft Lab — behavioral; toggle off for silicon';
+          softNote.textContent = isSoftExpandForced(defName)
+            ? 'Soft Lab — force-expanded to silicon (no SOFT badge)'
+            : 'Soft Lab — behavioral; toggle off for silicon';
           body.appendChild(softNote);
 
           if (softOn && c.softState && hasSoftLabModel(defName) && !isSoftExpandForced(defName)) {

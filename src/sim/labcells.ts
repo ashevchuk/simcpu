@@ -10,8 +10,9 @@
  * NAND SR latch (whose raw set/reset are active-low).
  */
 
-import type { ChipDef, ChipLibrary } from './ChipLibrary.js';
-import { Circuit, nextId } from './Circuit.js';
+import type { ChipDef } from './ChipLibrary.js';
+import { ChipLibrary } from './ChipLibrary.js';
+import { bumpStructureVersion, Circuit, nextId } from './Circuit.js';
 import { foldExposing } from './hierarchy.js';
 import {
   buildDecoder,
@@ -83,6 +84,75 @@ function foldIfAbsent(
   if (library.findByName(name)) return;
   const { circuit, ports } = build();
   foldExposing(circuit, name, library, ports, { labelize: false });
+}
+
+/**
+ * True when a ChipDef still uses the old constant-1 idioms:
+ * NOT(GND) or AND(VCC, ·) — COUNTER4 should use `t0 = ce` directly.
+ */
+function hasStaleConstOneIdiom(def: ChipDef, library: ChipLibrary): boolean {
+  const nets = def.circuit.computeNets();
+  const gndNets = new Set<string>();
+  const vccNets = new Set<string>();
+  for (const c of def.circuit.components.values()) {
+    if (c.kind === 'source' && c.value === 0) {
+      const n = nets.netOf.get(c.pins.out.id);
+      if (n) gndNets.add(n);
+    }
+    if (c.kind === 'source' && c.value === 1) {
+      const n = nets.netOf.get(c.pins.out.id);
+      if (n) vccNets.add(n);
+    }
+    if (c.kind === 'label' && c.name === 'GND') {
+      const n = nets.netOf.get(c.pins.net.id);
+      if (n) gndNets.add(n);
+    }
+    if (c.kind === 'label' && c.name === 'VCC') {
+      const n = nets.netOf.get(c.pins.net.id);
+      if (n) vccNets.add(n);
+    }
+  }
+  for (const c of def.circuit.components.values()) {
+    if (c.kind !== 'chip' || !c.defId || !library.has(c.defId)) continue;
+    const childName = library.get(c.defId).name;
+    if ((childName === 'NOT' || childName === '7404') && c.pins.in) {
+      const n = nets.netOf.get(c.pins.in.id);
+      if (n && gndNets.has(n)) return true;
+    }
+    if (childName === 'AND' || childName === '7408') {
+      for (const pin of [c.pins.a, c.pins.b]) {
+        if (!pin) continue;
+        const n = nets.netOf.get(pin.id);
+        if (n && vccNets.has(n)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Seed or rebuild `name` when absent / when `stale(existing)` is true.
+ * Keeps the same def.id so instances and autosaves stay linked.
+ */
+function foldOrRefresh(
+  library: ChipLibrary,
+  name: string,
+  stale: (existing: ChipDef) => boolean,
+  build: () => { circuit: Circuit; ports: { pin: Pin; isOutput: boolean; portName: string }[] },
+): void {
+  const existing = library.findByName(name);
+  if (existing && !stale(existing)) return;
+  const { circuit, ports } = build();
+  if (!existing) {
+    foldExposing(circuit, name, library, ports, { labelize: false });
+    return;
+  }
+  const tmp = new ChipLibrary();
+  const fresh = foldExposing(circuit, name, tmp, ports, { labelize: false });
+  existing.circuit = fresh.circuit;
+  existing.ports = [...fresh.ports];
+  existing.revision = (existing.revision ?? 0) + 1;
+  bumpStructureVersion();
 }
 
 /** Wrap an existing lab/stdcell under a new display name (74xx aliases, SIPO8, …). */
@@ -398,8 +468,12 @@ function seedShiftPiso(library: ChipLibrary, bits: number, name: string): void {
 }
 
 function seedCounter4(library: ChipLibrary): void {
-  foldIfAbsent(library, 'COUNTER4', () => {
-    // Sync binary up-counter from T_FF: t0=1, t_i = AND of q0..q{i-1}.
+  foldOrRefresh(
+    library,
+    'COUNTER4',
+    (existing) => hasStaleConstOneIdiom(existing, library),
+    () => {
+    // Sync binary up-counter from T_FF: t0=ce, t_i = AND of q0..q{i-1} & ce.
     // Shared active-high `clr` loads 0 on the next clock (breaks Z power-up).
     // Active-high `ce` (clock enable) gates toggles; tie high to count every edge.
     // Active-high `load` parallel-loads d0..d3 on rising clk (priority: clr > load > ce).
@@ -418,17 +492,11 @@ function seedCounter4(library: ChipLibrary): void {
       wire(circuit, clr, ffs[i]!.pins.clr!);
     }
 
-    // Shared CE — AND into every count-toggle enable.
-    const ceGate0 = place(circuit, library, 'AND', { x: 480, y: 0 });
-    const ce = ceGate0.pins.b!;
-
-    // count_t0 = 1 & ce
-    const one = notPin(circuit, library, railPin(circuit, 'GND', { x: 40, y: 0 }), { x: 160, y: 0 });
-    wire(circuit, one, ceGate0.pins.a!);
-    const countT: Pin[] = [ceGate0.pins.out!];
-
-    // count_t1 = q0 & ce
-    countT.push(and2(circuit, library, q[0]!, ce, { x: 480, y: row }));
+    // count_t0 = ce (no AND(VCC,ce) / NOT(GND) stub). Shared `ce` is pin b of t1's AND.
+    const t1And = place(circuit, library, 'AND', { x: 480, y: row });
+    const ce = t1And.pins.b!;
+    wire(circuit, q[0]!, t1And.pins.a!);
+    const countT: Pin[] = [ce, t1And.pins.out!];
 
     // count_t2 = q0 & q1 & ce
     const t2pre = and2(circuit, library, q[0]!, q[1]!, { x: 280, y: 2 * row });
@@ -470,7 +538,8 @@ function seedCounter4(library: ChipLibrary): void {
     for (let i = 0; i < 4; i++) ports.push({ pin: q[i]!, isOutput: true, portName: `q${i}` });
     ports.push({ pin: co, isOutput: true, portName: 'co' });
     return { circuit, ports };
-  });
+  },
+  );
 }
 
 /** Two COUNTER4 cascaded: low.co → high.ce; shared clk/clr/load. */
