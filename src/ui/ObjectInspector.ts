@@ -540,6 +540,8 @@ export class ObjectInspector {
             c.holdFrames = 0;
             c.phase = 0;
             c.value = 0;
+            // Allow a held-high TRIG to edge-detect on the next tick after mode change.
+            c.lastTrig = 0;
             this.changed();
           },
         ),

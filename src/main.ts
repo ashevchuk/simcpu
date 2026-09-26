@@ -3,7 +3,7 @@ import { ChipLibrary } from './sim/ChipLibrary.js';
 import { bumpStructureVersion, Circuit, currentStructureVersion } from './sim/Circuit.js';
 import { foldZ80CpuLeavingRam, newComponentIdSet, packFoldedMachine } from './sim/foldZ80.js';
 import { replaceLongWiresWithLabels } from './sim/labelWires.js';
-import { circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
+import { circuitHasPulseGen, circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
 import { flatten, fold, foldPortWarnings, forkChipInstance, unfold } from './sim/hierarchy.js';
 import { buildNot, makeButton, makeBusProbe, makeLed, makeProbe, makeRam, makeRom, makeSource, makeTty, wire, CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, ramPortCount, romPortCount } from './sim/library.js';
 import { EXAMPLE_PROJECTS } from './examples/catalog.js';
@@ -3088,23 +3088,16 @@ function frame(): void {
   }
 
   // No manual Lab Run — keep ticking while a pulse/button/analyzer actually
-  // needs wall-clock frames; idle TRIG edges are still seen whenever we step.
+  // needs wall-clock frames; idle TRIG is sampled after step (fresh net levels).
   const labActive = circuitNeedsLabTick(topCircuit, logicAnalyzer.anyArmed(topCircuit));
+  const hasPulseGen = circuitHasPulseGen(topCircuit);
 
   const softRun = machineRunner.running && machineRunner.isSoft;
-
-  // Tick pulse gens / scripted button holds every rAF while they need time —
-  // must not wait for uiDirty. Soft Run used to skip this path entirely
-  // (`needSimDraw = uiDirty` only), so a decaying hold stayed visually pressed
-  // until the next mousemove forced a redraw.
-  let labChanged = false;
-  if (labActive) {
-    labChanged = tickLabInstruments(topCircuit, lastFlatNetMap ?? undefined, simState.levelOf);
-  }
 
   // Soft Run: skip transistor step/canvas every frame (TTY samples RAM).
   // Gate Run / idle / edits: normal path. Soft still redraws canvas when
   // the user pans/zooms (uiDirty) or lab instruments are active/changing.
+  let labChanged = false;
   const needSimDraw =
     softRun
       ? uiDirty || labActive || labChanged || simStepOnce || statusNoticeActive()
@@ -3129,6 +3122,14 @@ function frame(): void {
     if (!softRun || uiDirty || labActive || labChanged || simStepOnce) {
       const view = navStack[navStack.length - 1]!;
       if (softTop && !simStepOnce) {
+        // Soft machine HUD — no transistor step; still advance free-running instruments.
+        if (labActive) {
+          labChanged = tickLabInstruments(
+            topCircuit,
+            lastFlatNetMap ?? undefined,
+            simState.levelOf,
+          );
+        }
         const resolve = (_localPinId: string): { level: Level; contended: boolean } => ({
           level: 'Z',
           contended: false,
@@ -3147,14 +3148,28 @@ function frame(): void {
         updateWatchLevels(resolve);
         applyBreakChecks(resolve, lastContendedNets);
       } else {
-        const flat = flatten(topCircuit, library);
-        const flatNetMap = flat.computeNets();
+        let flat = flatten(topCircuit, library);
+        let flatNetMap = flat.computeNets();
         lastFlatNetMap = flatNetMap;
-        if (!softRun && (!simPaused || simStepOnce)) {
+        const canStep = !softRun && (!simPaused || simStepOnce);
+        if (canStep) {
           simState = step(flat, flatNetMap, simState);
         }
         simStepOnce = false;
-        if (labActive) {
+        // One tick per frame, AFTER step so TRIG sees the button level. When the
+        // pulse gen changes its OUT driver, re-flatten — flat clones are stale.
+        if (labActive || hasPulseGen) {
+          if (tickLabInstruments(topCircuit, flatNetMap, simState.levelOf)) {
+            labChanged = true;
+            flat = flatten(topCircuit, library);
+            flatNetMap = flat.computeNets();
+            lastFlatNetMap = flatNetMap;
+            if (canStep) {
+              simState = step(flat, flatNetMap, simState);
+            }
+          }
+        }
+        if (labActive || labChanged) {
           let clkPeriod: number | null = null;
           const nets = flatNetMap;
           // Prefer a free-running clock that shares a net with an analyzer channel.

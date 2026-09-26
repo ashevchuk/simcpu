@@ -2,8 +2,8 @@
  * Pure helpers for lab instruments — tick pulse generators / release scripted
  * momentary button holds. Pointer-held momentaries are owned by Editor
  * (mousedown → 1, mouseup → 0) and do not use holdFrames.
- * Called from main.ts whenever the frame already simulates, and every frame while
- * `circuitNeedsLabTick` (running clocks, decaying holds, armed analyzers).
+ * Called from main.ts after nets settle (so TRIG sees button levels), and on
+ * the Soft-top path every frame while `circuitNeedsLabTick`.
  */
 
 import type { Circuit } from './Circuit.js';
@@ -34,6 +34,14 @@ export function circuitNeedsLabTick(circuit: Circuit, analyzerArmed = false): bo
   return false;
 }
 
+/** True when the sheet has a pulse generator (idle TRIG still needs sampling). */
+export function circuitHasPulseGen(circuit: Circuit): boolean {
+  for (const c of circuit.components.values()) {
+    if (c.kind === 'clock') return true;
+  }
+  return false;
+}
+
 /** Advance pulse gens / decay holds. Returns true if any driver value changed. */
 export function tickLabInstruments(
   circuit: Circuit,
@@ -52,6 +60,7 @@ export function tickLabInstruments(
     } else if (c.kind === 'clock') {
       const trigNow = pinLevel(c.pins.trig.id, netMap, levelOf);
       const trigRise = c.lastTrig !== 1 && trigNow === 1;
+      const trigFall = c.lastTrig === 1 && trigNow !== 1;
       c.lastTrig = trigNow;
 
       if (c.mode === 'oneshot') {
@@ -59,6 +68,9 @@ export function tickLabInstruments(
           c.holdFrames = Math.max(1, c.dutyFrames);
           if (c.value !== 1) {
             c.value = 1;
+            changed = true;
+          } else {
+            // Already high — still a new pulse window (retrigger).
             changed = true;
           }
         } else if (c.holdFrames > 0) {
@@ -70,8 +82,19 @@ export function tickLabInstruments(
           }
         }
       } else {
-        // continuous
-        if (trigRise) c.running = true;
+        // continuous: TRIG↑ start, TRIG↓ stop (unconnected TRIG stays Z — no edge).
+        if (trigRise) {
+          c.running = true;
+          changed = true;
+        }
+        if (trigFall && c.running) {
+          c.running = false;
+          c.phase = 0;
+          if (c.value !== 0) {
+            c.value = 0;
+            changed = true;
+          }
+        }
         if (!c.running) continue;
         const next: 0 | 1 = c.phase < c.dutyFrames ? 1 : 0;
         if (c.value !== next) {

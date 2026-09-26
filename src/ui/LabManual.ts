@@ -332,6 +332,7 @@ const SECTIONS: Section[] = [
     body:
       'Pulse generator (K):\n' +
       '  Place → Pulse generator. Modes continuous / oneshot. Run / Fire from Inspector.\n' +
+      '  TRIG↑ starts continuous; TRIG↓ stops it. Oneshot: TRIG↑ fires one pulse (need ↓ then ↑ again).\n' +
       '  Example: xor-pulse — free-running clock into XOR.\n\n' +
       'Watch list (View → Watch list… / Ctrl+W):\n' +
       '  Pin nets while simulating. Bus rows: right-click → spawn bus probe or wire into an Analyzer.\n' +

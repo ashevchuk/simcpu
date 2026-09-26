@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Circuit } from '../src/sim/Circuit.js';
-import { circuitNeedsLabTick, tickLabInstruments } from '../src/sim/labTick.js';
+import { circuitHasPulseGen, circuitNeedsLabTick, tickLabInstruments } from '../src/sim/labTick.js';
 import { makeAnalyzer, makeButton, makeClock, makeLed, makeRom, makeSource, wire } from '../src/sim/library.js';
 import { applyBytes, formatHexDump, parseHexBlob } from '../src/ui/MemoryEditor.js';
 import { deserializeProject, serializeProject } from '../src/sim/serialize.js';
@@ -105,6 +105,69 @@ describe('lab instruments', () => {
     expect(clk.value).toBe(1);
     tickLabInstruments(c);
     expect(clk.value).toBe(0);
+  });
+
+  it('TRIG↑ starts a stopped continuous clock', () => {
+    const c = new Circuit();
+    const clk = makeClock(c, { x: 80, y: 0 }, 4);
+    const btn = makeButton(c, { x: 0, y: 0 }, 'toggle');
+    wire(c, btn.pins.out, clk.pins.trig);
+    btn.value = 0;
+    const nets = c.computeNets();
+    let state = initialState();
+    for (let i = 0; i < 4; i++) state = step(c, nets, state);
+    tickLabInstruments(c, nets, state.levelOf);
+    expect(clk.running).toBe(false);
+    btn.value = 1;
+    for (let i = 0; i < 4; i++) state = step(c, nets, state);
+    tickLabInstruments(c, nets, state.levelOf);
+    expect(clk.running).toBe(true);
+  });
+
+  it('TRIG↓ stops a continuous clock', () => {
+    const c = new Circuit();
+    const clk = makeClock(c, { x: 80, y: 0 }, 4);
+    clk.running = true;
+    clk.value = 1;
+    const btn = makeButton(c, { x: 0, y: 0 }, 'toggle');
+    wire(c, btn.pins.out, clk.pins.trig);
+    btn.value = 1;
+    const nets = c.computeNets();
+    let state = initialState();
+    for (let i = 0; i < 4; i++) state = step(c, nets, state);
+    tickLabInstruments(c, nets, state.levelOf);
+    expect(clk.running).toBe(true);
+    btn.value = 0;
+    for (let i = 0; i < 4; i++) state = step(c, nets, state);
+    tickLabInstruments(c, nets, state.levelOf);
+    expect(clk.running).toBe(false);
+    expect(clk.value).toBe(0);
+  });
+
+  it('TRIG↑ fires a oneshot pulse', () => {
+    const c = new Circuit();
+    const clk = makeClock(c, { x: 80, y: 0 }, 10, 'oneshot');
+    clk.dutyFrames = 2;
+    const btn = makeButton(c, { x: 0, y: 0 }, 'toggle');
+    wire(c, btn.pins.out, clk.pins.trig);
+    btn.value = 0;
+    const nets = c.computeNets();
+    let state = initialState();
+    for (let i = 0; i < 4; i++) state = step(c, nets, state);
+    tickLabInstruments(c, nets, state.levelOf);
+    expect(clk.value).toBe(0);
+    btn.value = 1;
+    for (let i = 0; i < 4; i++) state = step(c, nets, state);
+    tickLabInstruments(c, nets, state.levelOf);
+    expect(clk.value).toBe(1);
+    expect(clk.holdFrames).toBe(2);
+  });
+
+  it('circuitHasPulseGen detects idle clocks', () => {
+    const c = new Circuit();
+    expect(circuitHasPulseGen(c)).toBe(false);
+    makeClock(c);
+    expect(circuitHasPulseGen(c)).toBe(true);
   });
 
   it('analyzer has N channel pins', () => {
